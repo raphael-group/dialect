@@ -110,16 +110,15 @@ CNT_MTX_DIR=reference/${BMR_METHOD}/count_mtxs/${DATASET}/${CANCER}
 DOUT=out/${BMR_METHOD}/${DATASET}/${CANCER}
 mkdir -p ${DOUT}
 
-#### step 3: run pipeline for different mutation types #####
-# for mut_type in mis non; do
-#     python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -single -${mut_type}
-# done
-# # only run indel model if BMR method is mutsig
-# if [ "${BMR_METHOD}" = "mutsig" ]; then
-#     python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -single -ind
-# fi
-# python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -pair
-# exit
+##### step 3: run pipeline for different mutation types #####
+for mut_type in mis non; do
+    python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -single -${mut_type}
+done
+# only run indel model if BMR method is mutsig
+if [ "${BMR_METHOD}" = "mutsig" ]; then
+    python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -single -ind
+fi
+python ${SCRIPTS}/run_model.py -bmr_d ${BMR_DIR} -mtx_d ${CNT_MTX_DIR} -dout ${DOUT} -c ${CANCER} -pair
 
 #### STEP 5: Create Final Tables #####
 for mut_type in mis non; do # TODO make work for mis, non, ind w/ mutsig
