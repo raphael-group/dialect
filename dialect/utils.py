@@ -22,10 +22,16 @@ def get_parser():
     analyze_parser.add_argument("--top_k", default=100, type=int)
     # Subparser for comparison analysis
     compare_parser = subparsers.add_parser("compare", help="Run comparison analysis")
+    compare_parser.add_argument("method", choices=["fishers", "discover", "wesme"])
     compare_parser.add_argument("cnt_mtx_fn", help="Path to the count matrix file")
     compare_parser.add_argument("dout", help="Path to the output directory")
     compare_parser.add_argument("--top_k", default=100, type=int)
-    compare_parser.add_argument("--method", default="fishers", choices=["fishers"])
+    compare_parser.add_argument(
+        "--feature_level",
+        default="mutation",
+        choices=["gene", "mutation"],
+        help="Feature level to use for comparison test",
+    )
     return parser
 
 

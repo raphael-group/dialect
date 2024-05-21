@@ -11,6 +11,8 @@ from argparse import ArgumentParser
 from utils import *
 from cbase_utils import *
 
+# from wesme.core import run_wesme
+
 
 def dialect_singleton(somatic_mutations, bmr_pmfs):
     pi_inits = generate_pi_inits(
@@ -234,7 +236,7 @@ def analyze_interactions(cnt_mtx_fn, bmr_fn, dout, top_k):
     pairwise_results_fn.to_csv(os.path.join(dout, "pairwise_genes.csv"))
 
 
-def run_comparison_method(cnt_mtx_fn, dout, top_k, method):
+def run_comparison_method(cnt_mtx_fn, dout, top_k, method, feature_level):
     cnt_mtx_df = pd.read_csv(cnt_mtx_fn, index_col=0)
     top_k_genes = cnt_mtx_df.sum(axis=0).sort_values(ascending=False).index[:top_k]
     gene_pairs = list(combinations(top_k_genes, 2))
@@ -254,11 +256,25 @@ def run_comparison_method(cnt_mtx_fn, dout, top_k, method):
         results_df.to_csv(os.path.join(dout, "fishers_results.csv"), index=False)
         sys.path.remove(fishers_dir)
     elif method == "discover":
+        discover_dir = os.path.join(
+            os.environ["DIALECT_PROJECT_DIRECTORY"], "comparisons", "discover"
+        )
+        conda_activate_command = "source activate discover"
+        discover_script_path = os.path.join(discover_dir, "run_discover.py")
+        discover_command = f"python {discover_script_path} {cnt_mtx_fn} {dout} --top_k {top_k} --feature_level {feature_level}"
+        full_command = f"{conda_activate_command} && {discover_command}"
+
+        process = subprocess.Popen(
+            full_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        stdout, stderr = process.communicate()
+        print(stdout.decode(), stderr.decode())
+    elif method == "wesme":
+        wesme_dir = os.path.join(os.environ["DIALECT_PROJECT_DIRECTORY"], "comparisons", "wesme")
+        sys.path.append(wesme_dir)  # Add the parent directory of wesme
+        wesme_module = importlib.import_module("wesme_core")
+        wesme_module.run_wesme(cnt_mtx_df, dout, top_k)
         pass
-        # command = f"source activate discover && python run_discover.py -rdf {args.results} -cmdf {args.cnt_mtx}"
-        # process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # stdout, stderr = process.communicate()
-        # if stderr: print("Error:\n", stderr.decode())
 
 
 def run_dialect():
@@ -272,7 +288,9 @@ def run_dialect():
     elif args.command == "analyze":
         analyze_interactions(args.cnt_mtx_fn, args.bmr_fn, args.dout, args.top_k)
     elif args.command == "compare":
-        run_comparison_method(args.cnt_mtx_fn, args.dout, args.top_k, args.method)
+        run_comparison_method(
+            args.cnt_mtx_fn, args.dout, args.top_k, args.method, args.feature_level
+        )
     else:
         parser.print_help()
 
