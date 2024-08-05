@@ -1,26 +1,46 @@
-# DIALECT (Driver Interactions and Latent Exclusivity or Co-occurrence in Tumors)
+## Installation
 
-## Introduction
-DIALECT (Driver Interactions and Latent Exclusivity or Co-occurrence in Tumors) is an algorithm designed to identify dependencies between pairs of driver mutations from somatic mutation counts. This tool addresses the challenge of distinguishing functional, driver mutations from neutral, passenger mutations in cancer genomics, enhancing the identification of mutual exclusivity or co-occurrence patterns from bulk DNA sequencing data.
+To install DIALECT, follow these steps:
 
 ## Installation
-Instructions on how to install DIALECT.
+1. **Clone the Repository**:
+   Clone the DIALECT repository from GitHub to your local machine using the following command:
+   ```bash
+   git clone https://github.com/raphael-group/dialect.git
+   ```
 
-```bash
-# Example installation command
-git clone https://github.com/raphael-group/dialect.git
-cd dialect
-pip install -r requirements.txt
-```
+2. **Create a Virtual Environment**:
+   Navigate to the cloned directory and create a virtual environment:
+   ```bash
+   cd dialect
+   python -m venv venv
+   ```
+
+3. **Activate the Virtual Environment**:
+   - On Windows:
+     ```bash
+     .\venv\Scripts\activate
+     ```
+   - On macOS/Linux:
+     ```bash
+     source venv/bin/activate
+     ```
+
+4. **Install Dependencies**:
+   Install the required dependencies using the `requirements.txt` file:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Data
 
 ### Source
-The data used by DIALECT are Mutation Annotation Format (MAF) files derived from the PanCancer Atlas, accessible via [cBioPortal for Cancer Genomics](https://www.cbioportal.org/datasets). These files contain comprehensive mutation data needed for analysis, including missense, nonsense, frameshift, synonymous mutations, and more.
 
-### Downloading and Preparing Data
+The primary data source for DIALECT is Mutation Annotation Format (MAF) files derived from the PanCancer Atlas, available through [cBioPortal for Cancer Genomics](https://www.cbioportal.org/datasets). These files contain comprehensive mutation data essential for analysis, including various types of mutations like missense, nonsense, frameshift, and synonymous mutations.
 
-Follow these steps to download and prepare the mutation data for use with DIALECT:
+### Preparing TCGA Data
+
+To prepare TCGA data for use with DIALECT, follow these detailed steps:
 
 1. **Access Data**:
    - Navigate to the [cBioPortal's datasets search page](https://www.cbioportal.org/datasets).
@@ -38,49 +58,60 @@ Follow these steps to download and prepare the mutation data for use with DIALEC
 4. **Organize Data**:
    - Move all renamed `.maf` files to the `data/tcga_pancan_atlas` directory in your project folder. This directory is used by DIALECT to access mutation data for processing.
 
-## Usage
+Alternatively, prepare your custom data with the proper MAF mutation data format.
 
-DIALECT requires two main types of data inputs: the background mutation rate distributions and the mutation matrix. Below are the steps to generate these inputs and how to run the analysis.
+### Preparing Custom Data
 
-### Generating Background Mutation Rate Distributions
+To prepare your custom mutation data for use with DIALECT:
 
-DIALECT uses the [CBaSE method](https://dx.doi.org/10.1038/ng.3987) to generate these distributions:
+1. **Format Data**:
+   - Ensure your data is formatted as MAF. The required columns are: `CHROM`, `POS (1-based)`, `ID`, `REF`, `ALT`, `SAMPLE_ID`.
 
-1. **Navigate to the cbase Directory**:
-   - Go to the `cbase` directory located within the `bmrs` folder in the DIALECT project repository.
+2. **Organize Data**:
+   - Rename the mutation file to end with `.maf` and place it in the `data` directory. This standard naming and organization will allow DIALECT to easily access and process the data.
 
-2. **Run CBaSE**:
-   - Use the modified CBaSE code provided to generate the background mutation rate distributions. We've simplified the process, allowing you to run the following command:
+## Code Usage
 
-    ```bash
-    bash cbase.sh -c SUBTYPE
-    ```
-    **Important:**
-    * Replace `SUBTYPE` with the appropriate cancer subtype abbreviation (e.g., `BRCA`, `LUAD`). 
-    * Ensure the corresponding MAF file (`SUBTYPE.maf`) is present in the `data` directory.
+DIALECT can be run from the core script `dialect/core.py`, which provides three separate subcommands. Each subcommand facilitates a different aspect of the analysis process:
 
-    The `auxiliary` folder within the `cbase` subfolder contains additional data files and scripts provided by the [CBaSE method](https://dx.doi.org/10.1038/ng.3987). Latest versions of the publicly available CBaSE scripts and files are available [here](http://genetics.bwh.harvard.edu/cbase/downloads.html). 
+- **generate**: This subcommand runs the [CBaSE method](https://dx.doi.org/10.1038/ng.3987) to generate background mutation rate (BMR) distributions from mutation data.
+- **analyze**: This subcommand runs DIALECT to identify mutually exclusive and co-occurring interactions between genes.
+- **compare**: This subcommand runs prior methods (including DISCOVER, Fisher's exact test, WeSME, WeSCO) to compare against DIALECT's results.
 
-    **Note**: At the time of writing, the latest CBaSE scripts do not incorporate sample-specific background mutation rate distributions. Direct modifications to the method were made by Donate Weghorn's group for obtaining the values used by Raphael's group. The `auxiliary` folder has been included in this project to provide necessary scripts and data files that are part of these modifications.
+### Generate BMRs Using CBaSE
 
-### Preparing the Mutation Matrix and Background Mutation Rate Files
+To generate BMRs using the CBaSE method, use the following command:
+```bash
+python dialect/core.py generate --method cbase data/tcga_pancan_atlas_2018/AML.maf results/tcga_pancan_atlas_2018/
+```
+This command processes the mutation data file `AML.maf` and outputs the BMR distributions into the specified results directory.
 
-Since CBaSE keeps only a subset of mutations, it is advisable to use the mutation matrix generated by CBaSE for consistency in analysis:
+### Run DIALECT to Analyze Interactions
 
-- the mutation matrices will be separated into missense and nonsense files. following the CBaSE run above, these will be available in the cbase/out/SUBTYPE directory for the specified subtype.
-- the files needed are SUBTYPE_mis/non_cnt_mtx.csv and SUBTYPE_mis/non_bmr.csv
+To analyze interactions between genes using DIALECT, use the following command:
+```bash
+python dialect/core.py analyze results/tcga_pancan_atlas_2018/AML/AML_cbase_cnt_mtx.csv results/tcga_pancan_atlas_2018/AML/AML_cbase_bmr_pmfs.csv results/tcga_pancan_atlas_2018/AML
+```
+This command analyzes the BMR distributions and mutation data to identify mutually exclusive and co-occurring interactions between genes.
 
-### Running DIALECT
+### Run Comparison Methods
 
-Detailed instructions on how to run DIALECT with the prepared
+To run comparison methods and benchmark DIALECT against other tools, use the following command (to be completed):
+```bash
+# TODO
+```
 
 ## License
-Distributed under the BSD-3 License. See `LICENSE` for more information.
+
+DIALECT is distributed under the BSD-3 License. For more information, refer to the `LICENSE` file included in the repository.
 
 ## Contact
+
+For any questions, issues, or contributions, please contact:
 Ahmed Shuaibi - [ashuaibi@princeton.edu](mailto:ashuaibi@princeton.edu)
 
 ## Citation
+
 If you use DIALECT in your research, please cite our paper:
 
 - [Driver Interactions and Latent Exclusivity or Co-occurrence in Tumors](https://doi.org/10.1101/2024.04.24.590995)
