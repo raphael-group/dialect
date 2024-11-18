@@ -1,3 +1,4 @@
+import os
 import logging
 from dialect.utils.logger import configure_logging
 
@@ -23,6 +24,7 @@ def main():
     logging.info(f"Command: {args.command}")
 
     if args.command == "generate":
+        os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
         generate_bmr_and_counts(maf=args.maf, out=args.out, reference=args.reference)
 
 

@@ -1,19 +1,40 @@
 import os
 import subprocess
+import numpy as np
 import pandas as pd
 
 import logging
 
+# ---------------------------------------------------------------------------- #
+#                               Helper Functions                               #
+# ---------------------------------------------------------------------------- #
+
 
 def check_file_exists(maf):
-    """Check if the input file exists."""
+    """
+    Checks if the specified file exists.
+
+    @param maf: Path to the file to validate.
+    Raises FileNotFoundError if the file does not exist.
+    """
     logging.info(f"Validating input file: {maf}")
     if not os.path.exists(maf):
         raise FileNotFoundError(f"File not found: {maf}")
 
 
 def convert_maf_to_CBaSE_input_file(maf, out):
-    "Convert MAF to CBaSE input file format."
+    """
+    Converts a MAF file to the CBaSE accepted VCF input format with sample barcode in the last column.
+    + Renames columns to align with CBaSE requirements.
+    + Saves the reformatted data to the specified output directory.
+
+    @param maf: Path to the original MAF file.
+        ! 'Chromosome' column should use single values (e.g., 1, 2, X), not prefixed values (e.g., chr1).
+    @param out: Directory where the reformatted file will be saved.
+
+    @returns: Path to the saved CBaSE input file.
+    """
+    logging.info(f"Converting MAF file: {maf} to CBaSE input file format.")
     df = pd.read_csv(maf, sep="\t", low_memory=False)
     df = df.rename(
         columns={
@@ -31,10 +52,16 @@ def convert_maf_to_CBaSE_input_file(maf, out):
     return out_fn
 
 
-def generate_using_CBaSE(maf, out, reference):
+def generate_bmr_using_CBaSE(maf, out, reference):
     """
-    Use the CBaSE method to generate background mutation rate (BMR) distributions and create a count matrix.
+    Generates background mutation rate (BMR) distributions and count matrix using the CBaSE method.
+
+    @param maf: Path to the input MAF file.
+    @param out: Directory where outputs and intermediate files will be saved.
+    @param reference: Genome reference build to use (e.g., hg19 or hg38).
+    Raises subprocess.CalledProcessError if any CBaSE script fails.
     """
+
     logging.info(
         f"Generating BMR and count matrix for MAF file: {maf} using CBaSE method."
     )
@@ -88,78 +115,85 @@ def generate_using_CBaSE(maf, out, reference):
         raise
 
 
+def generate_counts_from_CBaSE_output(out):
+    """
+    Generates a count matrix from CBaSE output, focusing on retained missense and nonsense mutations.
+
+    @param out: Directory containing the CBaSE output files.
+    Processes mutations, groups them by gene and effect, and creates a pivoted count matrix.
+    The resulting matrix is saved as 'count_matrix.csv' in the specified output directory.
+    TODO: validate that only missense and nonsense should be kept.
+    ? shouldn't we include synonymous mutations in count matrix?
+    """
+    logging.info(
+        "Generating count matrix from CBaSE output of retained missense and nonsense mutations."
+    )
+    CBaSE_kept_mutations_fn = os.path.join(
+        out, "CBaSE_output", "output_kept_mutations.csv"
+    )
+
+    df = pd.read_csv(CBaSE_kept_mutations_fn, sep="\t")
+    df = df[df["effect"].isin(["missense", "nonsense"])]
+    df["gene"] = df["gene"] + "_" + df["effect"].str[0].str.upper()
+    df = df.pivot_table(index="gene", columns="sample", aggfunc="size", fill_value=0).T
+    df.to_csv(os.path.join(out, "count_matrix.csv"), index=False)
+    logging.info(f"Count matrix saved to: {os.path.join(out, 'count_matrix.csv')}")
+
+
+def generate_bmr_files_from_CBaSE_output(out):
+    """
+    Generates BMR PMF files from CBaSE output for missense and nonsense mutations.
+
+    @param out: Directory containing the CBaSE output files.
+    Processes the BMR probability files ('pofmigivens.txt' for missense and 'pofkigivens.txt' for nonsense),
+    appends mutation type suffixes to gene names ('_M' for missense, '_N' for nonsense),
+    and saves the combined probability mass functions as 'bmr_pmfs.csv' in the output directory.
+    """
+    logging.info("Generating BMR PMF files from CBaSE output.")
+    mis_bmr_fn = os.path.join(out, "CBaSE_output", "pofmigivens_output.txt")
+    non_bmr_fn = os.path.join(out, "CBaSE_output", "pofkigivens_output.txt")
+
+    all_dfs = []
+    for fn, suffix in zip([mis_bmr_fn, non_bmr_fn], ["_M", "_N"]):
+        with open(fn, "r") as f:
+            lines = f.readlines()
+            file_length = len(lines)
+            max_cols = np.max([len(line.split("\t")) for line in lines])
+
+        column_names = ["gene"] + list(range(0, max_cols))
+        df = pd.read_csv(
+            fn, sep="\t", names=column_names, skiprows=range(0, file_length, 2)
+        )
+
+        # Modify gene names with the appropriate suffix
+        df["gene"] = df["gene"].str.rsplit("_", n=1).str[0] + suffix
+
+        df.set_index("gene", drop=True, inplace=True)
+        df.index.name = None
+        all_dfs.append(df)
+
+    df = pd.concat(all_dfs)
+    df.to_csv(os.path.join(out, "bmr_pmfs.csv"), index=False)
+    logging.info(f"CBaSE BMR PMFs saved to: {os.path.join(out, 'bmr_pmfs.csv')}")
+
+
+# ---------------------------------------------------------------------------- #
+#                                 Main Function                                #
+# ---------------------------------------------------------------------------- #
+
+
 def generate_bmr_and_counts(maf, out, reference):
     """
-    Generate background mutation rate (BMR) distributions and create a count matrix.
+    Main function to generate background mutation rate (BMR) distributions and a count matrix.
 
-    This function uses an external method to generate the BMR distributions based on the provided
-    mutation annotation format (MAF) file. It then creates a count matrix according to the mutations
-    used by the BMR method.
-
-    Args:
-        maf (str): Path to the mutation annotation format (MAF) file.
-        out (str): Path to the output file where the results will be saved.
-        reference (str): Path to the reference genome file.
-
-    Returns:
-        None
+    @param maf: Path to the input MAF file.
+    @param out: Directory where outputs will be saved.
+    @param reference: Genome reference build to use (e.g., hg19 or hg38).
+    Validates the input file, creates necessary directories, and orchestrates BMR generation and count matrix creation.
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
     check_file_exists(maf)
-    os.makedirs(out, exist_ok=True)
-    generate_using_CBaSE(maf, out, reference)
-
-
-# TODO: convert the following into simpler functions to create BMR file and count matrix file
-
-# def generate_cnt_mtx_and_bmr(cbase_dout, subtype, subtype_dout):
-#     """Generate count matrix and BMR distributions."""
-#     logging.info("Building count matrix and BMR tables.")
-#     mutations_csv = os.path.join(cbase_dout, f"{subtype}_kept_mutations.csv")
-#     cnt_mtx_df = build_cnt_mtx(mutations_csv)  # Assumes this function exists
-
-#     mis_bmr_fn = os.path.join(cbase_dout, f"pofmigivens_{subtype}.txt")
-#     non_bmr_fn = os.path.join(cbase_dout, f"pofkigivens_{subtype}.txt")
-#     bmr_df = build_bmr_table(mis_bmr_fn, non_bmr_fn)  # Assumes this function exists
-
-#     # Save outputs
-#     cnt_mtx_fn = os.path.join(subtype_dout, f"{subtype}_cbase_cnt_mtx.csv")
-#     bmr_fn = os.path.join(subtype_dout, f"{subtype}_cbase_bmr_pmfs.csv")
-#     cnt_mtx_df.to_csv(cnt_mtx_fn, index=False)
-#     bmr_df.to_csv(bmr_fn, index=False)
-
-#     logging.info(f"Count matrix saved to: {cnt_mtx_fn}")
-#     logging.info(f"BMR table saved to: {bmr_fn}")
-
-
-# def build_cnt_mtx(mutations_fn):
-#     df = pd.read_csv(mutations_fn, sep="\t")
-#     df = df[df["effect"].isin(["missense", "nonsense"])]
-#     df["gene"] = df["gene"] + "_" + df["effect"].str[0].str.upper()
-#     return df.pivot_table(
-#         index="gene", columns="sample", aggfunc="size", fill_value=0
-#     ).T
-
-
-# def build_bmr_table(mis_bmr_fn, non_bmr_fn):
-#     all_dfs = []
-#     for fn, suffix in zip([mis_bmr_fn, non_bmr_fn], ["_M", "_N"]):
-#         with open(fn, "r") as f:
-#             lines = f.readlines()
-#             file_length = len(lines)
-#             max_cols = np.max([len(line.split("\t")) for line in lines])
-
-#         column_names = ["gene"] + list(range(0, max_cols))
-#         df = pd.read_csv(
-#             fn, sep="\t", names=column_names, skiprows=range(0, file_length, 2)
-#         )
-
-#         # Modify gene names with the appropriate suffix
-#         df["gene"] = df["gene"].str.rsplit("_", n=1).str[0] + suffix
-
-#         df.set_index("gene", drop=True, inplace=True)
-#         df.index.name = None
-#         all_dfs.append(df)
-
-#     # Concatenate all dataframes and return
-#     return pd.concat(all_dfs)
+    generate_bmr_using_CBaSE(maf, out, reference)
+    generate_bmr_files_from_CBaSE_output(out)
+    generate_counts_from_CBaSE_output(out)
+    logging.info("BMR and count matrix generation completed successfully.")
