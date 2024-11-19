@@ -1,25 +1,14 @@
 import os
+import logging
 import subprocess
 import numpy as np
 import pandas as pd
 
-import logging
+from dialect.utils.helpers import *
 
 # ---------------------------------------------------------------------------- #
 #                               Helper Functions                               #
 # ---------------------------------------------------------------------------- #
-
-
-def check_file_exists(maf):
-    """
-    Checks if the specified file exists.
-
-    @param maf: Path to the file to validate.
-    Raises FileNotFoundError if the file does not exist.
-    """
-    logging.info(f"Validating input file: {maf}")
-    if not os.path.exists(maf):
-        raise FileNotFoundError(f"File not found: {maf}")
 
 
 def convert_maf_to_CBaSE_input_file(maf, out):
