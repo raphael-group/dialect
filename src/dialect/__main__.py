@@ -10,6 +10,9 @@ from dialect.utils.generate import (
     generate_bmr_and_counts,
 )  # TODO: export function from generate.py
 
+from dialect.utils.identify import (
+    identify_pairwise_interactions,
+)  # TODO: export function from identify.py
 
 configure_logging()
 
@@ -26,6 +29,13 @@ def main():
     if args.command == "generate":
         os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
         generate_bmr_and_counts(maf=args.maf, out=args.out, reference=args.reference)
+
+    elif args.command == "identify":
+        os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
+        identify_pairwise_interactions(
+            maf=args.maf, bmr=args.bmr, out=args.out, k=args.top_k
+        )
+        pass
 
 
 if __name__ == "__main__":
