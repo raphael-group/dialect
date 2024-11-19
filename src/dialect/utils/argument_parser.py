@@ -26,12 +26,26 @@ def build_argument_parser():
         help="Reference genome (default: hg19)",
     )
 
-    # # Subparser for DIALECT analysis
-    # analyze_parser = subparsers.add_parser("analyze", help="Run DIALECT analysis")
-    # analyze_parser.add_argument("cnt_mtx_fn", help="Path to the count matrix file")
-    # analyze_parser.add_argument("bmr_fn", help="Path to the BMR file")
-    # analyze_parser.add_argument("dout", help="Path to the output directory")
-    # analyze_parser.add_argument("--top_k", default=100, type=int)
+    # Subparser for DIALECT analysis
+    identify_parser = subparsers.add_parser(
+        "identify", help="Run DIALECT to identify interactions"
+    )
+    identify_parser.add_argument(
+        "-m", "--maf", required=True, help="Path to the input MAF file"
+    )
+    identify_parser.add_argument(
+        "-b", "--bmr", required=True, help="Path to the BMR file"
+    )
+    identify_parser.add_argument(
+        "-o", "--out", required=True, help="Path to the output directory"
+    )
+    identify_parser.add_argument(
+        "-k",
+        "--top_k",
+        default=100,
+        type=int,
+        help="Number of genes to consider (default: 100 genes with highest mutation count)",
+    )
 
     # # Subparser for comparison analysis
     # compare_parser = subparsers.add_parser("compare", help="Run comparison analysis")
