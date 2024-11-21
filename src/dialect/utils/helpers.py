@@ -6,7 +6,7 @@ def check_file_exists(fn):
     """
     Checks if the specified file exists.
 
-    @param fn: Path to the file to validate.
+    @param fn (str): Path to the file to validate.
     Raises FileNotFoundError if the file does not exist.
     """
     logging.info(f"Validating input file: {fn}")

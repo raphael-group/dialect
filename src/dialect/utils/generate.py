@@ -17,11 +17,11 @@ def convert_maf_to_CBaSE_input_file(maf, out):
     + Renames columns to align with CBaSE requirements.
     + Saves the reformatted data to the specified output directory.
 
-    @param maf: Path to the original MAF file.
+    @param maf (str): Path to the original MAF file.
         ! 'Chromosome' column should use single values (e.g., 1, 2, X), not prefixed values (e.g., chr1).
-    @param out: Directory where the reformatted file will be saved.
+    @param out (str): Directory where the reformatted file will be saved.
 
-    @returns: Path to the saved CBaSE input file.
+    @returns (str): Path to the saved CBaSE input file.
     """
     logging.info(f"Converting MAF file: {maf} to CBaSE input file format.")
     df = pd.read_csv(maf, sep="\t", low_memory=False)
@@ -45,9 +45,9 @@ def generate_bmr_using_CBaSE(maf, out, reference):
     """
     Generates background mutation rate (BMR) distributions and count matrix using the CBaSE method.
 
-    @param maf: Path to the input MAF file.
-    @param out: Directory where outputs and intermediate files will be saved.
-    @param reference: Genome reference build to use (e.g., hg19 or hg38).
+    @param maf (str): Path to the input MAF file.
+    @param out (str): Directory where outputs and intermediate files will be saved.
+    @param reference (str): Genome reference build to use (e.g., hg19 or hg38).
     Raises subprocess.CalledProcessError if any CBaSE script fails.
     """
 
@@ -108,7 +108,7 @@ def generate_counts_from_CBaSE_output(out):
     """
     Generates a count matrix from CBaSE output, focusing on retained missense and nonsense mutations.
 
-    @param out: Directory containing the CBaSE output files.
+    @param out (str): Directory containing the CBaSE output files.
     Processes mutations, groups them by gene and effect, and creates a pivoted count matrix.
     The resulting matrix is saved as 'count_matrix.csv' in the specified output directory.
     TODO: validate that only missense and nonsense should be kept.
@@ -133,7 +133,7 @@ def generate_bmr_files_from_CBaSE_output(out):
     """
     Generates BMR PMF files from CBaSE output for missense and nonsense mutations.
 
-    @param out: Directory containing the CBaSE output files.
+    @param out (str): Directory containing the CBaSE output files.
     Processes the BMR probability files ('pofmigivens.txt' for missense and 'pofkigivens.txt' for nonsense),
     appends mutation type suffixes to gene names ('_M' for missense, '_N' for nonsense),
     and saves the combined probability mass functions as 'bmr_pmfs.csv' in the output directory.
@@ -175,9 +175,9 @@ def generate_bmr_and_counts(maf, out, reference):
     """
     Main function to generate background mutation rate (BMR) distributions and a count matrix.
 
-    @param maf: Path to the input MAF file.
-    @param out: Directory where outputs will be saved.
-    @param reference: Genome reference build to use (e.g., hg19 or hg38).
+    @param maf (str): Path to the input MAF file.
+    @param out (str): Directory where outputs will be saved.
+    @param reference (str): Genome reference build to use (e.g., hg19 or hg38).
     Validates the input file, creates necessary directories, and orchestrates BMR generation and count matrix creation.
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
