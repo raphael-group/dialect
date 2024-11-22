@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from scipy.optimize import minimize
 
 
 class Gene:
@@ -15,6 +16,10 @@ class Gene:
         self.counts = counts
         self.bmr_pmf = bmr_pmf
         self.pi = None
+
+    # ---------------------------------------------------------------------------- #
+    #                        Likelihood & Metric Evaluation                        #
+    # ---------------------------------------------------------------------------- #
 
     def compute_log_likelihood(self, pi):
         """
@@ -83,3 +88,39 @@ class Gene:
 
         log_odds_ratio = np.log(self.pi / (1 - self.pi))
         return log_odds_ratio
+
+    # ---------------------------------------------------------------------------- #
+    #                         Parameter Estimation Methods                         #
+    # ---------------------------------------------------------------------------- #
+    def estimate_pi_with_optimiziation(self, pi_init=0.5):
+        """
+        Estimate the pi parameter using the L-BFGS-B optimization scheme.
+        L-BFGS-B is used because it supports bounds (0 < pi < 1), which are required
+        to handle constraints and ensure valid log-likelihood computations.
+
+        :param pi_init (float): Initial guess for the pi parameter (default: 0.5).
+        :return (float): The optimized value of pi.
+        """
+
+        def negative_log_likelihood(pi):
+            return -self.compute_log_likelihood(pi)
+
+        logging.info(f"Estimating pi for gene {self.name} using L-BFGS-B optimization.")
+
+        alpha = 1e-13  # Small value to avoid edge cases at 0 or 1
+        bounds = [(alpha, 1 - alpha)]  # Restrict pi to (0, 1) to avoid log issues
+        result = minimize(
+            negative_log_likelihood,
+            x0=[pi_init],  # Initial guess for pi
+            bounds=bounds,
+            method="L-BFGS-B",  # Recommended for bounded optimization
+        )
+
+        if not result.success:
+            logging.warning(
+                f"Optimization failed for gene {self.name}: {result.message}"
+            )
+            raise ValueError(f"Optimization failed: {result.message}")
+
+        self.pi = result.x[0]
+        logging.info(f"Estimated pi for gene {self.name}: {self.pi}")
