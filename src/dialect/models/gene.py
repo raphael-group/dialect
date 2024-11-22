@@ -47,25 +47,6 @@ class Gene:
         )
         return log_likelihood
 
-    def binarize_counts(self):
-        """
-        Get the binarized counts for the gene based on a threshold.
-
-        :return (np.ndarray): Binarized counts.
-        """
-        return (self.counts >= 1).astype(int)
-
-    def get_contingency_table(self, other_counts):
-        """
-        Get the contingency table for the current gene and another gene.
-
-        :param other_counts (np.ndarray): Counts of another gene.
-        :return (np.ndarray): Contingency table.
-        """
-        raise NotImplementedError(
-            "Contingency table computation is not yet implemented."
-        )
-
     def compute_likelihood_ratio(self):
         """
         Compute the likelihood ratio test statistic (lambda_LR) with respect to the null hypothesis.
