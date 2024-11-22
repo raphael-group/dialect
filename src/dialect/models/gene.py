@@ -92,7 +92,7 @@ class Gene:
     # ---------------------------------------------------------------------------- #
     #                         Parameter Estimation Methods                         #
     # ---------------------------------------------------------------------------- #
-    def estimate_pi_with_optimiziation(self, pi_init=0.5):
+    def estimate_pi_with_optimiziation_using_scipy(self, pi_init=0.5):
         """
         Estimate the pi parameter using the L-BFGS-B optimization scheme.
         L-BFGS-B is used because it supports bounds (0 < pi < 1), which are required
@@ -124,3 +124,19 @@ class Gene:
 
         self.pi = result.x[0]
         logging.info(f"Estimated pi for gene {self.name}: {self.pi}")
+
+    def estimate_pi_with_em_from_scratch(self):
+        """
+        Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
+        Implements the EM algorithm from scratch.
+        """
+        logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
+        raise NotImplementedError("EM algorithm not implemented yet.")
+
+    def estimate_pi_with_EM_using_pomegranate(self):
+        """
+        Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
+        Uses the Pomegranate library for the EM algorithm.
+        """
+        logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
+        raise NotImplementedError("EM algorithm not implemented yet.")
