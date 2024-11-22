@@ -90,18 +90,12 @@ class Gene:
         """
         if not self.pi:
             raise ValueError("Pi has not been esitmated for this gene.")
-        if self.pi < 0 or self.pi > 1:
-            logging.warning(f"Invalid pi value: {self.pi}.")
-            raise ValueError(
-                "Estimated pi must be between 0 and 1, inclusive."
-            )  # TODO: move this error to EM method
-        if self.pi == 0:
-            logging.info(f"Pi for gene {self.name} is 0")
-            log_odds_ratio = -np.inf
-        elif self.pi == 1:
-            logging.info(f"Pi for gene {self.name} is 1")
-            log_odds_ratio = np.inf
-        else:
-            log_odds_ratio = np.log(self.pi / (1 - self.pi))
+        if not 0 <= self.pi <= 1:
+            logging.info(f"Pi value out of bounds: {self.pi}")
+            raise ValueError("Estimated pi is out of bounds.")
+        if self.pi == 0 or self.pi == 1:
+            logging.info(f"Pi for gene {self.name} is 0 or 1")
+            return np.inf if self.pi else -np.inf
+
+        log_odds_ratio = np.log(self.pi / (1 - self.pi))
         return log_odds_ratio
-        # raise NotImplementedError("Log odds ratio computation is not yet implemented.")
