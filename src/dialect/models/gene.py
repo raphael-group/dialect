@@ -16,7 +16,7 @@ class Gene:
         self.bmr_pmf = bmr_pmf
         self.pi = None
 
-    def compute_log_likelihood(self):
+    def compute_log_likelihood(self, pi):
         """
         Compute the complete data log-likelihood for the gene given the estimated pi.
 
@@ -36,18 +36,13 @@ class Gene:
             raise ValueError("BMR PMF is not defined for this gene.")
         if not self.counts:
             raise ValueError("Counts are not defined for this gene.")
-        if not self.pi:
-            raise ValueError("Pi has not been estimated for this gene.")
 
         logging.info(
-            f"Computing log likelihood for gene {self.name}.  Pi: {self.pi}. BMR PMF: {self.bmr_pmf}"
+            f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
         )
 
         log_likelihood = sum(
-            np.log(
-                self.bmr_pmf.get(c, 0) * (1 - self.pi)
-                + self.bmr_pmf.get(c - 1, 0) * self.pi
-            )
+            np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
         )
         return log_likelihood
@@ -73,14 +68,22 @@ class Gene:
 
     def compute_likelihood_ratio(self):
         """
-        Compute the likelihood ratio with respect to the null hypothesis.
+        Compute the likelihood ratio test statistic (lambda_LR) with respect to the null hypothesis.
+
+        The likelihood ratio statistic is given by:
+            lambda_LR = -2 * [\ell(pi_null) - \ell(\hat{pi})]
+
+        where:
+            - \ell(): Log-likelihood.
+            - pi_null: Null hypothesis of no driver mutations (pi = 0).
+            - \hat{pi}: Estimated value of pi parameter.
 
         :return (float): Likelihood ratio.
         """
-        # Implement a proper likelihood ratio computation based on the contingency table.
-        raise NotImplementedError(
-            "Likelihood ratio computation is not yet implemented."
+        lambda_LR = -2 * (
+            self.compute_log_likelihood(0) - self.compute_log_likelihood(self.pi)
         )
+        return lambda_LR
 
     def compute_log_odds_ratio(self):
         """
