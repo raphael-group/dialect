@@ -52,8 +52,11 @@ def identify_pairwise_interactions(maf, bmr, out, k):
 
     logging.info("Implementation in progress.")
     # ! Continue Implementation Here. Steps:
-    # TODO: Create class for pairwise gene interactions
-    # TODO: Add and implement EM algorithm in Gene class
-    # TODO: Implement 3-5 tests for each method in Gene class
-    # TODO: Implement Pomegranate Mixture Model in Gene class
+    # TODO: Implement 3-5 tests for each method in Gene & Interaction Classes
+    # TODO: Add and implement EM algorithm in Gene & Interaction Classes
+    # TODO: Write code here to call Gene & Interaction methods to identify pairwise interactions
+
+    # OPTIONAL EXTENSIONS
+    # ---------------------------------------------------------------------------- #
+    # TODO: Implement Pomegranate Mixture Model in Gene & Interaction Classes
     # TODO: Implement other metrics in Gene class (KL, MI, etc.)
