@@ -133,7 +133,7 @@ class Gene:
         logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
         raise NotImplementedError("EM algorithm not implemented yet.")
 
-    def estimate_pi_with_EM_using_pomegranate(self):
+    def estimate_pi_with_em_using_pomegranate(self):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
         Uses the Pomegranate library for the EM algorithm.
