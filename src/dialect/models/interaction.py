@@ -142,3 +142,50 @@ class Interaction:
             f"Computed log odds ratio for interaction {self.name}: {log_odds_ratio}"
         )
         return log_odds_ratio
+
+    def compute_wald_statistic(self):
+        """
+        Compute the Wald statistic for the interaction.
+
+        The Wald statistic is given by:
+            W = log_odds_ratio / standard_error
+
+        where the standard error is calculated as:
+            std_err = sqrt(
+                (1 / tau_01) + (1 / tau_10) + (1 / tau_00) + (1 / tau_11)
+            )
+
+        :return (float or None): The Wald statistic, or None
+        """
+        logging.info(f"Computing Wald statistic for interaction {self.name}.")
+        log_odds_ratio = self.compute_log_odds_ratio()
+        if log_odds_ratio is None:
+            logging.warning(f"Log odds ratio is None for interaction {self.name}.")
+            return None
+
+        if any(t <= 0 for t in [self.tau_00, self.tau_01, self.tau_10, self.tau_11]):
+            logging.warning(
+                f"Invalid tau parameters for interaction {self.name}. "
+                f"tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}."
+                "All tau values must be positive to compute the Wald statistic."
+            )
+            raise ValueError("Invalid tau parameters for Wald statistic computation.")
+
+        try:
+            std_err = np.sqrt(
+                (1 / self.tau_01)
+                + (1 / self.tau_10)
+                + (1 / self.tau_00)
+                + (1 / self.tau_11)
+            )
+        except ZeroDivisionError:
+            logging.error(
+                f"Division by zero encountered when computing standard error for interaction {self.name}."
+            )
+            return None
+
+        wald_statistic = log_odds_ratio / std_err
+        logging.info(
+            f"Computed Wald statistic for interaction {self.name}: {wald_statistic}"
+        )
+        return wald_statistic
