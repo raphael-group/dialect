@@ -104,17 +104,41 @@ class Interaction:
     #
     # def compute_likelihood_ratio(self):
     #     pass
-    #
-    # def compute_log_odds_ratio(self):
-    #     pass
 
-    # ---------------------------------------------------------------------------- #
-    #                         Parameter Estimation Methods                         #
-    # ---------------------------------------------------------------------------- #
+    def compute_log_odds_ratio(self):
+        """
+        Compute the log odds ratio for the interaction based on the tau parameters.
 
-    # Placeholder for methods to estimate interaction parameters
-    # def estimate_interaction_with_optimization(self):
-    #     pass
-    #
-    # def estimate_interaction_with_em(self):
-    #     pass
+        The odds ratio is given by:
+            Odds Ratio = (tau_01 * tau_10) / (tau_00 * tau_11)
+
+        :return (float): The log odds ratio.
+        :raises ValueError: If tau parameters are invalid or lead to division by zero.
+        """
+        # Validate tau parameters
+        if not all(
+            0 <= t <= 1 for t in [self.tau_00, self.tau_01, self.tau_10, self.tau_11]
+        ) or not np.isclose(
+            sum([self.tau_00, self.tau_01, self.tau_10, self.tau_11]), 1
+        ):
+            logging.info(
+                f"Invalid tau parameters: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
+            )
+            raise ValueError(
+                "Invalid tau parameters. Ensure 0 <= tau_ij <= 1 and sum(tau) == 1."
+            )
+
+        if self.tau_01 * self.tau_10 == 0 or self.tau_00 * self.tau_11 == 0:
+            logging.warning(
+                f"Zero encountered in odds ratio computation for interaction {self.name}. "
+                f"tau_01={self.tau_01}, tau_10={self.tau_10}, tau_00={self.tau_00}, tau_11={self.tau_11}"
+            )
+            return None  # Return None when numerator or denominator is zero
+
+        log_odds_ratio = np.log(
+            (self.tau_01 * self.tau_10) / (self.tau_00 * self.tau_11)
+        )
+        logging.info(
+            f"Computed log odds ratio for interaction {self.name}: {log_odds_ratio}"
+        )
+        return log_odds_ratio
