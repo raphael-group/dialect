@@ -195,3 +195,48 @@ class Interaction:
             f"Computed Wald statistic for interaction {self.name}: {wald_statistic}"
         )
         return wald_statistic
+
+    def compute_rho(self):
+        """
+        Compute the interaction measure rho (ρ) for the given tau parameters - ρ is given by:
+            ρ = (tau_01 * tau_10 - tau_11 * tau_00) / sqrt(tau_0* * tau_1* * tau_*0 * tau_*1)
+
+        where:
+            - tau_0* = tau_00 + tau_01 (marginal for no driver mutation in gene_a)
+            - tau_1* = tau_10 + tau_11 (marginal for driver mutation in gene_a)
+            - tau_*0 = tau_00 + tau_10 (marginal for no driver mutation in gene_b)
+            - tau_*1 = tau_01 + tau_11 (marginal for driver mutation in gene_b)
+
+        :return (float or None): The value of rho, or None if the computation is invalid (e.g., division by zero).
+        """
+        if not all(
+            0 <= t <= 1 for t in [self.tau_00, self.tau_01, self.tau_10, self.tau_11]
+        ) or not np.isclose(
+            sum([self.tau_00, self.tau_01, self.tau_10, self.tau_11]), 1
+        ):
+            logging.warning(
+                f"Invalid tau parameters for interaction {self.name}: "
+                f"tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}."
+            )
+            raise ValueError(
+                "Invalid tau parameters. Ensure 0 <= tau_ij <= 1 and sum(tau) == 1."
+            )
+
+        tau_0X = self.tau_00 + self.tau_01
+        tau_1X = self.tau_10 + self.tau_11
+        tau_X0 = self.tau_00 + self.tau_10
+        tau_X1 = self.tau_01 + self.tau_11
+
+        if any(t == 0 for t in [tau_0X, tau_1X, tau_X0, tau_X1]):
+            logging.warning(
+                f"Division by zero encountered in rho computation for interaction {self.name}. "
+                f"Marginals: tau_0*={tau_0X}, tau_1*={tau_1X}, "
+                f"tau_*0={tau_X0}, tau_*1={tau_X1}."
+            )
+            return None
+
+        rho = (self.tau_01 * self.tau_10 - self.tau_11 * self.tau_00) / (
+            np.sqrt(tau_0X * tau_1X * tau_X0 * tau_X1)
+        )
+        logging.info(f"Computed rho for interaction {self.name}: {rho}")
+        return rho
