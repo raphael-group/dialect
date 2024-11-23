@@ -85,12 +85,24 @@ class Interaction:
 
         where:
             - \ell(): Log-likelihood.
-            - tau_null: Null hypothesis of no interaction (tau_00 = 1, tau_01 = tau_10 = tau_11 = 0).
+            - tau_null: Null hypothesis of no interaction (independent given individual gene driver probabilites).
             - \hat{tau}: Estimated values of tau parameters.
 
         :return (float): Likelihood ratio.
         """
-        tau_null = (1, 0, 0, 0)  # Null hypothesis: no interaction
+        pi_a, pi_b = self.gene_a.pi, self.gene_b.pi
+        if pi_a is None or pi_b is None:
+            logging.warning(
+                f"Driver probabilities (pi) are not defined for genes in interaction {self.name}."
+            )
+            return None
+
+        tau_null = (
+            (1 - pi_a) * (1 - pi_b),  # tau_00: neither gene has a driver mutation
+            (1 - pi_a) * pi_b,  # tau_01: only gene_b has a driver mutation
+            pi_a * (1 - pi_b),  # tau_10: only gene_a has a driver mutation
+            pi_a * pi_b,  # tau_11: both genes have driver mutations
+        )
         lambda_LR = -2 * (
             self.compute_log_likelihood(tau_null)
             - self.compute_log_likelihood(
