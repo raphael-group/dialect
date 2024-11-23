@@ -28,7 +28,7 @@ class Interaction:
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
 
-    def compute_log_likelihood(self, tau):
+    def compute_log_likelihood(self, taus):
         """
         Compute the complete data log-likelihood for the interaction given the parameters tau.
 
@@ -50,60 +50,54 @@ class Interaction:
         :return (float): The log-likelihood value.
         :raises ValueError: If `bmr_pmf` or `counts` are not defined for either gene, or if `tau` is invalid.
         """
-        if not self.gene1.bmr_pmf or not self.gene2.bmr_pmf:
+        if not self.gene_a.bmr_pmf or not self.gene_b.bmr_pmf:
             raise ValueError("BMR PMFs are not defined for one or both genes.")
-        if not self.gene1.counts or not self.gene2.counts:
+        if not self.gene_a.counts or not self.gene_b.counts:
             raise ValueError("Counts are not defined for one or both genes.")
-        if not all(
-            0 <= t <= 1 for t in [self.tau_00, self.tau_01, self.tau_10, self.tau_11]
-        ) or not np.isclose(
-            sum([self.tau_00, self.tau_01, self.tau_10, self.tau_11]), 1
-        ):
-            logging.info(
-                f"Invalid tau parameters: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
-            )
+        if not all(0 <= t <= 1 for t in taus) or not np.isclose(sum(taus), 1):
+            logging.info(f"Invalid tau parameters: {taus}")
             raise ValueError(
                 "Invalid tau parameters. Ensure 0 <= tau_i <= 1 and sum(tau) == 1."
             )
 
-        gene_a_counts = self.gene_a.counts
-        gene_b_counts = self.gene_b.counts
+        logging.info(f"Computing log likelihood for {self.name}. Taus: {taus}")
 
-        logging.info(f"Computing log likelihood for interaction {self.name}.")
-        logging.info(
-            f"tau_00: {self.tau_00}, tau_01: {self.tau_01}, tau_10: {self.tau_10}, tau_11: {self.tau_11}"
-        )
-
+        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
+        a_bmr_pmf, b_bmr_pmf = self.gene_a.bmr_pmf, self.gene_b.bmr_pmf
+        tau_00, tau_01, tau_10, tau_11 = taus
         log_likelihood = sum(
             np.log(
-                (  # \mathbb{P}(P_i = c_i)\mathbb{P}(P_i' = c_i') \tau_{00}
-                    self.gene_a.bmr_pmf.get(c_a, 0)
-                    * self.gene_b.bmr_pmf.get(c_b, 0)
-                    * self.tau_00
-                )
-                + (  # \mathbb{P}(P_i = c_i)\mathbb{P}(P_i' = c_i' - 1) \tau_{01}
-                    self.gene_a.bmr_pmf.get(c_a, 0)
-                    * self.gene_b.bmr_pmf.get(c_b - 1, 0)
-                    * self.tau_01
-                )
-                + (  # \mathbb{P}(P_i = c_i - 1)\mathbb{P}(P_i' = c_i') \tau_{10}
-                    self.gene_a.bmr_pmf.get(c_a - 1, 0)
-                    * self.gene_b.bmr_pmf.get(c_b, 0)
-                    * self.tau_10
-                )
-                + (  # \mathbb{P}(P_i = c_i - 1)\mathbb{P}(P_i' = c_i' - 1) \tau_{11}
-                    self.gene_a.bmr_pmf.get(c_a - 1, 0)
-                    * self.gene_b.bmr_pmf.get(c_b - 1, 0)
-                    * self.tau_11
-                )
+                a_bmr_pmf.get(c_a, 0) * b_bmr_pmf.get(c_b, 0) * tau_00
+                + a_bmr_pmf.get(c_a, 0) * b_bmr_pmf.get(c_b - 1, 0) * tau_01
+                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b, 0) * tau_10
+                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b - 1, 0) * tau_11
             )
-            for c_a, c_b in zip(gene_a_counts, gene_b_counts)
+            for c_a, c_b in zip(a_counts, b_counts)
         )
         return log_likelihood
 
-    #
-    # def compute_likelihood_ratio(self):
-    #     pass
+    def compute_likelihood_ratio(self):
+        """
+        Compute the likelihood ratio test statistic (lambda_LR) with respect to the null hypothesis.
+
+        The likelihood ratio statistic is given by:
+            lambda_LR = -2 * [\ell(tau_null) - \ell(\hat{tau})]
+
+        where:
+            - \ell(): Log-likelihood.
+            - tau_null: Null hypothesis of no interaction (tau_00 = 1, tau_01 = tau_10 = tau_11 = 0).
+            - \hat{tau}: Estimated values of tau parameters.
+
+        :return (float): Likelihood ratio.
+        """
+        tau_null = (1, 0, 0, 0)  # Null hypothesis: no interaction
+        lambda_LR = -2 * (
+            self.compute_log_likelihood(tau_null)
+            - self.compute_log_likelihood(
+                (self.tau_00, self.tau_01, self.tau_10, self.tau_11)
+            )
+        )
+        return lambda_LR
 
     def compute_log_odds_ratio(self):
         """
