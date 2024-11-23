@@ -240,3 +240,42 @@ class Interaction:
         )
         logging.info(f"Computed rho for interaction {self.name}: {rho}")
         return rho
+
+    # ---------------------------------------------------------------------------- #
+    #                         Parameter Estimation Methods                         #
+    # ---------------------------------------------------------------------------- #
+    def estimate_tau_with_optimization_using_scipy(
+        self, tau_init=[0.25, 0.25, 0.25, 0.25], alpha=1e-13
+    ):
+        """
+        Estimate the tau parameters using the L-BFGS-B optimization scheme.
+
+        :param tau_init (list): Initial guesses for the tau parameters (default: [0.25, 0.25, 0.25, 0.25]).
+        :param alpha (float): Small value to avoid edge cases at 0 or 1 (default: 1e-13).
+        :return (tuple): The optimized values of (tau_00, tau_01, tau_10, tau_11).
+        """
+        logging.info(f"Estimating tau params for {self.name} using L-BFGS-B.")
+
+        def negative_log_likelihood(tau):
+            return -self.compute_log_likelihood(tau)
+
+        bounds = 4 * [(alpha, 1 - alpha)]
+        constraints = {"type": "eq", "fun": lambda tau: sum(tau) - 1}
+        result = minimize(
+            negative_log_likelihood,
+            x0=tau_init,
+            bounds=bounds,
+            constraints=constraints,
+            method="L-BFGS-B",
+        )
+        if not result.success:
+            logging.warning(
+                f"Optimization failed for interaction {self.name}: {result.message}"
+            )
+            raise ValueError(f"Optimization failed: {result.message}")
+
+        self.tau_00, self.tau_01, self.tau_10, self.tau_11 = result.x
+        logging.info(
+            f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
+        )
+        return self.tau_00, self.tau_01, self.tau_10, self.tau_11
