@@ -46,9 +46,17 @@ class Gene:
             f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
         )
 
+        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
+        if missing_bmr_pmf_counts:
+            logging.warning(
+                f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
+                f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
+            )
+
         log_likelihood = sum(
             np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
+            if c in self.bmr_pmf
         )
         return log_likelihood
 

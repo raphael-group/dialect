@@ -2,8 +2,6 @@ import logging
 import numpy as np
 import pandas as pd
 
-from collections import defaultdict
-
 from dialect.utils.helpers import *
 from dialect.models.gene import Gene
 
@@ -44,9 +42,7 @@ def identify_pairwise_interactions(maf, bmr, out, k):
         bmr_pmf_arr = bmr_dict.get(gene_name, None)
         if bmr_pmf_arr is None:
             raise ValueError(f"No BMR PMF found for gene {gene_name}")
-        bmr_pmf = defaultdict(
-            lambda: 0, {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        )
+        bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
         genes[gene_name] = Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf)
     logging.info(f"Initialized {len(genes)} Gene objects.")
 
