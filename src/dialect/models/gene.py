@@ -56,7 +56,7 @@ class Gene:
         log_likelihood = sum(
             np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
-            if c in self.bmr_pmf
+            if c in self.bmr_pmf and self.bmr_pmf[c] > 0
         )
         return log_likelihood
 
