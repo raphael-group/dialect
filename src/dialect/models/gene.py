@@ -37,9 +37,9 @@ class Gene:
         return (float): The log-likelihood value.
         raises (ValueError): If `bmr_pmf`, `counts`, or `pi` is not defined.
         """
-        if not self.bmr_pmf:
+        if self.bmr_pmf is None:
             raise ValueError("BMR PMF is not defined for this gene.")
-        if not self.counts:
+        if self.counts is None:
             raise ValueError("Counts are not defined for this gene.")
 
         logging.info(
