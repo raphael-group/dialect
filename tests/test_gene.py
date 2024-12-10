@@ -74,3 +74,17 @@ class TestGene(unittest.TestCase):
         self.assertIsInstance(self.gene.pi, float)
         self.assertGreaterEqual(self.gene.pi, 0.0)
         self.assertLessEqual(self.gene.pi, 1.0)
+
+    def test_estimate_pi_with_em(self):
+        """
+        Test estimate_pi_with_em_from_scratch for a realistic case.
+        """
+        self.gene.estimate_pi_with_em_from_scratch()
+        self.assertIsInstance(self.gene.pi, float)
+        self.assertGreaterEqual(self.gene.pi, 0.0)
+        self.assertLessEqual(self.gene.pi, 1.0)
+
+    # TODO Add additional edge cases and tests, including:
+    # - TODO: test for non-normalized bmr_pmf
+    # - TODO: tests for values outside of allowed bounds for all methods
+    # - TODO: tests for missing values in bmr_pmf
