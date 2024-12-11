@@ -18,6 +18,24 @@ class Gene:
         self.pi = None
 
     # ---------------------------------------------------------------------------- #
+    #                          DATA VALIDATION AND LOGGING                         #
+    # ---------------------------------------------------------------------------- #
+
+    def verify_bmr_pmf_and_counts_exist(self):
+        if self.bmr_pmf is None:
+            raise ValueError("BMR PMF is not defined for this gene.")
+        if self.counts is None:
+            raise ValueError("Counts are not defined for this gene.")
+
+    def verify_bmr_pmf_contains_all_count_keys(self):
+        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
+        if missing_bmr_pmf_counts:
+            logging.warning(
+                f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
+                f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
+            )
+
+    # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
 
@@ -37,21 +55,12 @@ class Gene:
         return (float): The log-likelihood value.
         raises (ValueError): If `bmr_pmf`, `counts`, or `pi` is not defined.
         """
-        if self.bmr_pmf is None:
-            raise ValueError("BMR PMF is not defined for this gene.")
-        if self.counts is None:
-            raise ValueError("Counts are not defined for this gene.")
-
         logging.info(
             f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
         )
 
-        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
-        if missing_bmr_pmf_counts:
-            logging.warning(
-                f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
-                f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
-            )
+        self.verify_bmr_pmf_and_counts_exist()
+        self.verify_bmr_pmf_contains_all_count_keys()
 
         log_likelihood = sum(
             np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
@@ -115,6 +124,8 @@ class Gene:
 
         logging.info(f"Estimating pi for gene {self.name} using L-BFGS-B optimization.")
 
+        self.verify_bmr_pmf_and_counts_exist()
+
         alpha = 1e-13  # Small value to avoid edge cases at 0 or 1
         bounds = [(alpha, 1 - alpha)]  # Restrict pi to (0, 1) to avoid log issues
         result = minimize(
@@ -146,10 +157,7 @@ class Gene:
         """
         logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
 
-        if self.bmr_pmf is None:
-            raise ValueError("BMR PMF is not defined for this gene.")
-        if self.counts is None:
-            raise ValueError("Counts are not defined for this gene.")
+        self.verify_bmr_pmf_and_counts_exist()
 
         # TODO: Refactor to Extract Method between here and log likelihood calculation
         missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
