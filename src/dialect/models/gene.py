@@ -227,42 +227,30 @@ class Gene:
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
 
-        # TODO: Double check logic and validity of removing counts here
-        valid_counts = [
+        nonzero_probability_counts = [
             c for c in self.counts if c in self.bmr_pmf and self.bmr_pmf[c] > 0
-        ]
+        ]  # exclude counts with zero probability to avoid log(0) issues
 
-        pi_hat = pi_init
-        for iteration in range(max_iter):
-            # E-step: Compute responsibilities
+        pi = pi_init
+        for it in range(max_iter):
             z_i = [
-                (pi_hat * self.bmr_pmf.get(c - 1, 0))
-                / (
-                    self.bmr_pmf.get(c, 0) * (1 - pi_hat)
-                    + self.bmr_pmf.get(c - 1, 0) * pi_hat
-                )
-                for c in valid_counts
-            ]
+                (pi * self.bmr_pmf.get(c - 1, 0))
+                / (pi * self.bmr_pmf.get(c - 1, 0) + (1 - pi) * self.bmr_pmf.get(c, 0))
+                for c in nonzero_probability_counts
+            ]  # E-step
 
-            # M-step: Update pi as the mean of responsibilities
-            new_pi = np.mean(z_i)
-
-            # Compute log-likelihood for convergence check
-            prev_log_likelihood = self.compute_log_likelihood(pi_hat)
-            curr_log_likelihood = self.compute_log_likelihood(new_pi)
-
-            logging.info(
-                f"Iteration {iteration}: pi={pi_hat:.4f}, log_likelihood={curr_log_likelihood:.4f}"
-            )
+            curr_pi = np.mean(z_i)  # M-step
 
             # Check convergence
+            prev_log_likelihood = self.compute_log_likelihood(pi)
+            curr_log_likelihood = self.compute_log_likelihood(curr_pi)
             if abs(curr_log_likelihood - prev_log_likelihood) < tol:
-                logging.info(f"EM algorithm converged after {iteration} iterations.")
+                logging.info(f"EM algorithm converged after {it} iterations.")
                 break
 
-            pi_hat = new_pi
+            pi = curr_pi
 
-        self.pi = pi_hat
+        self.pi = pi
         logging.info(f"Estimated pi for gene {self.name}: {self.pi:.4f}")
         return self.pi
 
