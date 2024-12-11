@@ -69,6 +69,7 @@ class Gene:
             f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
         )
 
+        self.verify_pi_is_valid()
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
 
@@ -93,6 +94,8 @@ class Gene:
 
         :return (float): Likelihood ratio.
         """
+        logging.info(f"Computing likelihood ratio for gene {self.name}.")
+
         self.verify_pi_is_valid()
 
         lambda_LR = -2 * (
@@ -102,10 +105,15 @@ class Gene:
 
     def compute_log_odds_ratio(self):
         """
-        Compute the log odds ratio from the contingency table.
+        Compute the log odds ratio.
+
+        The log odds ratio is given by:
+            log(OR) = \log(\frac{\pi}{1 - \pi})
 
         :return (float): Log odds ratio.
         """
+        logging.info(f"Computing log odds ratio for gene {self.name}.")
+
         self.verify_pi_is_valid()
 
         log_odds_ratio = np.log(self.pi / (1 - self.pi))
