@@ -22,12 +22,23 @@ class Gene:
     # ---------------------------------------------------------------------------- #
 
     def verify_bmr_pmf_and_counts_exist(self):
+        """
+        Verify that the BMR PMF and counts are defined for this gene.
+
+        :raises ValueError: If `bmr_pmf` or `counts` is not defined.
+        """
         if self.bmr_pmf is None:
             raise ValueError("BMR PMF is not defined for this gene.")
         if self.counts is None:
             raise ValueError("Counts are not defined for this gene.")
 
     def verify_bmr_pmf_contains_all_count_keys(self):
+        """
+        Check if all count keys in `counts` exist in `bmr_pmf`.
+
+        Logs a warning if any counts are missing in `bmr_pmf` and skips those samples.
+        Issue occurs when BMR PMF does not include all possible counts in categorical distribution.
+        """
         missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
         if missing_bmr_pmf_counts:
             logging.warning(
@@ -36,6 +47,14 @@ class Gene:
             )
 
     def verify_pi_is_valid(self):
+        """
+        Validate that the estimated pi value is defined and within the valid range [0, 1].
+
+        Logs additional information for boundary or invalid values.
+
+        :raises ValueError: If `pi` is not defined or out of bounds.
+        :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
+        """
         if not self.pi:
             raise ValueError("Pi has not been esitmated for this gene.")
         if not 0 <= self.pi <= 1:
@@ -51,19 +70,26 @@ class Gene:
 
     def compute_log_likelihood(self, pi):
         """
-        Compute the complete data log-likelihood for the gene given the estimated pi.
+        Compute the complete data log-likelihood for the gene given the estimated \( \pi \).
 
-        The likelihood function is given by:
-            \sum_{i=1}^{N} \log(\mathbb{P}(P_i = c_i)(1 - \pi) + \mathbb{P}(P_i = c_i - 1) \pi)
+        The log-likelihood function is defined as:
+
+        .. math::
+
+            \\ell_C(\\pi) = \\sum_{i=1}^{N} \\log \\big(\\mathbb{P}(P_i = c_i)(1 - \\pi) + \\mathbb{P}(P_i = c_i - 1) \\pi\\big)
 
         where:
-            - `N` is the number of samples.
-            - `P_i` represents the RV for passenger mutations
-            - `c_i` is the observed count of somatic mutations for sample i
-            - `\pi` is the estimated driver mutation rate parameter value.
 
-        return (float): The log-likelihood value.
-        raises (ValueError): If `bmr_pmf`, `counts`, or `pi` is not defined.
+        - \( N \): Number of samples.
+        - \( P_i \): Random variable representing passenger mutations.
+        - \( c_i \): Observed count of somatic mutations for sample \( i \).
+        - \( \\pi \): Estimated driver mutation rate parameter value.
+
+        **Returns**:
+        :return: (float) The computed log-likelihood value.
+
+        **Raises**:
+        :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
         logging.info(
             f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
@@ -82,17 +108,22 @@ class Gene:
 
     def compute_likelihood_ratio(self):
         """
-        Compute the likelihood ratio test statistic (lambda_LR) with respect to the null hypothesis.
+        Compute the likelihood ratio test statistic (\( \lambda_{LR} \)) with respect to the null hypothesis.
 
-        The likelihood ratio statistic is given by:
-            lambda_LR = -2 * [\ell(pi_null) - \ell(\hat{pi})]
+        The likelihood ratio test statistic is calculated as:
+
+        .. math::
+
+            \lambda_{LR} = -2 \\left[ \\ell(\\pi_{\\text{null}}) - \\ell(\\hat{\\pi}) \\right]
 
         where:
-            - \ell(): Log-likelihood.
-            - pi_null: Null hypothesis of no driver mutations (pi = 0).
-            - \hat{pi}: Estimated value of pi parameter.
 
-        :return (float): Likelihood ratio.
+        - \( \\ell() \): Log-likelihood function.
+        - \( \\pi_{\\text{null}} \): Null hypothesis value (e.g., \( \\pi = 0 \), indicating no driver mutations).
+        - \( \\hat{\\pi} \): Estimated value of the \( \\pi \) parameter under the alternative hypothesis.
+
+        **Returns**:
+        :return: (float) The likelihood ratio test statistic (\( \lambda_{LR} \)).
         """
         logging.info(f"Computing likelihood ratio for gene {self.name}.")
 
@@ -107,11 +138,16 @@ class Gene:
         """
         Compute the log odds ratio.
 
-        The log odds ratio is given by:
-            log(OR) = \log(\frac{\pi}{1 - \pi})
+        The log odds ratio is calculated as:
 
-        :return (float): Log odds ratio.
+        .. math::
+
+            L = \\log\\left(\\frac{\\tau_{01} \\tau_{10}}{\\tau_{00} \\tau_{11}}\\right)
+
+        **Returns**:
+        :return: (float) The log odds ratio.
         """
+
         logging.info(f"Computing log odds ratio for gene {self.name}.")
 
         self.verify_pi_is_valid()
@@ -160,25 +196,36 @@ class Gene:
     def estimate_pi_with_em_from_scratch(self, max_iter=1000, tol=1e-6, pi_init=0.5):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
-        Implements the EM algorithm from scratch.
 
-        TODO: write out E and M step equations in docstring
+        This method iteratively updates the parameter \( \pi \) to maximize the likelihood of the observed data.
 
-        :param max_iter (int): Maximum number of iterations (default: 1000).
-        :param epsilon (float): Convergence threshold for log-likelihood improvement (default: 1e-6).
-        :return (float): The estimated value of pi.
+        **Algorithm Steps**:
+
+        1. **E-Step**: Compute the responsibilities (\( z_i^{(t)} \)) as:
+
+           .. math::
+
+               z_{i}^{(t)} = \\frac{\\pi^{(t)} \\cdot \\mathbb{P}(P_i = c_i - 1)}
+               {\\pi^{(t)} \\cdot \\mathbb{P}(P_i = c_i - 1) + (1 - \\pi^{(t)}) \\cdot \\mathbb{P}(P_i = c_i)}
+
+        2. **M-Step**: Update the parameter \( \pi \) as:
+
+           .. math::
+
+               \\pi^{(t+1)} = \\frac{1}{N} \\sum_{i=1}^{N} z_{i}^{(t)}
+
+        **Parameters**:
+        :param max_iter: (int) Maximum number of iterations (default: 1000).
+        :param epsilon: (float) Convergence threshold for log-likelihood improvement (default: 1e-6).
+        :param pi_init: (float) The initialization value for \( \pi \).
+
+        **Returns**:
+        :return: (float) The estimated value of \( \pi \).
         """
         logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
 
         self.verify_bmr_pmf_and_counts_exist()
-
-        # TODO: Refactor to Extract Method between here and log likelihood calculation
-        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
-        if missing_bmr_pmf_counts:
-            logging.warning(
-                f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
-                f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
-            )
+        self.verify_bmr_pmf_contains_all_count_keys()
 
         # TODO: Double check logic and validity of removing counts here
         valid_counts = [
