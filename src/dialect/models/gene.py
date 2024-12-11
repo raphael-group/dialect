@@ -35,6 +35,16 @@ class Gene:
                 f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
             )
 
+    def verify_pi_is_valid(self):
+        if not self.pi:
+            raise ValueError("Pi has not been esitmated for this gene.")
+        if not 0 <= self.pi <= 1:
+            logging.info(f"Pi value out of bounds: {self.pi}")
+            raise ValueError("Estimated pi is out of bounds.")
+        if self.pi == 0 or self.pi == 1:
+            logging.info(f"Pi for gene {self.name} is 0 or 1")
+            return np.inf if self.pi else -np.inf
+
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
@@ -83,6 +93,8 @@ class Gene:
 
         :return (float): Likelihood ratio.
         """
+        self.verify_pi_is_valid()
+
         lambda_LR = -2 * (
             self.compute_log_likelihood(0) - self.compute_log_likelihood(self.pi)
         )
@@ -94,14 +106,7 @@ class Gene:
 
         :return (float): Log odds ratio.
         """
-        if not self.pi:
-            raise ValueError("Pi has not been esitmated for this gene.")
-        if not 0 <= self.pi <= 1:
-            logging.info(f"Pi value out of bounds: {self.pi}")
-            raise ValueError("Estimated pi is out of bounds.")
-        if self.pi == 0 or self.pi == 1:
-            logging.info(f"Pi for gene {self.name} is 0 or 1")
-            return np.inf if self.pi else -np.inf
+        self.verify_pi_is_valid()
 
         log_odds_ratio = np.log(self.pi / (1 - self.pi))
         return log_odds_ratio
