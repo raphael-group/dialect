@@ -63,7 +63,6 @@ class Gene:
             raise ValueError("Estimated pi is out of bounds.")
         if pi == 0 or pi == 1:
             logging.info(f"Pi for gene {self.name} is 0 or 1")
-            return np.inf if pi else -np.inf
 
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
@@ -101,6 +100,9 @@ class Gene:
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
 
+        # ? should we skip zero valued terms in log likelihood summation
+        # ? should we deal with log(0) issues in some other way (pi = 0 or 1)
+        # TODO: validate mathematical approach to this computation
         log_likelihood = sum(
             np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
