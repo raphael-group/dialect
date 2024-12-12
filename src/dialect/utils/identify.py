@@ -5,9 +5,21 @@ import pandas as pd
 from dialect.utils.helpers import *
 from dialect.models.gene import Gene
 
+
 # ---------------------------------------------------------------------------- #
 #                               Helper Functions                               #
 # ---------------------------------------------------------------------------- #
+def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
+    check_file_exists(cnt_mtx)
+    check_file_exists(bmr_pmfs)
+
+
+def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
+    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
+    bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
+    bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
+    bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
+    return cnt_df, bmr_dict
 
 
 # ---------------------------------------------------------------------------- #
@@ -24,13 +36,8 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     @param k (int): Top k genes according to count of mutations will be used.
     """
     logging.info("Identifying pairwise interactions using DIALECT")
-    check_file_exists(cnt_mtx)
-    check_file_exists(bmr_pmfs)
-
-    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
-    bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
-    bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
-    bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
+    verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
+    cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
 
     if k <= 0:
         logging.error("k must be a positive integer")
@@ -54,6 +61,8 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     logging.info("Finished estimating pi for single genes.")
 
     logging.info("Implementation in progress.")
+
     # ! Continue Implementation Here. Steps:
     # TODO: Call interaction methods on top pairs
+    # TODO: thoroughly check whether mutliple initializations are needed for EM (single gene + pairwise)
     # sort genes by sum of counts variable, pick top X, create interaction objects, run EM on them
