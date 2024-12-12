@@ -125,7 +125,7 @@ def generate_counts_from_CBaSE_output(out):
     df = df[df["effect"].isin(["missense", "nonsense"])]
     df["gene"] = df["gene"] + "_" + df["effect"].str[0].str.upper()
     df = df.pivot_table(index="gene", columns="sample", aggfunc="size", fill_value=0).T
-    df.to_csv(os.path.join(out, "count_matrix.csv"), index=False)
+    df.to_csv(os.path.join(out, "count_matrix.csv"), index=True)
     logging.info(f"Count matrix saved to: {os.path.join(out, 'count_matrix.csv')}")
 
 
@@ -158,11 +158,10 @@ def generate_bmr_files_from_CBaSE_output(out):
         df["gene"] = df["gene"].str.rsplit("_", n=1).str[0] + suffix
 
         df.set_index("gene", drop=True, inplace=True)
-        df.index.name = None
         all_dfs.append(df)
 
     df = pd.concat(all_dfs)
-    df.to_csv(os.path.join(out, "bmr_pmfs.csv"), index=False)
+    df.to_csv(os.path.join(out, "bmr_pmfs.csv"), index=True)
     logging.info(f"CBaSE BMR PMFs saved to: {os.path.join(out, 'bmr_pmfs.csv')}")
 
 
@@ -182,7 +181,7 @@ def generate_bmr_and_counts(maf, out, reference):
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
     check_file_exists(maf)
-    generate_bmr_using_CBaSE(maf, out, reference)
+    # generate_bmr_using_CBaSE(maf, out, reference)
     generate_bmr_files_from_CBaSE_output(out)
     generate_counts_from_CBaSE_output(out)
     logging.info("BMR and count matrix generation completed successfully.")
