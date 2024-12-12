@@ -279,3 +279,13 @@ class Interaction:
             f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
         )
         return self.tau_00, self.tau_01, self.tau_10, self.tau_11
+
+    # TODO: Implement this method
+    def estimate_tau_with_em_from_scratch():
+        logging.info("Estimating tau parameters using EM algorithm from scratch.")
+        raise NotImplementedError("Method is not yet implemented.")
+
+    # TODO: Implement below to increase speed relative to from-scratch EM
+    def estimate_tau_with_em_using_pomegranate():
+        logging.info("Estimating tau parameters using pomegranate.")
+        raise NotImplementedError("Method is not yet implemented.")
