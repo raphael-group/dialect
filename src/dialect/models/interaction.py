@@ -75,26 +75,36 @@ class Interaction:
 
     def compute_log_likelihood(self, taus):
         """
-        Compute the complete data log-likelihood for the interaction given the parameters tau.
+        Compute the complete data log-likelihood for the interaction given the parameters \( \tau \).
 
-        The log-likelihood function is given by:
-            \sum_{i=1}^{N} \log ()
-                \mathbb{P}(P_i = c_i)\mathbb{P}(P_i' = c_i') \tau_{00} +
-                \mathbb{P}(P_i = c_i)\mathbb{P}(P_i' = c_i' - 1) \tau_{01} +
-                \mathbb{P}(P_i = c_i - 1)\mathbb{P}(P_i' = c_i') \tau_{10} +
-                \mathbb{P}(P_i = c_i - 1)\mathbb{P}(P_i' = c_i' - 1) \tau_{11}
-            )
+        The log-likelihood function is defined as:
+
+        .. math::
+
+            \\ell_C(\\tau) = \\sum_{i=1}^{N} \\log \\Big(
+                \\mathbb{P}(P_i = c_i) \\mathbb{P}(P_i' = c_i') \\tau_{00} +
+                \\mathbb{P}(P_i = c_i) \\mathbb{P}(P_i' = c_i' - 1) \\tau_{01} +
+                \\mathbb{P}(P_i = c_i - 1) \\mathbb{P}(P_i' = c_i') \\tau_{10} +
+                \\mathbb{P}(P_i = c_i - 1) \\mathbb{P}(P_i' = c_i' - 1) \\tau_{11}
+            \\Big)
 
         where:
-            - `N` is the number of samples.
-            - `P_i` and `P_i'` represent the RVs for passenger mutations for the two genes.
-            - `c_i` and `c_i'` are the observed counts of somatic mutations for the two genes.
-            - `tau = (tau_00, tau_01, tau_10, tau_11)` are the interaction parameters.
 
-        :param tau (tuple): A tuple (tau_00, tau_01, tau_10, tau_11) representing the interaction parameters.
-        :return (float): The log-likelihood value.
+        - \( N \): Number of samples.
+        - \( P_i \) and \( P_i' \): Random variables representing passenger mutations for the two genes.
+        - \( c_i \) and \( c_i' \): Observed counts of somatic mutations for the two genes.
+        - \( \\tau = (\\tau_{00}, \\tau_{01}, \\tau_{10}, \\tau_{11}) \): Interaction parameters.
+
+        **Parameters**:
+        :param tau: (tuple) A tuple \( (\\tau_{00}, \\tau_{01}, \\tau_{10}, \\tau_{11}) \) representing the interaction parameters.
+
+        **Returns**:
+        :return: (float) The computed log-likelihood value.
+
+        **Raises**:
         :raises ValueError: If `bmr_pmf` or `counts` are not defined for either gene, or if `tau` is invalid.
         """
+
         logging.info(f"Computing log likelihood for {self.name}. Taus: {taus}")
 
         self.verify_bmr_pmf_and_counts_exist()
@@ -116,18 +126,24 @@ class Interaction:
 
     def compute_likelihood_ratio(self, taus):
         """
-        Compute the likelihood ratio test statistic (lambda_LR) with respect to the null hypothesis.
+        Compute the likelihood ratio test statistic (\( \lambda_{LR} \)) with respect to the null hypothesis.
 
-        The likelihood ratio statistic is given by:
-            lambda_LR = -2 * [\ell(tau_null) - \ell(\hat{tau})]
+        The likelihood ratio test statistic is defined as:
+
+        .. math::
+
+            \lambda_{LR} = -2 \\left[ \\ell(\\tau_{\\text{null}}) - \\ell(\\hat{\\tau}) \\right]
 
         where:
-            - \ell(): Log-likelihood.
-            - tau_null: Null hypothesis of no interaction (independent given individual gene driver probabilites).
-            - \hat{tau}: Estimated values of tau parameters.
 
-        :return (float): Likelihood ratio.
+        - \( \\ell() \): Log-likelihood function.
+        - \( \\tau_{\\text{null}} \): Null hypothesis of no interaction (genes are independent given their individual driver probabilities).
+        - \( \\hat{\\tau} \): Estimated values of the \( \\tau \) parameters under the alternative hypothesis.
+
+        **Returns**:
+        :return: (float) The computed likelihood ratio test statistic (\( \lambda_{LR} \)).
         """
+
         logging.info(f"Computing likelihood ratio for interaction {self.name}.")
 
         self.verify_pi_values(self.gene_a.pi, self.gene_b.pi)
@@ -150,14 +166,21 @@ class Interaction:
 
     def compute_log_odds_ratio(self, taus):
         """
-        Compute the log odds ratio for the interaction based on the tau parameters.
+        Compute the log odds ratio for the interaction based on the \( \tau \) parameters.
 
-        The odds ratio is given by:
-            Odds Ratio = (tau_01 * tau_10) / (tau_00 * tau_11)
+        The log odds ratio is calculated as:
 
-        :return (float): The log odds ratio.
-        :raises ValueError: If tau parameters are invalid or lead to division by zero.
+        .. math::
+
+            \text{Log Odds Ratio} = \\log \\left( \\frac{\\tau_{01} \\cdot \\tau_{10}}{\\tau_{00} \\cdot \\tau_{11}} \\right)
+
+        **Returns**:
+        :return: (float) The computed log odds ratio.
+
+        **Raises**:
+        :raises ValueError: If \( \\tau \) parameters are invalid or lead to division by zero.
         """
+
         logging.info(f"Computing log odds ratio for interaction {self.name}.")
 
         self.verify_taus_are_valid(taus)
@@ -180,16 +203,24 @@ class Interaction:
         """
         Compute the Wald statistic for the interaction.
 
-        The Wald statistic is given by:
-            W = log_odds_ratio / standard_error
+        The Wald statistic is calculated as:
 
-        where the standard error is calculated as:
-            std_err = sqrt(
-                (1 / tau_01) + (1 / tau_10) + (1 / tau_00) + (1 / tau_11)
-            )
+        .. math::
 
-        :return (float or None): The Wald statistic, or None
+            W = \\frac{\\text{Log Odds Ratio}}{\\text{Standard Error}}
+
+        where the standard error is defined as:
+
+        .. math::
+
+            \\text{Standard Error} = \\sqrt{
+                \\frac{1}{\\tau_{01}} + \\frac{1}{\\tau_{10}} + \\frac{1}{\\tau_{00}} + \\frac{1}{\\tau_{11}}
+            }
+
+        **Returns**:
+        :return: (float or None) The computed Wald statistic, or None if calculation is not possible.
         """
+
         logging.info(f"Computing Wald statistic for interaction {self.name}.")
 
         self.verify_taus_are_valid(taus)
@@ -219,17 +250,26 @@ class Interaction:
 
     def compute_rho(self, taus):
         """
-        Compute the interaction measure rho (ρ) for the given tau parameters - ρ is given by:
-            ρ = (tau_01 * tau_10 - tau_11 * tau_00) / sqrt(tau_0* * tau_1* * tau_*0 * tau_*1)
+        Compute the interaction measure \( \rho \) for the given \( \tau \) parameters.
+
+        The interaction measure \( \rho \) is calculated as:
+
+        .. math::
+
+            \\rho = \\frac{\\tau_{01} \\cdot \\tau_{10} - \\tau_{11} \\cdot \\tau_{00}}
+            {\\sqrt{\\tau_{0*} \\cdot \\tau_{1*} \\cdot \\tau_{*0} \\cdot \\tau_{*1}}}
 
         where:
-            - tau_0* = tau_00 + tau_01 (marginal for no driver mutation in gene_a)
-            - tau_1* = tau_10 + tau_11 (marginal for driver mutation in gene_a)
-            - tau_*0 = tau_00 + tau_10 (marginal for no driver mutation in gene_b)
-            - tau_*1 = tau_01 + tau_11 (marginal for driver mutation in gene_b)
 
-        :return (float or None): The value of rho, or None if the computation is invalid (e.g., division by zero).
+        - \( \\tau_{0*} = \\tau_{00} + \\tau_{01} \): Marginal probability for no driver mutation in gene \( A \).
+        - \( \\tau_{1*} = \\tau_{10} + \\tau_{11} \): Marginal probability for a driver mutation in gene \( A \).
+        - \( \\tau_{*0} = \\tau_{00} + \\tau_{10} \): Marginal probability for no driver mutation in gene \( B \).
+        - \( \\tau_{*1} = \\tau_{01} + \\tau_{11} \): Marginal probability for a driver mutation in gene \( B \).
+
+        **Returns**:
+        :return: (float or None) The computed value of \( \\rho \), or None if the computation is invalid (e.g., division by zero).
         """
+
         logging.info(f"Computing rho for interaction {self.name}.")
 
         self.verify_taus_are_valid(taus)
