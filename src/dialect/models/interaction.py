@@ -68,6 +68,10 @@ class Interaction:
             )
             raise ValueError("Driver probabilities are not defined for both genes.")
 
+    # TODO: Add verification for counts existing in BMR PMFs
+    # ? do we want to exclude these counts from log likelihood calculation?
+    # ? does the existing code handle this in the EM estimation?
+
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
