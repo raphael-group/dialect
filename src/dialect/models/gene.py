@@ -1,4 +1,5 @@
 import logging
+import itertools
 import numpy as np
 from scipy.optimize import minimize
 
@@ -46,7 +47,7 @@ class Gene:
                 f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
             )
 
-    def verify_pi_is_valid(self):
+    def verify_pi_is_valid(self, pi):
         """
         Validate that the estimated pi value is defined and within the valid range [0, 1].
 
@@ -55,14 +56,14 @@ class Gene:
         :raises ValueError: If `pi` is not defined or out of bounds.
         :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
         """
-        if not self.pi:
+        if not pi:
             raise ValueError("Pi has not been esitmated for this gene.")
-        if not 0 <= self.pi <= 1:
-            logging.info(f"Pi value out of bounds: {self.pi}")
+        if not 0 <= pi <= 1:
+            logging.info(f"Pi value out of bounds: {pi}")
             raise ValueError("Estimated pi is out of bounds.")
-        if self.pi == 0 or self.pi == 1:
+        if pi == 0 or pi == 1:
             logging.info(f"Pi for gene {self.name} is 0 or 1")
-            return np.inf if self.pi else -np.inf
+            return np.inf if pi else -np.inf
 
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
@@ -92,10 +93,11 @@ class Gene:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
         logging.info(
-            f"Computing log likelihood for gene {self.name}.  Pi: {pi}. BMR PMF: {self.bmr_pmf}"
+            f"Computing log likelihood for gene {self.name}. Pi: {pi:.3e}. "
+            f"BMR PMF: {{ {', '.join(f'{k}: {v:.3e}' for k, v in itertools.islice(self.bmr_pmf.items(), 3))} }}"
         )
 
-        self.verify_pi_is_valid()
+        self.verify_pi_is_valid(pi)
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
 
@@ -106,7 +108,7 @@ class Gene:
         )
         return log_likelihood
 
-    def compute_likelihood_ratio(self):
+    def compute_likelihood_ratio(self, pi):
         """
         Compute the likelihood ratio test statistic (\( \lambda_{LR} \)) with respect to the null hypothesis.
 
@@ -127,14 +129,14 @@ class Gene:
         """
         logging.info(f"Computing likelihood ratio for gene {self.name}.")
 
-        self.verify_pi_is_valid()
+        self.verify_pi_is_valid(pi)
 
         lambda_LR = -2 * (
-            self.compute_log_likelihood(0) - self.compute_log_likelihood(self.pi)
+            self.compute_log_likelihood(0) - self.compute_log_likelihood(pi)
         )
         return lambda_LR
 
-    def compute_log_odds_ratio(self):
+    def compute_log_odds_ratio(self, pi):
         """
         Compute the log odds ratio.
 
@@ -150,9 +152,9 @@ class Gene:
 
         logging.info(f"Computing log odds ratio for gene {self.name}.")
 
-        self.verify_pi_is_valid()
+        self.verify_pi_is_valid(pi)
 
-        log_odds_ratio = np.log(self.pi / (1 - self.pi))
+        log_odds_ratio = np.log(self.pi / (1 - pi))
         return log_odds_ratio
 
     # ---------------------------------------------------------------------------- #
