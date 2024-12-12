@@ -56,7 +56,7 @@ class Gene:
         :raises ValueError: If `pi` is not defined or out of bounds.
         :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
         """
-        if not pi:
+        if pi is None:
             raise ValueError("Pi has not been esitmated for this gene.")
         if not 0 <= pi <= 1:
             logging.info(f"Pi value out of bounds: {pi}")
@@ -264,3 +264,6 @@ class Gene:
         """
         logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
         raise NotImplementedError("EM algorithm not implemented yet.")
+
+
+# TODO: Create to string method for Gene class
