@@ -304,13 +304,13 @@ class Interaction:
         self, tau_init=[0.25, 0.25, 0.25, 0.25], alpha=1e-13
     ):
         """
-        Estimate the tau parameters using the L-BFGS-B optimization scheme.
+        Estimate the tau parameters using the SLSQP optimization scheme.
 
         :param tau_init (list): Initial guesses for the tau parameters (default: [0.25, 0.25, 0.25, 0.25]).
         :param alpha (float): Small value to avoid edge cases at 0 or 1 (default: 1e-13).
         :return (tuple): The optimized values of (tau_00, tau_01, tau_10, tau_11).
         """
-        logging.info(f"Estimating tau params for {self.name} using L-BFGS-B.")
+        logging.info(f"Estimating tau params for {self.name} using SLSQP.")
 
         self.verify_bmr_pmf_and_counts_exist()
 
@@ -324,7 +324,7 @@ class Interaction:
             x0=tau_init,
             bounds=bounds,
             constraints=constraints,
-            method="L-BFGS-B",
+            method="SLSQP",
         )
         if not result.success:
             logging.warning(

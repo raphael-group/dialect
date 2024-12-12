@@ -103,6 +103,7 @@ class Gene:
         # ? should we skip zero valued terms in log likelihood summation
         # ? should we deal with log(0) issues in some other way (pi = 0 or 1)
         # TODO: validate mathematical approach to this computation
+        # TODO: currently, only a warning is issued when pi is 0 or 1 and result may be -inf or inf
         log_likelihood = sum(
             np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
@@ -164,8 +165,8 @@ class Gene:
     # ---------------------------------------------------------------------------- #
     def estimate_pi_with_optimiziation_using_scipy(self, pi_init=0.5):
         """
-        Estimate the pi parameter using the L-BFGS-B optimization scheme.
-        L-BFGS-B is used because it supports bounds (0 < pi < 1), which are required
+        Estimate the pi parameter using the SLSQP optimization scheme.
+        SLSQP is used because it supports bounds (0 < pi < 1), which are required
         to handle constraints and ensure valid log-likelihood computations.
 
         :param pi_init (float): Initial guess for the pi parameter (default: 0.5).
@@ -175,7 +176,7 @@ class Gene:
         def negative_log_likelihood(pi):
             return -self.compute_log_likelihood(pi)
 
-        logging.info(f"Estimating pi for gene {self.name} using L-BFGS-B optimization.")
+        logging.info(f"Estimating pi for gene {self.name} using SLSQP optimization.")
 
         self.verify_bmr_pmf_and_counts_exist()
 
@@ -185,7 +186,7 @@ class Gene:
             negative_log_likelihood,
             x0=[pi_init],  # Initial guess for pi
             bounds=bounds,
-            method="L-BFGS-B",  # Recommended for bounded optimization
+            method="SLSQP",
         )
 
         if not result.success:
