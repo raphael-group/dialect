@@ -13,22 +13,22 @@ from dialect.models.gene import Gene
 # ---------------------------------------------------------------------------- #
 #                                 Main Function                                #
 # ---------------------------------------------------------------------------- #
-def identify_pairwise_interactions(maf, bmr, out, k):
+def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
     ! Work in Progress
 
-    @param maf (str): Path to the input MAF (Mutation Annotation Format) file containing mutation data.
-    @param bmr (str): Path to the file with background mutation rate (BMR) distributions.
+    @param cnt_mtx (str): Path to the input count matrix file containing mutation data.
+    @param bmr_pmfs (str): Path to the file with background mutation rate (BMR) distributions.
     @param out (str): Directory where outputs will be saved.
     @param k (int): Top k genes according to count of mutations will be used.
     """
     logging.info("Identifying pairwise interactions using DIALECT")
-    check_file_exists(maf)
-    check_file_exists(bmr)
+    check_file_exists(cnt_mtx)
+    check_file_exists(bmr_pmfs)
 
-    maf_df = pd.read_csv(maf, index_col=0)
-    bmr_df = pd.read_csv(bmr, index_col=0)
+    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
+    bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
     bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
     bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
 
@@ -36,23 +36,24 @@ def identify_pairwise_interactions(maf, bmr, out, k):
         logging.error("k must be a positive integer")
         raise ValueError("k must be a positive integer")
 
-    genes = {}
-    for gene_name in maf_df.columns:
-        counts = maf_df[gene_name].values
+    genes = []
+    for gene_name in cnt_df.columns:
+        counts = cnt_df[gene_name].values
         bmr_pmf_arr = bmr_dict.get(gene_name, None)
         if bmr_pmf_arr is None:
             raise ValueError(f"No BMR PMF found for gene {gene_name}")
         bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        genes[gene_name] = Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf)
+        genes.append(Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf))
     logging.info(f"Initialized {len(genes)} Gene objects.")
+
+    # log info on about to run pi estimation on single genes
+    logging.info("Running EM to estimate pi for single genes...")
+    for gene in genes:
+        gene.estimate_pi_with_em_from_scratch()
+        logging.info(f"Estimated pi of {gene.pi} for gene {gene.name}")
+    logging.info("Finished estimating pi for single genes.")
 
     logging.info("Implementation in progress.")
     # ! Continue Implementation Here. Steps:
-    # TODO: Implement 3-5 tests for each method in Gene & Interaction Classes
-    # TODO: Add and implement EM algorithm in Gene & Interaction Classes
-    # TODO: Write code here to call Gene & Interaction methods to identify pairwise interactions
-
-    # OPTIONAL EXTENSIONS
-    # ---------------------------------------------------------------------------- #
-    # TODO: Implement Pomegranate Mixture Model in Gene & Interaction Classes
-    # TODO: Implement other metrics in Gene class (KL, MI, etc.)
+    # TODO: Call interaction methods on top pairs
+    # sort genes by sum of counts variable, pick top X, create interaction objects, run EM on them
