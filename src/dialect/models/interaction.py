@@ -34,10 +34,10 @@ class Interaction:
 
         :raises ValueError: If BMR PMFs or counts are not defined.
         """
-        if not self.gene_a.bmr_pmf or not self.gene_b.bmr_pmf:
+        if self.gene_a.bmr_pmf is None or self.gene_b.bmr_pmf is None:
             raise ValueError("BMR PMFs are not defined for one or both genes.")
 
-        if not self.gene_a.counts or not self.gene_b.counts:
+        if self.gene_a.counts is None or self.gene_b.counts is None:
             raise ValueError("Counts are not defined for one or both genes.")
 
     def verify_taus_are_valid(self, taus):
@@ -350,3 +350,6 @@ class Interaction:
     def estimate_tau_with_em_using_pomegranate(self):
         logging.info("Estimating tau parameters using pomegranate.")
         raise NotImplementedError("Method is not yet implemented.")
+
+
+# TODO: Create to string method for Interaction class
