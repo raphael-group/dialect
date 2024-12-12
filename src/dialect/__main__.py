@@ -33,7 +33,7 @@ def main():
     elif args.command == "identify":
         os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
         identify_pairwise_interactions(
-            maf=args.maf, bmr=args.bmr, out=args.out, k=args.top_k
+            cnt_mtx=args.cnt, bmr_pmfs=args.bmr, out=args.out, k=args.top_k
         )
         pass
 
