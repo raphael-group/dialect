@@ -2,8 +2,10 @@ import logging
 import numpy as np
 import pandas as pd
 
+from itertools import combinations
 from dialect.utils.helpers import *
 from dialect.models.gene import Gene
+from dialect.models.interaction import Interaction
 
 
 # ---------------------------------------------------------------------------- #
@@ -53,16 +55,23 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
         genes.append(Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf))
     logging.info(f"Initialized {len(genes)} Gene objects.")
 
-    # log info on about to run pi estimation on single genes
     logging.info("Running EM to estimate pi for single genes...")
     for gene in genes:
         gene.estimate_pi_with_em_from_scratch()
         logging.info(f"Estimated pi of {gene.pi} for gene {gene.name}")
     logging.info("Finished estimating pi for single genes.")
 
-    logging.info("Implementation in progress.")
+    interactions = []
+    top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
+    for gene_a, gene_b in combinations(top_genes, 2):
+        interactions.append(Interaction(gene_a, gene_b))
+    logging.info(f"Initialized {len(interactions)} Interaction objects.")
 
-    # ! Continue Implementation Here. Steps:
-    # TODO: Call interaction methods on top pairs
-    # TODO: thoroughly check whether mutliple initializations are needed for EM (single gene + pairwise)
-    # sort genes by sum of counts variable, pick top X, create interaction objects, run EM on them
+    logging.info("Running EM to estimate pi for pairwise interactions...")
+    for interaction in interactions:
+        interaction.estimate_tau_with_em_from_scratch()
+        logging.info(
+            f"Estimated tau_00={interaction.tau_00}, tau_01={interaction.tau_01}, tau_10={interaction.tau_10}, tau_11={interaction.tau_11} for interaction {interaction.name}"
+        )
+    logging.info("Finished estimating tau for pairwise interactions.")
+    # TODO: Check log likelihood plots to determine if multiple initializations needed for pairwise EM
