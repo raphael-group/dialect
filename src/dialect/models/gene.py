@@ -254,6 +254,7 @@ class Gene:
         logging.info(f"Estimated pi for gene {self.name}: {self.pi:.4f}")
         return self.pi
 
+    # TODO: Implement below to increase speed relative to from-scratch EM
     def estimate_pi_with_em_using_pomegranate(self):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
