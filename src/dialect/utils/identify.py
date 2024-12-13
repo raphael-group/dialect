@@ -24,6 +24,82 @@ def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     return cnt_df, bmr_dict
 
 
+def create_single_gene_table(genes, output_path):
+    """
+    Create a table of single-gene test results and save it to a CSV file.
+
+    :param genes: (list) A list of Gene objects.
+    :param output_path: (str) Path to save the CSV file.
+    """
+    results = []
+    for gene in genes:
+        log_odds_ratio = gene.compute_log_odds_ratio(gene.pi)
+        likelihood_ratio = gene.compute_likelihood_ratio(gene.pi)
+        observed_mutations = sum(gene.counts)
+        expected_mutations = gene.calculate_expected_mutations()
+        obs_minus_exp_mutations = observed_mutations - expected_mutations
+
+        results.append(
+            {
+                "Gene Name": gene.name,
+                "Pi": gene.pi,
+                "Log Odds Ratio": log_odds_ratio,
+                "Likelihood Ratio": likelihood_ratio,
+                "Observed Mutations": observed_mutations,
+                "Expected Mutations": expected_mutations,
+                "Obs. - Exp. Mutations": obs_minus_exp_mutations,
+            }
+        )
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(output_path, index=False)
+    logging.info(f"Single-gene results saved to {output_path}")
+
+
+def create_pairwise_results_table(interactions, output_path):
+    """
+    Create a table of pairwise interaction test results and save it to a CSV file.
+
+    :param interactions: (list) A list of Interaction objects.
+    :param output_path: (str) Path to save the CSV file.
+    """
+    results = []
+    for interaction in interactions:
+        taus = (
+            interaction.tau_00,
+            interaction.tau_01,
+            interaction.tau_10,
+            interaction.tau_11,
+        )
+        rho = interaction.compute_rho(taus)
+        log_odds_ratio = interaction.compute_log_odds_ratio(taus)
+        likelihood_ratio = interaction.compute_likelihood_ratio(taus)
+        cm = interaction.compute_contingency_table()
+
+        results.append(
+            {
+                "Gene A": interaction.gene_a.name,
+                "Gene B": interaction.gene_b.name,
+                "Tau_00": interaction.tau_00,
+                "Tau_10": interaction.tau_10,
+                "Tau_01": interaction.tau_01,
+                "Tau_11": interaction.tau_11,
+                "_00_": cm[0, 0],
+                "_10_": cm[1, 0],
+                "_01_": cm[0, 1],
+                "_11_": cm[1, 1],
+                "Tau_1X": interaction.tau_10 + interaction.tau_11,
+                "Tau_X1": interaction.tau_01 + interaction.tau_11,
+                "Rho": rho,
+                "Log Odds Ratio": log_odds_ratio,
+                "Likelihood Ratio": likelihood_ratio,
+            }
+        )
+
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(output_path, index=False)
+    logging.info(f"Pairwise results saved to {output_path}")
+
+
 # ---------------------------------------------------------------------------- #
 #                                 Main Function                                #
 # ---------------------------------------------------------------------------- #
@@ -74,4 +150,16 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
             f"Estimated tau_00={interaction.tau_00}, tau_01={interaction.tau_01}, tau_10={interaction.tau_10}, tau_11={interaction.tau_11} for interaction {interaction.name}"
         )
     logging.info("Finished estimating tau for pairwise interactions.")
-    # TODO: Check log likelihood plots to determine if multiple initializations needed for pairwise EM
+
+    logging.info("Creating single-gene results table...")
+    create_single_gene_table(genes, f"{out}/single_gene_results.csv")
+    logging.info("Finished creating single-gene results table.")
+
+    # TODO: Check log likelihood plots for pairwise interactions
+    # ? Are the plots convex; do we need multiple EM initializations
+    logging.info("Creating pairwise interaction results table...")
+    create_pairwise_results_table(
+        interactions, f"{out}/pairwise_interaction_results.csv"
+    )
+    logging.info("Finished creating pairwise interaction results table.")
+    # TODO: Add methods to get set of co-occurring samples
