@@ -499,7 +499,6 @@ def import_vcf_data(filename):
         else:
             continue
         if N_columns == 6:
-            print(field)
             sample_name = field[5]
         if bases.count(field[3]) and bases.count(field[4]) and field[3] != field[4]:
             mut_array.append(
