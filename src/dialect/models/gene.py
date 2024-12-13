@@ -86,6 +86,15 @@ class Gene:
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
+    def calculate_expected_mutations(self):
+        """
+        Calculate the expected number of mutations for the gene based on its BMR PMF.
+
+        :return: (float) The expected number of mutations.
+        """
+        total_samples = len(self.counts)
+        expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
+        return expected_mutations * total_samples
 
     def compute_log_likelihood(self, pi):
         """
