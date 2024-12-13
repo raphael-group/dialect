@@ -1249,11 +1249,13 @@ if (
     )
     mutations_df = pd.DataFrame(mutations)
     mutations_df.to_csv(
-        "{}/{}_kept_mutations.csv".format(TEMP_DIR, OUTNAME), index=False, sep="\t"
+        "{}/{}_kept_mutations.csv".format(TEMP_DIR, os.path.basename(OUTNAME)),
+        index=False,
+        sep="\t",
     )
 else:  # 	Import mutation file (original CBaSE) with format: [gene, effect, alt, context]
     mutations = import_maf_data(INFILE, CMODE)
-    sys.stderr.write("%i SNVs imported for file %s.\n" % (len(mutations), OUTNAME))
+    sys.stderr.write("%i SNVs imported for file %s.\n" % (len(mutations), INFILE))
 
 lengths = [
     [k, len(list(g))]
@@ -1279,7 +1281,7 @@ res, mut_matrix = export_expected_observed_mks_per_gene(
     mutations,
     abundances,
     effects_by_gene,
-    "%s/mutation_mat_%s.txt" % (TEMP_DIR, OUTNAME),
+    "%s/mutation_mat.txt" % TEMP_DIR,
 )
 sys.stderr.write("Finished data preparation.\n")
 
@@ -1328,7 +1330,7 @@ if MODEL == 1 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[2] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 1.\n")
-    fout = open("%s/param_estimates_%s_1.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_1.txt" % TEMP_DIR, "w")
     fout.write("%e, %e, %f, %i\n" % (cur_min_res[0], cur_min_res[1], cur_min_res[2], 1))
     fout.close()
 
@@ -1351,7 +1353,7 @@ if MODEL == 2 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[2] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 2.\n")
-    fout = open("%s/param_estimates_%s_2.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_2.txt" % TEMP_DIR, "w")
     fout.write("%e, %e, %f, %i\n" % (cur_min_res[0], cur_min_res[1], cur_min_res[2], 2))
     fout.close()
 
@@ -1384,7 +1386,7 @@ if MODEL == 3 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[4] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 3.\n")
-    fout = open("%s/param_estimates_%s_3.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_3.txt" % TEMP_DIR, "w")
     fout.write(
         "%e, %e, %e, %e, %f, %i\n"
         % (
@@ -1427,7 +1429,7 @@ if MODEL == 4 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[4] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 4.\n")
-    fout = open("%s/param_estimates_%s_4.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_4.txt" % TEMP_DIR, "w")
     fout.write(
         "%e, %e, %e, %e, %f, %i\n"
         % (
@@ -1472,7 +1474,7 @@ if MODEL == 5 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[5] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 5.\n")
-    fout = open("%s/param_estimates_%s_5.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_5.txt" % TEMP_DIR, "w")
     fout.write(
         "%e, %e, %e, %e, %e, %f, %i\n"
         % (
@@ -1518,7 +1520,7 @@ if MODEL == 6 or MODEL == 0:
             cur_min_res = p_res[:]
     if cur_min_res[5] == 1e20:
         sys.stderr.write("Could not find a converging solution for model 6.\n")
-    fout = open("%s/param_estimates_%s_6.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/param_estimates_6.txt" % TEMP_DIR, "w")
     fout.write(
         "%e, %e, %e, %e, %e, %f, %i\n"
         % (
@@ -1535,7 +1537,7 @@ if MODEL == 6 or MODEL == 0:
 
 # ************************************************************************************************************
 
-p_files = glob.glob("%s/param_estimates_%s_*.txt" % (TEMP_DIR, OUTNAME))
+p_files = glob.glob("%s/param_estimates_*.txt" % TEMP_DIR)
 
 all_models = []
 for p_file in p_files:
@@ -1554,7 +1556,7 @@ for m in range(len(all_models)):
 if cur_min < 1e20:
     # 	Export parameters and index of chosen model.
     sys.stderr.write("Best model fit: model %i.\n" % int(all_models[cur_ind][-1]))
-    fout = open("%s/used_params_and_model_%s.txt" % (TEMP_DIR, OUTNAME), "w")
+    fout = open("%s/used_params_and_model.txt" % TEMP_DIR, "w")
     fout.write(
         "".join(
             [
@@ -1568,7 +1570,7 @@ if cur_min < 1e20:
     )
     fout.close()
     # 	Import parameters and index of chosen model.
-    fin = open("%s/used_params_and_model_%s.txt" % (TEMP_DIR, OUTNAME))
+    fin = open("%s/used_params_and_model.txt" % TEMP_DIR)
     lines = fin.readlines()
     fin.close()
     field = lines[0].strip().split(", ")
@@ -1602,7 +1604,7 @@ for sam in muts_by_sample:
         ]
     )
 
-fout = open("%s/output_data_preparation_%s.txt" % (TEMP_DIR, OUTNAME), "w")
+fout = open("%s/output_data_preparation.txt" % TEMP_DIR, "w")
 # Output format: [gene, lm, lk, ls, mobs, kobs, sobs, Lgene, lambda_s]
 fout.write(
     "gene\tl_m\tl_k\tl_s\tm_obs\tk_obs\ts_obs\tL_gene\tlambda_s\ts_max_per_sample\tN_samples=%i\n"

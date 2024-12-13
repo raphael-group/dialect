@@ -654,7 +654,7 @@ def compute_p_values(p, genes, aux):
 
 def export_pofxigivens_table(pvals_array, x_ind):
     label = ["m", "k"][x_ind - 13]
-    fout = open("%s/pof%sigivens_%s.txt" % (TEMP_DIR, label, outname), "w")
+    fout = open("%s/pof%sigivens.txt" % (TEMP_DIR, label), "w")
     for gene in pvals_array:
         fout.write("%s_%si\t" % (gene[0], label))
         for i in range(len(gene[x_ind])):
@@ -670,7 +670,7 @@ def export_pofxigivens_table(pvals_array, x_ind):
 
 
 def export_pofxgivens_table(pvals_array, x_ind, outfile):
-    fout = open("%s/%s_%s.txt" % (TEMP_DIR, outfile, outname), "w")
+    fout = open("%s/%s.txt" % (TEMP_DIR, outfile), "w")
     label = ["m", "k"][x_ind - 11]
     for gene in pvals_array:
         fout.write("%s_%s\t" % (gene[0], label))
@@ -970,7 +970,7 @@ TEMP_DIR = str(sys.argv[2])  #   path to the temp files folder
 #
 # 	Collect parameter estimates from all fitted models in working directory.
 
-p_files = glob.glob("%s/param_estimates_%s_*.txt" % (TEMP_DIR, outname))
+p_files = glob.glob("%s/param_estimates_*.txt" % TEMP_DIR)
 
 all_models = []
 for p_file in p_files:
@@ -988,7 +988,7 @@ for m in range(len(all_models)):
         cur_ind = m
 if cur_min < 1e20:
     sys.stderr.write("Best model fit: model %i.\n" % int(all_models[cur_ind][-1]))
-    fout = open("%s/used_params_and_model_%s.txt" % (TEMP_DIR, outname), "w")
+    fout = open("%s/used_params_and_model.txt" % TEMP_DIR, "w")
     fout.write(
         "".join(
             [
@@ -1009,7 +1009,7 @@ else:
 # 	Compute q-values for all genes, using best fitting model.
 
 # 	Import parameters and index of chosen model.
-fin = open("%s/used_params_and_model_%s.txt" % (TEMP_DIR, outname))
+fin = open("%s/used_params_and_model.txt" % TEMP_DIR)
 lines = fin.readlines()
 fin.close()
 field = lines[0].strip().split(", ")
@@ -1025,7 +1025,7 @@ if len(params) != modC_map[mod_C - 1]:
     sys.exit()
 
 # 	Import output from data_preparation, containing l_x and (m,k,s)_obs.
-fin = open("%s/output_data_preparation_%s.txt" % (TEMP_DIR, outname))
+fin = open("%s/output_data_preparation.txt" % TEMP_DIR)
 lines = fin.readlines()
 fin.close()
 mks_type = []
@@ -1092,7 +1092,7 @@ all_qvalues = combine_qvalues(
 )
 
 # 	Output q-values in file.
-fout = open("%s/q_values_%s.txt" % (TEMP_DIR, outname), "w")
+fout = open("%s/q_values.txt" % TEMP_DIR, "w")
 fout.write("%s\t%s\n" % (mod_choice[mod_C], params))
 fout.write(
     "gene\tp_phi_m_neg\tq_phi_m_neg\tphi_m_neg\tp_phi_k_neg\tq_phi_k_neg\tphi_k_neg\tp_phi_neg\tq_phi_neg\tphi_neg\tp_phi_m_pos\tq_phi_m_pos\tphi_m_pos_or_p(m=0|s)\tp_phi_k_pos\tq_phi_k_pos\tphi_k_pos_or_p(k=0|s)\tp_phi_pos\tq_phi_pos\tphi_pos_or_p(m=0|s)*p(k=0|s)\tm_obs\tk_obs\ts_obs\tdm/ds\tdk/ds\td(m+k)/ds\n"
