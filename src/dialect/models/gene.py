@@ -44,7 +44,10 @@ class Gene:
         if missing_bmr_pmf_counts:
             logging.warning(
                 f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
-                f"These samples will be skipped. Please ensure bmr_pmf includes all relevant counts."
+                f"Please ensure bmr_pmf includes all relevant counts."
+            )
+            raise ValueError(
+                "BMR PMF does not contain all possible counts as keys in categorical distribution."
             )
 
     def verify_pi_is_valid(self, pi):
@@ -56,13 +59,13 @@ class Gene:
         :raises ValueError: If `pi` is not defined or out of bounds.
         :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
         """
-        if pi is None:
-            raise ValueError("Pi has not been esitmated for this gene.")
-        if not 0 <= pi <= 1:
-            logging.info(f"Pi value out of bounds: {pi}")
-            raise ValueError("Estimated pi is out of bounds.")
-        if pi == 0 or pi == 1:
-            logging.info(f"Pi for gene {self.name} is 0 or 1")
+        if pi is None or not 0 <= pi <= 1:
+            raise ValueError(f"Invalid pi value: {pi}. Pi must be in the range [0, 1].")
+        if pi == 1:
+            logging.info(
+                f"Pi for gene {self.name} is 1, which will result in log(0) issues when computing log likelihood."
+            )
+            raise ValueError("Estimated pi is 1. Please ensure pi is less than 1.")
 
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
@@ -100,15 +103,11 @@ class Gene:
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
 
-        # ? should we skip zero valued terms in log likelihood summation
-        # ? should we deal with log(0) issues in some other way (pi = 0 or 1)
-        # TODO: validate mathematical approach to this computation
-        # TODO: currently, only a warning is issued when pi is 0 or 1 and result may be -inf or inf
         log_likelihood = sum(
-            np.log(self.bmr_pmf.get(c, 0) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
+            np.log(self.bmr_pmf.get(c) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
             for c in self.counts
-            if c in self.bmr_pmf and self.bmr_pmf[c] > 0
         )
+
         return log_likelihood
 
     def compute_likelihood_ratio(self, pi):
