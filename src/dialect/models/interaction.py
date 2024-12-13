@@ -25,6 +25,39 @@ class Interaction:
         self.tau_10 = None  # P(D = 1, D' = 0) for genes A and B
         self.tau_11 = None  # P(D = 1, D' = 1) for genes A and B
 
+    def __str__(self):
+        """
+        Return a string representation of the Interaction object.
+        """
+        taus_info = (
+            f"tau_00={self.tau_00:.3e}, tau_01={self.tau_01:.3e}, "
+            f"tau_10={self.tau_10:.3e}, tau_11={self.tau_11:.3e}"
+            if None not in (self.tau_00, self.tau_01, self.tau_10, self.tau_11)
+            else "Tau values not estimated"
+        )
+
+        pi_a = (
+            f"{self.gene_a.pi:.3e}" if self.gene_a.pi is not None else "Not estimated"
+        )
+        pi_b = (
+            f"{self.gene_b.pi:.3e}" if self.gene_b.pi is not None else "Not estimated"
+        )
+
+        cm = self.compute_contingency_table()
+        cm_info = (
+            f"\nContingency Table:\n"
+            f"[[{cm[0, 0]} {cm[0, 1]}]\n"
+            f" [{cm[1, 0]} {cm[1, 1]}]]"
+        )
+
+        return (
+            f"Interaction: {self.name}\n"
+            f"Gene A: {self.gene_a.name} (Pi: {pi_a})\n"
+            f"Gene B: {self.gene_b.name} (Pi: {pi_b})\n"
+            f"Tau Parameters: {taus_info}\n"
+            f"Contingency Table:{cm_info}"
+        )
+
     # ---------------------------------------------------------------------------- #
     #                           DATA VALIDATION & LOGGING                          #
     # ---------------------------------------------------------------------------- #
@@ -481,10 +514,7 @@ class Interaction:
             f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
         )
 
-    # TODO: Implement below to increase speed relative to from-scratch EM
+    # TODO (LOW PRIORITY): Implement EM w/ Pomegranate for Speed Improvement
     def estimate_tau_with_em_using_pomegranate(self):
         logging.info("Estimating tau parameters using pomegranate.")
         raise NotImplementedError("Method is not yet implemented.")
-
-
-# TODO: Create to string method for Interaction class
