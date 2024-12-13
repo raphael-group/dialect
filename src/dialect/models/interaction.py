@@ -236,17 +236,17 @@ class Interaction:
 
         logging.info(f"Computing likelihood ratio for interaction {self.name}.")
 
-        self.verify_pi_values(self.gene_a.pi, self.gene_b.pi)
-        pi_a, pi_b = self.gene_a.pi, self.gene_b.pi
         tau_00, tau_01, tau_10, tau_11 = taus
+        driver_a_marginal = tau_10 + tau_11
+        driver_b_marginal = tau_01 + tau_11
 
-        # TODO: Validate the null hypothesis is correct
-        # ? Why shouldn't we use the marginals instead?
         tau_null = (
-            (1 - pi_a) * (1 - pi_b),  # tau_00: neither gene has a driver mutation
-            (1 - pi_a) * pi_b,  # tau_01: only gene_b has a driver mutation
-            pi_a * (1 - pi_b),  # tau_10: only gene_a has a driver mutation
-            pi_a * pi_b,  # tau_11: both genes have driver mutations
+            (1 - driver_a_marginal) * (1 - driver_b_marginal),  #  both genes passengers
+            (1 - driver_a_marginal)
+            * driver_b_marginal,  # gene a passenger, gene b driver
+            driver_a_marginal
+            * (1 - driver_b_marginal),  # gene a driver, gene b passenger
+            driver_a_marginal * driver_b_marginal,  # both genes drivers
         )
         lambda_LR = -2 * (
             self.compute_log_likelihood(tau_null)
