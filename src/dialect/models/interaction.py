@@ -103,10 +103,6 @@ class Interaction:
             )
             raise ValueError("Driver probabilities are not defined for both genes.")
 
-    # TODO: Add verification for counts existing in BMR PMFs
-    # ? do we want to exclude these counts from log likelihood calculation?
-    # ? does the existing code handle this in the EM estimation?
-
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
@@ -199,6 +195,7 @@ class Interaction:
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
         a_bmr_pmf, b_bmr_pmf = self.gene_a.bmr_pmf, self.gene_b.bmr_pmf
         tau_00, tau_01, tau_10, tau_11 = taus
+        # TODO: handle rare case where tau_11 = 1
         log_likelihood = sum(
             np.log(
                 a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b) * tau_00
