@@ -87,6 +87,11 @@ class Interaction:
             raise ValueError(
                 "Invalid tau parameters. Ensure 0 <= tau_i <= 1 and sum(tau) == 1."
             )
+        tau_11 = taus[-1]
+        if tau_11 == 1:
+            logging.warning(
+                f"Tau_11 is 1 for interaction {self.name}. This is an edge case."
+            raise ValueError("Tau_11 cannot be 1. This leads to log(0) in log-likelihood.")
 
     def verify_pi_values(self, pi_a, pi_b):
         """
@@ -195,7 +200,6 @@ class Interaction:
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
         a_bmr_pmf, b_bmr_pmf = self.gene_a.bmr_pmf, self.gene_b.bmr_pmf
         tau_00, tau_01, tau_10, tau_11 = taus
-        # TODO: handle rare case where tau_11 = 1
         log_likelihood = sum(
             np.log(
                 a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b) * tau_00
