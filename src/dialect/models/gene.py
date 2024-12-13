@@ -18,6 +18,22 @@ class Gene:
         self.bmr_pmf = bmr_pmf
         self.pi = None
 
+    def __str__(self):
+        """
+        Return a string representation of the Gene object.
+        """
+        bmr_preview = ", ".join(
+            f"{k}: {v:.3e}" for k, v in itertools.islice(self.bmr_pmf.items(), 3)
+        )  # Format the first three key-value pairs in bmr_pmf
+        pi_info = f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
+        total_mutations = np.sum(self.counts)
+        return (
+            f"Gene: {self.name}\n"
+            f"Total Mutations: {total_mutations}\n"
+            f"BMR PMF (preview): {{ {bmr_preview} }}\n"
+            f"{pi_info}"
+        )
+
     # ---------------------------------------------------------------------------- #
     #                          DATA VALIDATION AND LOGGING                         #
     # ---------------------------------------------------------------------------- #
@@ -257,7 +273,7 @@ class Gene:
         self.pi = pi
         logging.info(f"Estimated pi for gene {self.name}: {self.pi:.4f}")
 
-    # TODO: Implement below to increase speed relative to from-scratch EM
+    # TODO (LOW PRIORITY): Implement EM w/ Pomegranate for Speed Improvement
     def estimate_pi_with_em_using_pomegranate(self):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
@@ -265,6 +281,3 @@ class Gene:
         """
         logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
         raise NotImplementedError("EM algorithm not implemented yet.")
-
-
-# TODO: Create to string method for Gene class
