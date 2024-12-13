@@ -470,7 +470,7 @@ def import_vcf_data(filename):
     ]
 
     # 	Note: Split by any white space, not just tabs.
-    N_columns = len(lines[0].strip().split("\t"))
+    N_columns = len(lines[0].strip().split())
 
     if N_columns < 5:
         sys.stderr.write(
@@ -485,7 +485,7 @@ def import_vcf_data(filename):
     sample_name = "john_doe"
     for line in lines:
         # 	Note: Split by any white space, not just tabs.
-        field = line.strip().split()
+        field = line.strip().split("\t")
         if field[0] == "#CHROM" and N_columns >= 10:
             sample_name = field[10]
         elif field[0] == "X" or field[0] == "chrX":
@@ -499,6 +499,7 @@ def import_vcf_data(filename):
         else:
             continue
         if N_columns == 6:
+            print(field)
             sample_name = field[5]
         if bases.count(field[3]) and bases.count(field[4]) and field[3] != field[4]:
             mut_array.append(
