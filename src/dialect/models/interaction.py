@@ -91,7 +91,10 @@ class Interaction:
         if tau_11 == 1:
             logging.warning(
                 f"Tau_11 is 1 for interaction {self.name}. This is an edge case."
-            raise ValueError("Tau_11 cannot be 1. This leads to log(0) in log-likelihood.")
+            )
+            raise ValueError(
+                "Tau_11 cannot be 1. This leads to log(0) in log-likelihood."
+            )
 
     def verify_pi_values(self, pi_a, pi_b):
         """
