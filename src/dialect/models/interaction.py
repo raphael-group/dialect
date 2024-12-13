@@ -199,12 +199,11 @@ class Interaction:
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
         a_bmr_pmf, b_bmr_pmf = self.gene_a.bmr_pmf, self.gene_b.bmr_pmf
         tau_00, tau_01, tau_10, tau_11 = taus
-        # TODO: Moddify all passenger key access to not default to 0
         log_likelihood = sum(
             np.log(
-                a_bmr_pmf.get(c_a, 0) * b_bmr_pmf.get(c_b, 0) * tau_00
-                + a_bmr_pmf.get(c_a, 0) * b_bmr_pmf.get(c_b - 1, 0) * tau_01
-                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b, 0) * tau_10
+                a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b) * tau_00
+                + a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b - 1, 0) * tau_01
+                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b) * tau_10
                 + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b - 1, 0) * tau_11
             )
             for c_a, c_b in zip(a_counts, b_counts)
