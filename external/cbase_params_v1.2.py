@@ -1249,7 +1249,7 @@ if (
     )
     mutations_df = pd.DataFrame(mutations)
     mutations_df.to_csv(
-        "{}/{}_kept_mutations.csv".format(TEMP_DIR, os.path.basename(OUTNAME)),
+        "{}/kept_mutations.csv".format(TEMP_DIR),
         index=False,
         sep="\t",
     )
