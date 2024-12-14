@@ -117,9 +117,7 @@ def generate_counts_from_CBaSE_output(out):
     logging.info(
         "Generating count matrix from CBaSE output of retained missense and nonsense mutations."
     )
-    CBaSE_kept_mutations_fn = os.path.join(
-        out, "CBaSE_output", "output_kept_mutations.csv"
-    )
+    CBaSE_kept_mutations_fn = os.path.join(out, "CBaSE_output", "kept_mutations.csv")
 
     df = pd.read_csv(CBaSE_kept_mutations_fn, sep="\t")
     df = df[df["effect"].isin(["missense", "nonsense"])]
@@ -181,7 +179,7 @@ def generate_bmr_and_counts(maf, out, reference):
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
     check_file_exists(maf)
-    generate_bmr_using_CBaSE(maf, out, reference)
-    generate_bmr_files_from_CBaSE_output(out)
+    # generate_bmr_using_CBaSE(maf, out, reference)
+    # generate_bmr_files_from_CBaSE_output(out)
     generate_counts_from_CBaSE_output(out)
     logging.info("BMR and count matrix generation completed successfully.")
