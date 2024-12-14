@@ -1,6 +1,7 @@
 """
 This script analyzes co-occurring samples between two genes using user-provided
-gene pairs and count matrix data.
+gene pairs and count matrix data. User friendly prompts are provided to enter
+the gene names and the script outputs the set of co-occurring samples between.
 """
 
 # ---------------------------------------------------------------------------- #
