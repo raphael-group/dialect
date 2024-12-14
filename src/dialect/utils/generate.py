@@ -139,8 +139,8 @@ def generate_bmr_files_from_CBaSE_output(out):
     and saves the combined probability mass functions as 'bmr_pmfs.csv' in the output directory.
     """
     logging.info("Generating BMR PMF files from CBaSE output.")
-    mis_bmr_fn = os.path.join(out, "CBaSE_output", "pofmigivens_output.txt")
-    non_bmr_fn = os.path.join(out, "CBaSE_output", "pofkigivens_output.txt")
+    mis_bmr_fn = os.path.join(out, "CBaSE_output", "pofmigivens.txt")
+    non_bmr_fn = os.path.join(out, "CBaSE_output", "pofkigivens.txt")
 
     all_dfs = []
     for fn, suffix in zip([mis_bmr_fn, non_bmr_fn], ["_M", "_N"]):
