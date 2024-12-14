@@ -471,8 +471,6 @@ class Interaction:
 
         self.verify_bmr_pmf_and_counts_exist()
 
-        # TODO: handle nonzero probability counts and cases where counts are not in BMR PMF
-
         tau_00, tau_01, tau_10, tau_11 = tau_init
         for it in range(max_iter):
             # E-Step: Compute responsibilities

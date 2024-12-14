@@ -96,6 +96,7 @@ class Gene:
         expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
         return expected_mutations * total_samples
 
+    # TODO: remove surplus logging statements due to EM runs
     def compute_log_likelihood(self, pi):
         """
         Compute the complete data log-likelihood for the gene given the estimated \( \pi \).
