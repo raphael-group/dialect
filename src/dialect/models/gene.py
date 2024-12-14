@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 
 
 class Gene:
-    def __init__(self, name, counts, bmr_pmf):
+    def __init__(self, name, samples, counts, bmr_pmf):
         """
         Initialize a Gene object.
 
@@ -14,6 +14,7 @@ class Gene:
         :param bmr_pmf (defaultdict): BMR PMF (multinomial passed as single list).
         """
         self.name = name
+        self.samples = samples
         self.counts = counts
         self.bmr_pmf = bmr_pmf
         self.pi = None
@@ -35,9 +36,21 @@ class Gene:
         )
 
     # ---------------------------------------------------------------------------- #
+    #                               UTILITY FUNCTIONS                              #
+    # ---------------------------------------------------------------------------- #
+    def calculate_expected_mutations(self):
+        """
+        Calculate the expected number of mutations for the gene based on its BMR PMF.
+
+        :return: (float) The expected number of mutations.
+        """
+        total_samples = len(self.counts)
+        expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
+        return expected_mutations * total_samples
+
+    # ---------------------------------------------------------------------------- #
     #                          DATA VALIDATION AND LOGGING                         #
     # ---------------------------------------------------------------------------- #
-
     def verify_bmr_pmf_and_counts_exist(self):
         """
         Verify that the BMR PMF and counts are defined for this gene.
@@ -86,16 +99,6 @@ class Gene:
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
-    def calculate_expected_mutations(self):
-        """
-        Calculate the expected number of mutations for the gene based on its BMR PMF.
-
-        :return: (float) The expected number of mutations.
-        """
-        total_samples = len(self.counts)
-        expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
-        return expected_mutations * total_samples
-
     # TODO: remove surplus logging statements due to EM runs
     def compute_log_likelihood(self, pi):
         """
@@ -120,10 +123,10 @@ class Gene:
         **Raises**:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
-        logging.info(
-            f"Computing log likelihood for gene {self.name}. Pi: {pi:.3e}. "
-            f"BMR PMF: {{ {', '.join(f'{k}: {v:.3e}' for k, v in itertools.islice(self.bmr_pmf.items(), 3))} }}"
-        )
+        # logging.info(
+        #     f"Computing log likelihood for gene {self.name}. Pi: {pi:.3e}. "
+        #     f"BMR PMF: {{ {', '.join(f'{k}: {v:.3e}' for k, v in itertools.islice(self.bmr_pmf.items(), 3))} }}"
+        # )
 
         self.verify_pi_is_valid(pi)
         self.verify_bmr_pmf_and_counts_exist()
