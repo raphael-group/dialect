@@ -37,6 +37,7 @@ def explore_log_likelihoods_for_single_gene_estimation(cnt_df, bmr_dict):
     for gene_name in cnt_df.columns:
         gene = Gene(
             name=gene_name,
+            samples=cnt_df.index,
             counts=cnt_df[gene_name].values,
             bmr_pmf={
                 i: bmr_dict[gene_name][i] for i in range(len(bmr_dict[gene_name]))
@@ -58,6 +59,7 @@ def visualize_log_likelihood_plot_for_gene(cnt_df, bmr_dict, gene_name):
 
     gene = Gene(
         name=gene_name,
+        samples=cnt_df.index,
         counts=cnt_df[gene_name].values,
         bmr_pmf={i: bmr_dict[gene_name][i] for i in range(len(bmr_dict[gene_name]))},
     )
