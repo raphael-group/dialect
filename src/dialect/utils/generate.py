@@ -179,7 +179,7 @@ def generate_bmr_and_counts(maf, out, reference):
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
     check_file_exists(maf)
-    # generate_bmr_using_CBaSE(maf, out, reference)
-    # generate_bmr_files_from_CBaSE_output(out)
+    generate_bmr_using_CBaSE(maf, out, reference)
+    generate_bmr_files_from_CBaSE_output(out)
     generate_counts_from_CBaSE_output(out)
     logging.info("BMR and count matrix generation completed successfully.")
