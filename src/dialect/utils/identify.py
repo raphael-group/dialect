@@ -31,6 +31,7 @@ def create_single_gene_table(genes, output_path):
     :param genes: (list) A list of Gene objects.
     :param output_path: (str) Path to save the CSV file.
     """
+    logging.info("Creating single-gene results table...")
     results = []
     for gene in genes:
         log_odds_ratio = gene.compute_log_odds_ratio(gene.pi)
@@ -53,6 +54,7 @@ def create_single_gene_table(genes, output_path):
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_path, index=False)
     logging.info(f"Single-gene results saved to {output_path}")
+    logging.info("Finished creating single-gene results table.")
 
 
 def create_pairwise_results_table(interactions, output_path):
@@ -62,6 +64,7 @@ def create_pairwise_results_table(interactions, output_path):
     :param interactions: (list) A list of Interaction objects.
     :param output_path: (str) Path to save the CSV file.
     """
+    logging.info("Creating pairwise interaction results table...")
     results = []
     for interaction in interactions:
         taus = (
@@ -98,6 +101,67 @@ def create_pairwise_results_table(interactions, output_path):
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_path, index=False)
     logging.info(f"Pairwise results saved to {output_path}")
+    logging.info("Finished creating pairwise interaction results table.")
+
+
+def estimate_pi_for_each_gene(genes, single_gene_output_file=None):
+    """
+    Set pi values from file if it exists; otherwise, estimate using EM.
+    """
+    logging.info("Running EM to estimate pi for single genes...")
+    pi_from_file = {}
+    print(single_gene_output_file)
+    print(os.path.exists(single_gene_output_file))
+    if single_gene_output_file and os.path.exists(single_gene_output_file):
+        try:
+            pi_from_file = (
+                pd.read_csv(single_gene_output_file)
+                .set_index("Gene Name")["Pi"]
+                .to_dict()
+            )
+        except Exception as e:
+            logging.warning(f"Error reading {single_gene_output_file}: {e}")
+
+    for gene in genes:
+        if gene.name in pi_from_file:
+            gene.pi = pi_from_file[gene.name]
+            logging.info(f"Loaded pi={gene.pi} for {gene.name} from file")
+        else:
+            gene.estimate_pi_with_em_from_scratch()
+            logging.info(f"Estimated pi={gene.pi} for {gene.name}")
+    logging.info("Finished estimating pi for single genes.")
+
+
+def initialize_gene_objects(cnt_df, bmr_dict):
+    genes = []
+    for gene_name in cnt_df.columns:
+        counts = cnt_df[gene_name].values
+        bmr_pmf_arr = bmr_dict.get(gene_name, None)
+        if bmr_pmf_arr is None:
+            raise ValueError(f"No BMR PMF found for gene {gene_name}")
+        bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
+        genes.append(Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf))
+    logging.info(f"Initialized {len(genes)} Gene objects.")
+    return genes
+
+
+def estimate_taus_for_each_interaction(interactions):
+    logging.info("Running EM to estimate pi for pairwise interactions...")
+    for interaction in interactions:
+        interaction.estimate_tau_with_em_from_scratch()
+        logging.info(
+            f"Estimated tau_00={interaction.tau_00}, tau_01={interaction.tau_01}, tau_10={interaction.tau_10}, tau_11={interaction.tau_11} for interaction {interaction.name}"
+        )
+    logging.info("Finished estimating tau for pairwise interactions.")
+
+
+def initialize_interaction_objects(k, genes):
+    interactions = []
+    top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
+    for gene_a, gene_b in combinations(top_genes, 2):
+        interactions.append(Interaction(gene_a, gene_b))
+    logging.info(f"Initialized {len(interactions)} Interaction objects.")
+    return interactions
 
 
 # ---------------------------------------------------------------------------- #
@@ -118,48 +182,17 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
 
     if k <= 0:
-        logging.error("k must be a positive integer")
         raise ValueError("k must be a positive integer")
 
-    genes = []
-    for gene_name in cnt_df.columns:
-        counts = cnt_df[gene_name].values
-        bmr_pmf_arr = bmr_dict.get(gene_name, None)
-        if bmr_pmf_arr is None:
-            raise ValueError(f"No BMR PMF found for gene {gene_name}")
-        bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        genes.append(Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf))
-    logging.info(f"Initialized {len(genes)} Gene objects.")
-
-    logging.info("Running EM to estimate pi for single genes...")
-    for gene in genes:
-        gene.estimate_pi_with_em_from_scratch()
-        logging.info(f"Estimated pi of {gene.pi} for gene {gene.name}")
-    logging.info("Finished estimating pi for single genes.")
-
-    interactions = []
-    top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
-    for gene_a, gene_b in combinations(top_genes, 2):
-        interactions.append(Interaction(gene_a, gene_b))
-    logging.info(f"Initialized {len(interactions)} Interaction objects.")
-
-    logging.info("Running EM to estimate pi for pairwise interactions...")
-    for interaction in interactions:
-        interaction.estimate_tau_with_em_from_scratch()
-        logging.info(
-            f"Estimated tau_00={interaction.tau_00}, tau_01={interaction.tau_01}, tau_10={interaction.tau_10}, tau_11={interaction.tau_11} for interaction {interaction.name}"
-        )
-    logging.info("Finished estimating tau for pairwise interactions.")
-
-    logging.info("Creating single-gene results table...")
+    genes = initialize_gene_objects(cnt_df, bmr_dict)
+    estimate_pi_for_each_gene(genes, f"{out}/single_gene_results.csv")
+    interactions = initialize_interaction_objects(k, genes)
+    estimate_taus_for_each_interaction(interactions)
     create_single_gene_table(genes, f"{out}/single_gene_results.csv")
-    logging.info("Finished creating single-gene results table.")
 
     # TODO: Check log likelihood plots for pairwise interactions
     # ? Are the plots convex; do we need multiple EM initializations
-    logging.info("Creating pairwise interaction results table...")
     create_pairwise_results_table(
         interactions, f"{out}/pairwise_interaction_results.csv"
     )
-    logging.info("Finished creating pairwise interaction results table.")
     # TODO: Add methods to get set of co-occurring samples
