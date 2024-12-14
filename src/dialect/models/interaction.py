@@ -59,6 +59,36 @@ class Interaction:
         )
 
     # ---------------------------------------------------------------------------- #
+    #                                UTILITY METHODS                               #
+    # ---------------------------------------------------------------------------- #
+
+    def compute_contingency_table(self):
+        """
+        Compute the contingency table (confusion matrix) for binarized counts
+        between gene_a and gene_b.
+
+        :return: A 2x2 numpy array representing the contingency table.
+        """
+        gene_a_mutations = (self.gene_a.counts > 0).astype(int)
+        gene_b_mutations = (self.gene_b.counts > 0).astype(int)
+        cm = confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[0, 1])
+        return cm
+
+    def get_set_of_cooccurring_samples(self):
+        """
+        Get the list of samples in which both genes have at least one mutation.
+
+        :return: (list) List of sample indices where both genes have at least one mutation.
+        """
+        sample_names = self.gene_a.samples
+        cooccurring_samples = [
+            sample_names[i]
+            for i in range(len(sample_names))
+            if self.gene_a.counts[i] > 0 and self.gene_b.counts[i] > 0
+        ]
+        return sorted(cooccurring_samples)
+
+    # ---------------------------------------------------------------------------- #
     #                           DATA VALIDATION & LOGGING                          #
     # ---------------------------------------------------------------------------- #
 
@@ -115,18 +145,6 @@ class Interaction:
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
     # TODO (LOW PRIORITY): Add additional metrics (KL, MI, etc.)
-
-    def compute_contingency_table(self):
-        """
-        Compute the contingency table (confusion matrix) for binarized counts
-        between gene_a and gene_b.
-
-        :return: A 2x2 numpy array representing the contingency table.
-        """
-        gene_a_mutations = (self.gene_a.counts > 0).astype(int)
-        gene_b_mutations = (self.gene_b.counts > 0).astype(int)
-        cm = confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[0, 1])
-        return cm
 
     def compute_joint_probability(self, tau, u, v):
         joint_probability = np.array(
@@ -195,7 +213,8 @@ class Interaction:
         :raises ValueError: If `bmr_pmf` or `counts` are not defined for either gene, or if `tau` is invalid.
         """
 
-        logging.info(f"Computing log likelihood for {self.name}. Taus: {taus}")
+        # TODO: add verbose option for logging
+        # logging.info(f"Computing log likelihood for {self.name}. Taus: {taus}")
 
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_taus_are_valid(taus)
@@ -511,6 +530,7 @@ class Interaction:
             tau_10,
             tau_11,
         )
+        logging.info(" EM algorithm converged after {} iterations.".format(it + 1))
         logging.info(
             f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
         )
