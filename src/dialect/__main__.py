@@ -17,6 +17,7 @@ from dialect.utils.identify import (
 configure_logging()
 
 
+# TODO: add option for verbose logging
 def main():
     logging.info("Running DIALECT CLI")
 
