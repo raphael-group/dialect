@@ -86,19 +86,23 @@ if __name__ == "__main__":
             interaction.tau_10 + interaction.tau_11 for interaction in interactions
         ]
 
-        plt.figure(figsize=(8, 6))
+        # Adjust font sizes and figure dimensions
+        plt.figure(figsize=(10, 8))  # Larger figure size for better visibility
         plt.hist(marginals, bins=30, alpha=0.7, label=r"$\tau_{10} + \tau_{11}$")
         plt.axvline(
             pi_value, color="red", linestyle="dashed", linewidth=2, label=r"$\pi$"
         )
-        plt.title(
-            f"Marginal Distribution for Top 1000 Interactions with {main_gene_name}"
-        )
-        plt.xlabel(r"Marginal Value ($\tau_{10} + \tau_{11}$)")
-        plt.ylabel("Frequency")
+        plt.xlabel(
+            r"Marginal Value ($\tau_{10} + \tau_{11}$)", fontsize=24
+        )  # Larger font size
+        plt.ylabel("Frequency", fontsize=24)  # Larger font size
         plt.ylim(0, 1000)  # Consistent Y-axis scale
-        plt.legend()
+        plt.xticks(fontsize=20)  # Larger x-tick labels
+        plt.yticks(fontsize=20)  # Larger y-tick labels
+        plt.legend(fontsize=20)  # Larger legend text
+        plt.tight_layout()  # Adjust layout to prevent clipping
 
+        # Save the plot
         plot_filename = os.path.join(
             output_folder, f"{main_gene_name}_marginal_distribution_plot.png"
         )
