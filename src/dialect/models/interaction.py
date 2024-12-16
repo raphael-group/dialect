@@ -6,6 +6,7 @@ from sklearn.metrics import confusion_matrix
 from dialect.models.gene import Gene
 
 
+# TODO: add method to compute fisher's exact test for contingency table
 class Interaction:
     def __init__(self, gene_a, gene_b):
         """
@@ -298,7 +299,8 @@ class Interaction:
         if tau_01 * tau_10 == 0 or tau_00 * tau_11 == 0:
             logging.warning(
                 f"Zero encountered in odds ratio computation for interaction {self.name}. "
-                f"tau_01={tau_01}, tau_10={tau_10}, tau_00={tau_00}, tau_11={tau_11}"
+                f"tau_01={tau_01}, tau_10={tau_10}, tau_00={tau_00}, tau_11={tau_11}. "
+                f"Returning None for log odds ratio."
             )
             return None  # Return None when numerator or denominator is zero
 
