@@ -1,7 +1,6 @@
 import unittest
 import numpy as np
-from scipy.stats import rv_discrete
-from dialect.models.gene import Gene
+from dialect.utils.simulate import simulate_single_gene
 
 
 class TestGene(unittest.TestCase):
@@ -10,29 +9,14 @@ class TestGene(unittest.TestCase):
         Set up a realistic test case for the Gene class with both passenger and driver mutations.
         """
         self.pi = 0.2
-        self.num_samples = 500
-
-        mutation_counts = np.arange(0, 6)
-        probabilities = np.array([0.8, 0.1, 0.05, 0.03, 0.02, 0])
-        self.bmr_pmf = {k: v for k, v in zip(mutation_counts, probabilities)}
-
-        # simulate passengers
-        bmr_dist = rv_discrete(values=(mutation_counts, probabilities))
-        passenger_mutations = bmr_dist.rvs(size=self.num_samples)
-
-        # simulate drivers
-        driver_mutations = np.random.binomial(1, self.pi, size=self.num_samples)
-
-        # initialize gene object
-        self.counts = passenger_mutations + driver_mutations
-        self.name = "TestGene"
-        self.gene = Gene(self.name, self.counts, self.bmr_pmf)
+        self.num_samples = 1000
+        self.bmr_pmf = {0: 0.8, 1: 0.1, 2: 0.05, 3: 0.03, 4: 0.02}
+        self.gene = simulate_single_gene(self.bmr_pmf, self.num_samples, self.pi)
 
     def test_setup_is_realistic(self):
         """
         Test that the setup is realistic and correctly initialized.
         """
-        self.assertEqual(self.gene.name, self.name)
         self.assertEqual(len(self.gene.counts), self.num_samples)
         np.testing.assert_almost_equal(
             sum(self.bmr_pmf.values()),
@@ -54,7 +38,7 @@ class TestGene(unittest.TestCase):
         Test compute_likelihood_ratio for a realistic case.
         """
         self.gene.pi = self.pi
-        likelihood_ratio = self.gene.compute_likelihood_ratio()
+        likelihood_ratio = self.gene.compute_likelihood_ratio(self.gene.pi)
         self.assertIsInstance(likelihood_ratio, float)
         self.assertGreaterEqual(likelihood_ratio, 0.0)
 
@@ -63,7 +47,7 @@ class TestGene(unittest.TestCase):
         Test compute_log_odds_ratio for a realistic case.
         """
         self.gene.pi = self.pi
-        log_odds_ratio = self.gene.compute_log_odds_ratio()
+        log_odds_ratio = self.gene.compute_log_odds_ratio(self.gene.pi)
         self.assertIsInstance(log_odds_ratio, float)
 
     def test_estimate_pi_with_optimization(self):
@@ -74,6 +58,12 @@ class TestGene(unittest.TestCase):
         self.assertIsInstance(self.gene.pi, float)
         self.assertGreaterEqual(self.gene.pi, 0.0)
         self.assertLessEqual(self.gene.pi, 1.0)
+        np.testing.assert_almost_equal(
+            self.gene.pi,
+            self.pi,
+            decimal=1,
+            err_msg="Estimated pi does not match simulated pi within tolerance",
+        )
 
     def test_estimate_pi_with_em(self):
         """
@@ -83,8 +73,29 @@ class TestGene(unittest.TestCase):
         self.assertIsInstance(self.gene.pi, float)
         self.assertGreaterEqual(self.gene.pi, 0.0)
         self.assertLessEqual(self.gene.pi, 1.0)
+        np.testing.assert_almost_equal(
+            self.gene.pi,
+            self.pi,
+            decimal=1,
+            err_msg="Estimated pi does not match simulated pi within tolerance",
+        )
+
+    def test_non_normalized_bmr_pmf(self):
+        """
+        Test behavior when BMR PMF does not sum to 1.
+        """
+        non_normalized_bmr_pmf = {0: 0.8, 1: 0.1, 2: 0.05, 3: 0.03, 4: 0.03}
+        with self.assertRaises(ValueError):
+            simulate_single_gene(non_normalized_bmr_pmf, self.num_samples, self.pi)
+
+    def test_invalid_pi_value(self):
+        """
+        Test behavior when pi is outside the allowed range.
+        """
+        with self.assertRaises(ValueError):
+            simulate_single_gene(self.bmr_pmf, self.num_samples, -0.1)
+        with self.assertRaises(ValueError):
+            simulate_single_gene(self.bmr_pmf, self.num_samples, 1.1)
 
     # TODO Add additional edge cases and tests, including:
-    # - TODO: test for non-normalized bmr_pmf
-    # - TODO: tests for values outside of allowed bounds for all methods
     # - TODO: tests for missing values in bmr_pmf
