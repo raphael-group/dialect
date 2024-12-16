@@ -1,5 +1,4 @@
 import unittest
-import numpy as np
 from dialect.utils.simulate import simulate_single_gene
 
 
@@ -18,12 +17,7 @@ class TestGene(unittest.TestCase):
         Test that the setup is realistic and correctly initialized.
         """
         self.assertEqual(len(self.gene.counts), self.num_samples)
-        np.testing.assert_almost_equal(
-            sum(self.bmr_pmf.values()),
-            1.0,
-            decimal=5,
-            err_msg="BMR PMF probabilities do not sum to 1",
-        )
+        self.assertAlmostEqual(sum(self.bmr_pmf.values()), 1.0, places=5)
 
     def test_compute_log_likelihood(self):
         """
@@ -58,12 +52,7 @@ class TestGene(unittest.TestCase):
         self.assertIsInstance(self.gene.pi, float)
         self.assertGreaterEqual(self.gene.pi, 0.0)
         self.assertLessEqual(self.gene.pi, 1.0)
-        np.testing.assert_almost_equal(
-            self.gene.pi,
-            self.pi,
-            decimal=1,
-            err_msg="Estimated pi does not match simulated pi within tolerance",
-        )
+        self.assertAlmostEqual(self.gene.pi, self.pi, places=1)
 
     def test_estimate_pi_with_em(self):
         """
@@ -73,12 +62,7 @@ class TestGene(unittest.TestCase):
         self.assertIsInstance(self.gene.pi, float)
         self.assertGreaterEqual(self.gene.pi, 0.0)
         self.assertLessEqual(self.gene.pi, 1.0)
-        np.testing.assert_almost_equal(
-            self.gene.pi,
-            self.pi,
-            decimal=1,
-            err_msg="Estimated pi does not match simulated pi within tolerance",
-        )
+        self.assertAlmostEqual(self.gene.pi, self.pi, places=1)
 
     def test_non_normalized_bmr_pmf(self):
         """
