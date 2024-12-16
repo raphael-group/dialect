@@ -1,6 +1,8 @@
 import logging
 import numpy as np
+
 from scipy.optimize import minimize
+from scipy.stats import fisher_exact
 from sklearn.metrics import confusion_matrix
 
 from dialect.models.gene import Gene
@@ -88,6 +90,30 @@ class Interaction:
             if self.gene_a.counts[i] > 0 and self.gene_b.counts[i] > 0
         ]
         return sorted(cooccurring_samples)
+
+    def compute_fisher_pvalues(self):
+        """
+        Compute Fisher's exact test p-values for mutual exclusivity and co-occurrence.
+
+        The contingency table is derived using the `compute_contingency_table` method.
+        - Mutual Exclusivity: Tests whether the two genes are mutually exclusive (alternative="greater").
+        - Co-Occurrence: Tests whether the two genes co-occur (alternative="less").
+
+        :return: (tuple) A tuple containing (me_pval, co_pval):
+            - me_pval: Fisher's p-value for mutual exclusivity.
+            - co_pval: Fisher's p-value for co-occurrence.
+        """
+        logging.info(
+            f"Computing Fisher's exact test p-values for interaction {self.name}."
+        )
+        cross_tab = self.compute_contingency_table()
+        _, me_pval = fisher_exact(cross_tab, alternative="greater")
+        _, co_pval = fisher_exact(cross_tab, alternative="less")
+        logging.info(
+            f"Computed Fisher's exact test p-values of ME: {me_pval} and CO: {co_pval} for interaction {self.name}."
+        )
+
+        return me_pval, co_pval
 
     # ---------------------------------------------------------------------------- #
     #                           DATA VALIDATION & LOGGING                          #
