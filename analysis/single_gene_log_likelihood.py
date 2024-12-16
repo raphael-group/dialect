@@ -14,6 +14,7 @@ from dialect.utils.identify import *
 from dialect.models.gene import Gene
 
 
+# TODO: extract and refactor user interaction methods
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
