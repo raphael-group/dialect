@@ -16,6 +16,7 @@ def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     check_file_exists(bmr_pmfs)
 
 
+# TODO: move to universal helper functions file and use across analysis modules
 def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     cnt_df = pd.read_csv(cnt_mtx, index_col=0)
     bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
@@ -132,6 +133,7 @@ def estimate_pi_for_each_gene(genes, single_gene_output_file=None):
     logging.info("Finished estimating pi for single genes.")
 
 
+# TODO: Move to universal helper functions file and use across analysis modules
 def initialize_gene_objects(cnt_df, bmr_dict):
     genes = []
     for gene_name in cnt_df.columns:
@@ -140,7 +142,14 @@ def initialize_gene_objects(cnt_df, bmr_dict):
         if bmr_pmf_arr is None:
             raise ValueError(f"No BMR PMF found for gene {gene_name}")
         bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        genes.append(Gene(name=gene_name, counts=counts, bmr_pmf=bmr_pmf))
+        genes.append(
+            Gene(
+                name=gene_name,
+                samples=cnt_df.index,
+                counts=counts,
+                bmr_pmf=bmr_pmf,
+            )
+        )
     logging.info(f"Initialized {len(genes)} Gene objects.")
     return genes
 
@@ -155,6 +164,7 @@ def estimate_taus_for_each_interaction(interactions):
     logging.info("Finished estimating tau for pairwise interactions.")
 
 
+# TODO: Move to universal helper functions file and use across analysis modules
 def initialize_interaction_objects(k, genes):
     interactions = []
     top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
@@ -195,4 +205,4 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     create_pairwise_results_table(
         interactions, f"{out}/pairwise_interaction_results.csv"
     )
-    # TODO: Add methods to get set of co-occurring samples
+    # TODO: set up  and run method on CS server slurm TCGA all data
