@@ -13,6 +13,7 @@ from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
 
+# TODO: extract and refactor user interaction methods
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
