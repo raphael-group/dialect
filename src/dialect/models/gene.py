@@ -79,6 +79,7 @@ class Gene:
                 "BMR PMF does not contain all possible counts as keys in categorical distribution."
             )
 
+    # TODO: move to central utility file
     def verify_pi_is_valid(self, pi):
         """
         Validate that the estimated pi value is defined and within the valid range [0, 1].
