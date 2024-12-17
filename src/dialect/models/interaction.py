@@ -392,7 +392,7 @@ class Interaction:
 
         .. math::
 
-            \\rho = \\frac{\\tau_{01} \\cdot \\tau_{10} - \\tau_{11} \\cdot \\tau_{00}}
+            \\rho = \\frac{\\tau_{11} \\cdot \\tau_{00} - \\tau_{01} \\cdot \\tau_{10}}
             {\\sqrt{\\tau_{0*} \\cdot \\tau_{1*} \\cdot \\tau_{*0} \\cdot \\tau_{*1}}}
 
         where:
@@ -423,7 +423,7 @@ class Interaction:
             )
             return None
 
-        rho = (self.tau_01 * self.tau_10 - self.tau_11 * self.tau_00) / (
+        rho = (self.tau_11 * self.tau_00 - self.tau_01 * self.tau_10) / (
             np.sqrt(tau_0X * tau_1X * tau_X0 * tau_X1)
         )
         logging.info(f"Computed rho for interaction {self.name}: {rho}")
