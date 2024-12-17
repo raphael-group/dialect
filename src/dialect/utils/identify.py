@@ -154,7 +154,7 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     estimate_pi_for_each_gene(genes.values(), f"{out}/single_gene_results.csv")
     interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
-    create_single_gene_table(genes, f"{out}/single_gene_results.csv")
+    create_single_gene_table(genes.values(), f"{out}/single_gene_results.csv")
 
     # TODO: Check log likelihood plots for pairwise interactions
     # ? Are the plots convex; do we need multiple EM initializations
