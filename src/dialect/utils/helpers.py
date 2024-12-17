@@ -29,20 +29,15 @@ def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
 
 
 def initialize_gene_objects(cnt_df, bmr_dict):
-    genes = []
+    genes = {}
     for gene_name in cnt_df.columns:
         counts = cnt_df[gene_name].values
         bmr_pmf_arr = bmr_dict.get(gene_name, None)
         if bmr_pmf_arr is None:
             raise ValueError(f"No BMR PMF found for gene {gene_name}")
         bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        genes.append(
-            Gene(
-                name=gene_name,
-                samples=cnt_df.index,
-                counts=counts,
-                bmr_pmf=bmr_pmf,
-            )
+        genes[gene_name] = Gene(
+            name=gene_name, samples=cnt_df.index, counts=counts, bmr_pmf=bmr_pmf
         )
     logging.info(f"Initialized {len(genes)} Gene objects.")
     return genes

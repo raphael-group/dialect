@@ -151,8 +151,8 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
         raise ValueError("k must be a positive integer")
 
     genes = initialize_gene_objects(cnt_df, bmr_dict)
-    estimate_pi_for_each_gene(genes, f"{out}/single_gene_results.csv")
-    interactions = initialize_interaction_objects(k, genes)
+    estimate_pi_for_each_gene(genes.values(), f"{out}/single_gene_results.csv")
+    interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
     create_single_gene_table(genes, f"{out}/single_gene_results.csv")
 
