@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from itertools import combinations
+from dialect.utils.helpers import *
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
@@ -9,15 +10,6 @@ from dialect.models.interaction import Interaction
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
-# TODO: move to universal function and use across simulate/identify/generate
-def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
-    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
-    bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
-    bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
-    bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
-    return cnt_df, bmr_dict
-
-
 def simulate_single_gene_passengers(bmr_pmf, nsamples):
     """
     Simulate passenger mutation counts for a single gene, ensuring that adding a driver mutation

@@ -16,15 +16,6 @@ def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     check_file_exists(bmr_pmfs)
 
 
-# TODO: move to universal helper functions file and use across analysis modules
-def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
-    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
-    bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
-    bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
-    bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
-    return cnt_df, bmr_dict
-
-
 def create_single_gene_table(genes, output_path):
     """
     Create a table of single-gene test results and save it to a CSV file.
