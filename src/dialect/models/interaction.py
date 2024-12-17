@@ -8,7 +8,6 @@ from sklearn.metrics import confusion_matrix
 from dialect.models.gene import Gene
 
 
-# TODO: add method to compute fisher's exact test for contingency table
 class Interaction:
     def __init__(self, gene_a, gene_b):
         """
@@ -436,7 +435,8 @@ class Interaction:
     def estimate_tau_with_optimization_using_scipy(
         self, tau_init=[0.25, 0.25, 0.25, 0.25], alpha=1e-13
     ):
-        # TODO: tau parameters fail verification due to optimization scheme. try different optimization scheme
+        # ? tau parameters fail verification due to optimization scheme since outside of bounds
+        # TODO: investigate and try different optimization scheme
         """
         Estimate the tau parameters using the SLSQP optimization scheme.
 
