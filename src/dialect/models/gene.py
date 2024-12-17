@@ -227,7 +227,7 @@ class Gene:
         self.pi = result.x[0]
         logging.info(f"Estimated pi for gene {self.name}: {self.pi}")
 
-    def estimate_pi_with_em_from_scratch(self, max_iter=1000, tol=1e-6, pi_init=0.5):
+    def estimate_pi_with_em_from_scratch(self, max_iter=1000, tol=1e-3, pi_init=0.5):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
 

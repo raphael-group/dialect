@@ -472,7 +472,7 @@ class Interaction:
         )
 
     def estimate_tau_with_em_from_scratch(
-        self, max_iter=1000, tol=1e-6, tau_init=[0.25, 0.25, 0.25, 0.25]
+        self, max_iter=1000, tol=1e-3, tau_init=[0.25, 0.25, 0.25, 0.25]
     ):
         """
         Estimate the tau parameters for interaction using the Expectation-Maximization (EM) algorithm.
