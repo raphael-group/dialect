@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
         # Simulation settings
         nsamples = len(cnt_df)
-        iterations = 1000
+        iterations = 100
         threshold = 1e-6
 
         # Metrics for analysis
