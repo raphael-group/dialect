@@ -21,7 +21,7 @@ def estimate_pi_for_single_gene(gene):
     return gene.pi
 
 
-def initialize_interaction_objects(main_gene, top_genes):
+def initialize_interactions_with_gene(main_gene, top_genes):
     interactions = []
     for gene in top_genes:
         if gene.name != main_gene.name:
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     cnt_mtx_path = get_file_path("count matrix file")
     bmr_pmfs_path = get_file_path("BMR PMFs file")
     cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_path, bmr_pmfs_path)
-    genes = initialize_gene_objects(cnt_df, bmr_dict)
+    genes = list(initialize_gene_objects(cnt_df, bmr_dict).values())
     genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)
     top_genes = genes[:1000]
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
             continue
 
         pi_value = estimate_pi_for_single_gene(main_gene)
-        interactions = initialize_interaction_objects(main_gene, top_genes)
+        interactions = initialize_interactions_with_gene(main_gene, top_genes)
         estimate_taus_for_interactions(interactions)
 
         marginals = [
