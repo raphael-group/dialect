@@ -65,6 +65,7 @@ def create_pairwise_results_table(interactions, output_path):
         log_odds_ratio = interaction.compute_log_odds_ratio(taus)
         likelihood_ratio = interaction.compute_likelihood_ratio(taus)
         cm = interaction.compute_contingency_table()
+        fisher_me_pval, fisher_co_pval = interaction.compute_fisher_pvalues()
 
         results.append(
             {
@@ -83,6 +84,8 @@ def create_pairwise_results_table(interactions, output_path):
                 "Rho": rho,
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,
+                "Fisher's ME P-Val": fisher_me_pval,
+                "Fisher's CO P-Val": fisher_co_pval,
             }
         )
 
