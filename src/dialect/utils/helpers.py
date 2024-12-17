@@ -3,6 +3,10 @@ import logging
 import numpy as np
 import pandas as pd
 
+from itertools import combinations
+from dialect.models.gene import Gene
+from dialect.models.interaction import Interaction
+
 
 def check_file_exists(fn):
     """
@@ -22,3 +26,32 @@ def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
     bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
     return cnt_df, bmr_dict
+
+
+def initialize_gene_objects(cnt_df, bmr_dict):
+    genes = []
+    for gene_name in cnt_df.columns:
+        counts = cnt_df[gene_name].values
+        bmr_pmf_arr = bmr_dict.get(gene_name, None)
+        if bmr_pmf_arr is None:
+            raise ValueError(f"No BMR PMF found for gene {gene_name}")
+        bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
+        genes.append(
+            Gene(
+                name=gene_name,
+                samples=cnt_df.index,
+                counts=counts,
+                bmr_pmf=bmr_pmf,
+            )
+        )
+    logging.info(f"Initialized {len(genes)} Gene objects.")
+    return genes
+
+
+def initialize_interaction_objects(k, genes):
+    interactions = []
+    top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
+    for gene_a, gene_b in combinations(top_genes, 2):
+        interactions.append(Interaction(gene_a, gene_b))
+    logging.info(f"Initialized {len(interactions)} Interaction objects.")
+    return interactions

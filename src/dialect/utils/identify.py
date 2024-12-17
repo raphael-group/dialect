@@ -1,10 +1,7 @@
 import logging
 import pandas as pd
 
-from itertools import combinations
 from dialect.utils.helpers import *
-from dialect.models.gene import Gene
-from dialect.models.interaction import Interaction
 
 
 # ---------------------------------------------------------------------------- #
@@ -123,27 +120,6 @@ def estimate_pi_for_each_gene(genes, single_gene_output_file=None):
     logging.info("Finished estimating pi for single genes.")
 
 
-# TODO: Move to universal helper functions file and use across analysis modules
-def initialize_gene_objects(cnt_df, bmr_dict):
-    genes = []
-    for gene_name in cnt_df.columns:
-        counts = cnt_df[gene_name].values
-        bmr_pmf_arr = bmr_dict.get(gene_name, None)
-        if bmr_pmf_arr is None:
-            raise ValueError(f"No BMR PMF found for gene {gene_name}")
-        bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
-        genes.append(
-            Gene(
-                name=gene_name,
-                samples=cnt_df.index,
-                counts=counts,
-                bmr_pmf=bmr_pmf,
-            )
-        )
-    logging.info(f"Initialized {len(genes)} Gene objects.")
-    return genes
-
-
 def estimate_taus_for_each_interaction(interactions):
     logging.info("Running EM to estimate pi for pairwise interactions...")
     for interaction in interactions:
@@ -152,16 +128,6 @@ def estimate_taus_for_each_interaction(interactions):
             f"Estimated tau_00={interaction.tau_00}, tau_01={interaction.tau_01}, tau_10={interaction.tau_10}, tau_11={interaction.tau_11} for interaction {interaction.name}"
         )
     logging.info("Finished estimating tau for pairwise interactions.")
-
-
-# TODO: Move to universal helper functions file and use across analysis modules
-def initialize_interaction_objects(k, genes):
-    interactions = []
-    top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
-    for gene_a, gene_b in combinations(top_genes, 2):
-        interactions.append(Interaction(gene_a, gene_b))
-    logging.info(f"Initialized {len(interactions)} Interaction objects.")
-    return interactions
 
 
 # ---------------------------------------------------------------------------- #
