@@ -10,30 +10,14 @@ the recovery error and misestimation rates.
 # ---------------------------------------------------------------------------- #
 import logging
 import numpy as np
+from dialect.utils.helpers import *
 from dialect.utils.simulate import simulate_interaction_pair
-from dialect.models.gene import Gene
-from dialect.models.interaction import Interaction
 from dialect.utils.identify import load_cnt_mtx_and_bmr_pmfs
 
 
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
-def initialize_gene_objects(cnt_df, bmr_dict):
-    """
-    Create a dictionary mapping gene names to Gene objects.
-    """
-    gene_objects = {}
-    for gene_name in cnt_df.columns:
-        counts = cnt_df[gene_name].values
-        bmr_pmf = {i: bmr_dict[gene_name][i] for i in range(len(bmr_dict[gene_name]))}
-        gene_objects[gene_name] = Gene(
-            name=gene_name, samples=cnt_df.index, counts=counts, bmr_pmf=bmr_pmf
-        )
-    logging.info(f"Initialized {len(gene_objects)} Gene objects.")
-    return gene_objects
-
-
 def calculate_tau_recovery_error(true_taus, estimated_taus):
     """
     Calculate and return the tau recovery error.
