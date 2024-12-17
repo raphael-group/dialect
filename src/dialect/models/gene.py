@@ -100,7 +100,6 @@ class Gene:
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
-    # TODO: remove surplus logging statements due to EM runs
     def compute_log_likelihood(self, pi):
         """
         Compute the complete data log-likelihood for the gene given the estimated \( \pi \).
@@ -124,6 +123,7 @@ class Gene:
         **Raises**:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
+        # TODO: add verbose option for logging
         # logging.info(
         #     f"Computing log likelihood for gene {self.name}. Pi: {pi:.3e}. "
         #     f"BMR PMF: {{ {', '.join(f'{k}: {v:.3e}' for k, v in itertools.islice(self.bmr_pmf.items(), 3))} }}"
