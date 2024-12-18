@@ -12,7 +12,7 @@ def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     check_file_exists(bmr_pmfs)
 
 
-def create_single_gene_table(genes, output_path):
+def create_single_gene_results(genes, output_path):
     """
     Create a table of single-gene test results and save it to a CSV file.
 
@@ -45,7 +45,7 @@ def create_single_gene_table(genes, output_path):
     logging.info("Finished creating single-gene results table.")
 
 
-def create_pairwise_results_table(interactions, output_path):
+def create_pairwise_results(interactions, output_path):
     """
     Create a table of pairwise interaction test results and save it to a CSV file.
 
@@ -157,11 +157,8 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     estimate_pi_for_each_gene(genes.values(), f"{out}/single_gene_results.csv")
     interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
-    create_single_gene_table(genes.values(), f"{out}/single_gene_results.csv")
+    create_single_gene_results(genes.values(), f"{out}/single_gene_results.csv")
 
     # TODO: Check log likelihood plots for pairwise interactions
     # ? Are the plots convex; do we need multiple EM initializations
-    create_pairwise_results_table(
-        interactions, f"{out}/pairwise_interaction_results.csv"
-    )
-    # TODO: set up  and run method on CS server slurm TCGA all data
+    create_pairwise_results(interactions, f"{out}/pairwise_interaction_results.csv")
