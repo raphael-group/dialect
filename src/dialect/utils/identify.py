@@ -153,12 +153,34 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     if k <= 0:
         raise ValueError("k must be a positive integer")
 
+    single_gene_fout = f"{out}/single_gene_results.csv"
+    pairwise_interaction_fout = f"{out}/pairwise_interaction_results.csv"
+
     genes = initialize_gene_objects(cnt_df, bmr_dict)
-    estimate_pi_for_each_gene(genes.values(), f"{out}/single_gene_results.csv")
+    estimate_pi_for_each_gene(genes.values(), single_gene_fout)
     interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
-    create_single_gene_results(genes.values(), f"{out}/single_gene_results.csv")
 
-    # TODO: Check log likelihood plots for pairwise interactions
-    # ? Are the plots convex; do we need multiple EM initializations
-    create_pairwise_results(interactions, f"{out}/pairwise_interaction_results.csv")
+    # TODO: save CBaSE single gene results to output
+    create_single_gene_results(genes.values(), single_gene_fout)
+
+    # TODO: Implement DISCOVER method
+    # - create discover conda environment
+    # - add flag to run discover in main and pass to this function
+    # - write discover.py script using old run_discover.py script for reference
+    # - activate discover conda environment and run discover w/ subprocess pipe
+    # - modify interaction object to include instance variable for fisher's ME/CO p + q vals (AS A DICTIONARY? that you add into)
+    # - modify interaction object to include instance variable for discover ME/CO p + q vals
+    # - modify script to save pairwise results to save columns for all additional results (loop through dictionary or check default fields)
+    # (Should we save additional instance variable fields for fp_me, fp_co, dq_me, dq_co or just one dictionary object for additional results)
+    # (I really think having a dictionary object will be much cleaner)
+    # Is there a cleaner way to obtain fisher's q-values ex-post-facto on all interactions?
+    # TODO: update the way we run Fisher's
+    # - currently fisher's is a function for an interaction, but that doesn't allow us to easily get q-values
+    # - maybe I can create a function that runs fisher's given the matrix on all interaction pairs and computes q-values as well?
+    # - otherwise we will need to do some finnicky way of applying the correction to the column afterwards....
+    # - at the end of the day, fisher's is a separate method so we should treat it the same way we treat discover and make a script for it
+    create_pairwise_results(interactions, pairwise_interaction_fout)
+
+    # TODO: Implement method to run WeSME/WeSCO and save results
+    # TODO: Implement other methods (SELECT, MEGSA, etc.) and save results
