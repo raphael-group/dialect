@@ -46,6 +46,12 @@ def build_argument_parser():
         type=int,
         help="Number of genes to consider (default: 100 genes with highest mutation count)",
     )
+    identify_parser.add_argument(
+        "-cb",
+        "--cbase_qvals",
+        default=None,
+        help="Path to the cbase q-value results file",
+    )
 
     # TODO: create subparser to run comparison methods
     # TODO: create subparser to run simulations

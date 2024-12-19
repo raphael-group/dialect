@@ -136,7 +136,7 @@ def estimate_taus_for_each_interaction(interactions):
 # ---------------------------------------------------------------------------- #
 #                                 Main Function                                #
 # ---------------------------------------------------------------------------- #
-def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
+def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_qvals):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
     ! Work in Progress
@@ -162,6 +162,7 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k):
     estimate_taus_for_each_interaction(interactions)
 
     # TODO: save CBaSE single gene results to output
+    # save_cbase_qvals_to_gene_objects
     create_single_gene_results(genes.values(), single_gene_fout)
 
     # TODO: Implement DISCOVER method

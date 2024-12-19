@@ -1,5 +1,6 @@
 import os
 import logging
+import pandas as pd
 from dialect.utils.logger import configure_logging
 
 from dialect.utils.argument_parser import (
@@ -33,10 +34,18 @@ def main():
 
     elif args.command == "identify":
         os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
+        # TODO: consider moving below code to read cbase qvals elsewhere
+        cbase_qvals = None
+        if not args.cbase_qvals is None:
+            logging.info(f"Reading CBaSE q-values file: {args.cbase_qvals}")
+            cbase_qvals = pd.read_csv(args.cbase_qvals, sep="\t", skiprows=1)
         identify_pairwise_interactions(
-            cnt_mtx=args.cnt, bmr_pmfs=args.bmr, out=args.out, k=args.top_k
+            cnt_mtx=args.cnt,
+            bmr_pmfs=args.bmr,
+            out=args.out,
+            k=args.top_k,
+            cbase_results=cbase_qvals,
         )
-        pass
 
 
 if __name__ == "__main__":
