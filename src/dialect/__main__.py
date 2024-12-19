@@ -44,7 +44,7 @@ def main():
             bmr_pmfs=args.bmr,
             out=args.out,
             k=args.top_k,
-            cbase_results=cbase_stats,
+            cbase_stats=cbase_stats,
         )
 
 

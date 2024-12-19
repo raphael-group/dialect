@@ -12,7 +12,48 @@ def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
     check_file_exists(bmr_pmfs)
 
 
-def create_single_gene_results(genes, output_path):
+def save_cbase_stats_to_gene_objects(genes, cbase_stats):
+    """
+    Save CBaSE Phi statistics to gene objects by updating their attributes.
+
+    :param genes (dict): A dictionary of gene objects keyed by their names.
+    :param cbase_stats (pd.DataFrame): DataFrame containing CBaSE result statistics.
+    :return (bool): True if successful, False otherwise.
+    """
+    logging.info("Saving CBaSE phi statistic to gene objects...")
+
+    if cbase_stats is None or cbase_stats.empty:
+        logging.info(
+            "No CBaSE result file provided or the file is empty. "
+            "Please provide a valid path to the file with the --cbase_stats flag."
+        )
+        return False
+
+    missense_gene_to_positive_selection_phi = {
+        f"{row['gene']}_M": row["phi_m_pos_or_p(m=0|s)"]
+        for _, row in cbase_stats.iterrows()
+    }
+
+    nonsense_gene_to_positive_selection_phi = {
+        f"{row['gene']}_N": row["phi_k_pos_or_p(k=0|s)"]
+        for _, row in cbase_stats.iterrows()
+    }
+
+    gene_to_positive_selection_phi = {
+        **missense_gene_to_positive_selection_phi,
+        **nonsense_gene_to_positive_selection_phi,
+    }
+
+    for name, gene in genes.items():
+        if name not in gene_to_positive_selection_phi:
+            raise ValueError(f"Gene {name} not found in the CBaSE results file.")
+        gene.cbase_phi = gene_to_positive_selection_phi[name]
+
+    logging.info("Finished saving CBaSE phi statistic to gene objects.")
+    return True
+
+
+def create_single_gene_results(genes, output_path, cbase_phi_vals_present):
     """
     Create a table of single-gene test results and save it to a CSV file.
 
@@ -27,6 +68,7 @@ def create_single_gene_results(genes, output_path):
         observed_mutations = sum(gene.counts)
         expected_mutations = gene.calculate_expected_mutations()
         obs_minus_exp_mutations = observed_mutations - expected_mutations
+        cbase_phi = gene.cbase_phi
 
         results.append(
             {
@@ -37,9 +79,12 @@ def create_single_gene_results(genes, output_path):
                 "Observed Mutations": observed_mutations,
                 "Expected Mutations": expected_mutations,
                 "Obs. - Exp. Mutations": obs_minus_exp_mutations,
+                "CBaSE Pos. Sel. Phi": cbase_phi,
             }
         )
     results_df = pd.DataFrame(results)
+    if not cbase_phi_vals_present:
+        results_df = results_df.drop(columns=["CBaSE Pos. Sel. Phi"])
     results_df.to_csv(output_path, index=False)
     logging.info(f"Single-gene results saved to {output_path}")
     logging.info("Finished creating single-gene results table.")
@@ -136,7 +181,7 @@ def estimate_taus_for_each_interaction(interactions):
 # ---------------------------------------------------------------------------- #
 #                                 Main Function                                #
 # ---------------------------------------------------------------------------- #
-def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_qvals):
+def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_stats):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
     ! Work in Progress
@@ -161,9 +206,8 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_qvals):
     interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
 
-    # TODO: save CBaSE single gene results to output
-    # save_cbase_qvals_to_gene_objects
-    create_single_gene_results(genes.values(), single_gene_fout)
+    cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
+    create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
 
     # TODO: Implement DISCOVER method
     # - create discover conda environment
