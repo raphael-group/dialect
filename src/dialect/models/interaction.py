@@ -27,6 +27,12 @@ class Interaction:
         self.tau_10 = None  # P(D = 1, D' = 0) for genes A and B
         self.tau_11 = None  # P(D = 1, D' = 1) for genes A and B
 
+        # Metrics from alternative methods
+        self.discover_me_qval = None
+        self.discover_co_qval = None
+        self.fishers_me_qval = None
+        self.fishers_co_qval = None
+
     def __str__(self):
         """
         Return a string representation of the Interaction object.
