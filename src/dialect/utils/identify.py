@@ -3,6 +3,7 @@ import pandas as pd
 
 from dialect.utils.helpers import *
 from dialect.utils.discover import run_discover_analysis
+from dialect.utils.fishers import run_fishers_exact_analysis
 
 
 # ---------------------------------------------------------------------------- #
@@ -93,6 +94,7 @@ def create_single_gene_results(genes, output_path, cbase_phi_vals_present):
 
 def create_pairwise_results(
     interactions,
+    fishers_results,
     discover_results,
     output_path,
 ):
@@ -115,7 +117,10 @@ def create_pairwise_results(
         log_odds_ratio = interaction.compute_log_odds_ratio(taus)
         likelihood_ratio = interaction.compute_likelihood_ratio(taus)
         cm = interaction.compute_contingency_table()
-        fisher_me_pval, fisher_co_pval = interaction.compute_fisher_pvalues()
+        fisher_me_qval, fisher_co_qval = None, None
+        if fishers_results:
+            fisher_me_qval = fishers_results[interaction.name]["me_qval"]
+            fisher_co_qval = fishers_results[interaction.name]["co_qval"]
         discover_me_qval, discover_co_qval = None, None
         if discover_results:
             discover_me_qval = discover_results[interaction.name]["me_qval"]
@@ -138,8 +143,8 @@ def create_pairwise_results(
                 "Rho": rho,
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,
-                "Fisher's ME P-Val": fisher_me_pval,
-                "Fisher's CO P-Val": fisher_co_pval,
+                "Fisher's ME Q-Val": fisher_me_qval,
+                "Fisher's CO Q-Val": fisher_co_qval,
                 "DISCOVER ME Q-Val": discover_me_qval,
                 "DISCOVER CO Q-Val": discover_co_qval,
             }
@@ -198,6 +203,7 @@ def identify_pairwise_interactions(
     out,
     k,
     cbase_stats,
+    run_fishers=True,  # TODO add this to the argument parser
     run_discover=True,  # TODO add this to the argument parser
 ):
     """
@@ -227,14 +233,18 @@ def identify_pairwise_interactions(
     cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
     create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
 
-    # TODO: fisher_results = call to fisher's method
+    # TODO loop through fisher results and save as property in interaction object
+    fishers_exact_results = (
+        run_fishers_exact_analysis(interactions) if run_fishers else None
+    )
+    # TODO loop through discover results and save as property in interaction object
     discover_results = (
         run_discover_analysis(cnt_df, top_genes, interactions) if run_discover else None
     )
-    create_pairwise_results(interactions, discover_results, pairwise_interaction_fout)
+    # TODO: remove fishers_exact_results and discover_results from function signature
+    create_pairwise_results(
+        interactions, fishers_exact_results, discover_results, pairwise_interaction_fout
+    )
 
-    # TODO: Refactor Fisher's method
-    # - Make Fisher's a standalone function to compute q-values for all interaction pairs
-    # - Apply correction on p-values to control for false positives
     # TODO: Implement method to run WeSME/WeSCO and save results
     # TODO: Implement other methods (SELECT, MEGSA, etc.) and save results
