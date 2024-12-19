@@ -2,6 +2,7 @@ import logging
 import pandas as pd
 
 from dialect.utils.helpers import *
+from dialect.utils.discover import run_discover_analysis
 
 
 # ---------------------------------------------------------------------------- #
@@ -90,7 +91,11 @@ def create_single_gene_results(genes, output_path, cbase_phi_vals_present):
     logging.info("Finished creating single-gene results table.")
 
 
-def create_pairwise_results(interactions, output_path):
+def create_pairwise_results(
+    interactions,
+    discover_results,
+    output_path,
+):
     """
     Create a table of pairwise interaction test results and save it to a CSV file.
 
@@ -111,6 +116,10 @@ def create_pairwise_results(interactions, output_path):
         likelihood_ratio = interaction.compute_likelihood_ratio(taus)
         cm = interaction.compute_contingency_table()
         fisher_me_pval, fisher_co_pval = interaction.compute_fisher_pvalues()
+        discover_me_qval, discover_co_qval = None, None
+        if discover_results:
+            discover_me_qval = discover_results[interaction.name]["me_qval"]
+            discover_co_qval = discover_results[interaction.name]["co_qval"]
 
         results.append(
             {
@@ -131,6 +140,8 @@ def create_pairwise_results(interactions, output_path):
                 "Likelihood Ratio": likelihood_ratio,
                 "Fisher's ME P-Val": fisher_me_pval,
                 "Fisher's CO P-Val": fisher_co_pval,
+                "DISCOVER ME Q-Val": discover_me_qval,
+                "DISCOVER CO Q-Val": discover_co_qval,
             }
         )
 
@@ -181,7 +192,14 @@ def estimate_taus_for_each_interaction(interactions):
 # ---------------------------------------------------------------------------- #
 #                                 Main Function                                #
 # ---------------------------------------------------------------------------- #
-def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_stats):
+def identify_pairwise_interactions(
+    cnt_mtx,
+    bmr_pmfs,
+    out,
+    k,
+    cbase_stats,
+    run_discover=True,  # TODO add this to the argument parser
+):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
     ! Work in Progress
@@ -203,29 +221,20 @@ def identify_pairwise_interactions(cnt_mtx, bmr_pmfs, out, k, cbase_stats):
 
     genes = initialize_gene_objects(cnt_df, bmr_dict)
     estimate_pi_for_each_gene(genes.values(), single_gene_fout)
-    interactions = initialize_interaction_objects(k, genes.values())
+    top_genes, interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
 
     cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
     create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
 
-    # TODO: Implement DISCOVER method
-    # - create discover conda environment
-    # - add flag to run discover in main and pass to this function
-    # - write discover.py script using old run_discover.py script for reference
-    # - activate discover conda environment and run discover w/ subprocess pipe
-    # - modify interaction object to include instance variable for fisher's ME/CO p + q vals (AS A DICTIONARY? that you add into)
-    # - modify interaction object to include instance variable for discover ME/CO p + q vals
-    # - modify script to save pairwise results to save columns for all additional results (loop through dictionary or check default fields)
-    # (Should we save additional instance variable fields for fp_me, fp_co, dq_me, dq_co or just one dictionary object for additional results)
-    # (I really think having a dictionary object will be much cleaner)
-    # Is there a cleaner way to obtain fisher's q-values ex-post-facto on all interactions?
-    # TODO: update the way we run Fisher's
-    # - currently fisher's is a function for an interaction, but that doesn't allow us to easily get q-values
-    # - maybe I can create a function that runs fisher's given the matrix on all interaction pairs and computes q-values as well?
-    # - otherwise we will need to do some finnicky way of applying the correction to the column afterwards....
-    # - at the end of the day, fisher's is a separate method so we should treat it the same way we treat discover and make a script for it
-    create_pairwise_results(interactions, pairwise_interaction_fout)
+    # TODO: fisher_results = call to fisher's method
+    discover_results = (
+        run_discover_analysis(cnt_df, top_genes, interactions) if run_discover else None
+    )
+    create_pairwise_results(interactions, discover_results, pairwise_interaction_fout)
 
+    # TODO: Refactor Fisher's method
+    # - Make Fisher's a standalone function to compute q-values for all interaction pairs
+    # - Apply correction on p-values to control for false positives
     # TODO: Implement method to run WeSME/WeSCO and save results
     # TODO: Implement other methods (SELECT, MEGSA, etc.) and save results
