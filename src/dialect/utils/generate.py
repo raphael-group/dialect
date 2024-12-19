@@ -62,13 +62,18 @@ def generate_bmr_using_CBaSE(maf, out, reference):
 
     logging.info(f"Running CBaSE method on input file: {CBaSE_input_fn}")
 
+    # TODO: export these following three paths for cleaner usage
     CBaSE_params_script = os.path.abspath(
-        os.path.join("external", "CBaSE_params_v1.2.py")
+        os.path.join("external", "CBaSE", "CBaSE_params_v1.2.py")
     )
     CBaSE_qvals_script = os.path.abspath(
-        os.path.join("external", "CBaSE_qvals_v1.2.py")
+        os.path.join("external", "CBaSE", "CBaSE_qvals_v1.2.py")
     )
-    CBaSE_auxiliary_dir = os.path.abspath(os.path.join("external", "auxiliary"))
+
+    # TODO: retest download of auxiliary files and create perma download link
+    CBaSE_auxiliary_dir = os.path.abspath(
+        os.path.join("external", "CBaSE", "auxiliary")
+    )
 
     try:
         cbase_params_cmd = [
