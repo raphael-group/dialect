@@ -50,4 +50,4 @@ def initialize_interaction_objects(k, genes):
     for gene_a, gene_b in combinations(top_genes, 2):
         interactions.append(Interaction(gene_a, gene_b))
     logging.info(f"Initialized {len(interactions)} Interaction objects.")
-    return interactions
+    return top_genes, interactions
