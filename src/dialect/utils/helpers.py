@@ -45,6 +45,7 @@ def initialize_gene_objects(cnt_df, bmr_dict):
 
 def initialize_interaction_objects(k, genes):
     interactions = []
+    # TODO move logic to get top genes to a helper function to use across different scripts
     top_genes = sorted(genes, key=lambda x: sum(x.counts), reverse=True)[:k]
     for gene_a, gene_b in combinations(top_genes, 2):
         interactions.append(Interaction(gene_a, gene_b))
