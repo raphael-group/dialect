@@ -48,9 +48,9 @@ def build_argument_parser():
     )
     identify_parser.add_argument(
         "-cb",
-        "--cbase_qvals",
+        "--cbase_stats",
         default=None,
-        help="Path to the cbase q-value results file",
+        help="Path to the cbase results file",
     )
 
     # TODO: create subparser to run comparison methods

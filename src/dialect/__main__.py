@@ -34,17 +34,17 @@ def main():
 
     elif args.command == "identify":
         os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
-        # TODO: consider moving below code to read cbase qvals elsewhere
-        cbase_qvals = None
-        if not args.cbase_qvals is None:
-            logging.info(f"Reading CBaSE q-values file: {args.cbase_qvals}")
-            cbase_qvals = pd.read_csv(args.cbase_qvals, sep="\t", skiprows=1)
+        # TODO: consider moving below code to read cbase stats elsewhere
+        cbase_stats = None
+        if not args.cbase_stats is None:
+            logging.info(f"Reading CBaSE q-values file: {args.cbase_stats}")
+            cbase_stats = pd.read_csv(args.cbase_stats, sep="\t", skiprows=1)
         identify_pairwise_interactions(
             cnt_mtx=args.cnt,
             bmr_pmfs=args.bmr,
             out=args.out,
             k=args.top_k,
-            cbase_results=cbase_qvals,
+            cbase_results=cbase_stats,
         )
 
 
