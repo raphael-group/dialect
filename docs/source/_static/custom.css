@@ -1,0 +1,11 @@
+/* Hide the text in the mobile header */
+.mobile-header .brand {
+    display: none;
+}
+
+/* Hide the sidebar brand text */
+.sidebar-brand .sidebar-brand-text {
+    display: none;
+}
+
+/* Optionally, you can hide the HTML <title> text (but it's not visible to users) */
