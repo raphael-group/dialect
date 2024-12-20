@@ -236,4 +236,4 @@ def identify_pairwise_interactions(
     # TODO: Implement method to run WeSME/WeSCO and save results
     # TODO: Implement method to run MEGSA and save results
     # TODO: Implement method to run SELECT and save results
-    # TODO: Explore and implement other methods (e.g. CoME, MOCA, SELECT, FaME, FSME, coselens)
+    # TODO: Explore and implement other methods (e.g. CoME, MOCA, FaME, FSME, coselens)
