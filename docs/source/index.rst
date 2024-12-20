@@ -1,16 +1,26 @@
 .. DIALECT documentation master file, created by
-   sphinx-quickstart on Fri Dec 20 11:49:56 2024.
+   sphinx-quickstart on Thu Dec 20, 2024.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-DIALECT documentation
-=====================
+DIALECT Documentation
+======================
 
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
-
+👋 **Welcome to DIALECT!**
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Navigation:
+
+   home
+   usage/index
+   installation
+   changelog
+   api_reference
+   logo_artwork
+   github
+
+External Links
+==============
+
+- 🐙 `GitHub: raphael-group/dialect <https://github.com/raphael-group/dialect>`_
