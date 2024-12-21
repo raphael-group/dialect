@@ -6,6 +6,8 @@ from dialect.utils.helpers import *
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #

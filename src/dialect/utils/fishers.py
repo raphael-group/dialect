@@ -1,6 +1,8 @@
 import logging
 from statsmodels.stats.multitest import multipletests
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 def run_fishers_exact_analysis(interactions):
     """

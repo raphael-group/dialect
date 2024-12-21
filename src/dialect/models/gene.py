@@ -3,6 +3,8 @@ import itertools
 import numpy as np
 from scipy.optimize import minimize
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 class Gene:
     def __init__(self, name, samples, counts, bmr_pmf):

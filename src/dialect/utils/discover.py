@@ -2,6 +2,8 @@ import logging
 import pandas as pd
 from discover import DiscoverMatrix, pairwise_discover_test
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 def create_mutation_matrix_from_cnt_df(cnt_df, top_genes):
     """

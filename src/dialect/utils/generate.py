@@ -6,6 +6,8 @@ import pandas as pd
 
 from dialect.utils.helpers import *
 
+# TODO: Create essential and verbose logging info for all methods
+
 # ---------------------------------------------------------------------------- #
 #                               Helper Functions                               #
 # ---------------------------------------------------------------------------- #

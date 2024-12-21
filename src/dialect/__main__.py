@@ -8,12 +8,13 @@ from dialect.utils import (
     read_cbase_results_file,
 )
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 def main():
     parser = build_argument_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
-    # TODO: Add TODO statements to all files requiring logging changes
 
     logging.info("Running DIALECT CLI")
     logging.info(f"Arguments: {args}")

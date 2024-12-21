@@ -5,6 +5,8 @@ from dialect.utils.helpers import *
 from dialect.utils.discover import run_discover_analysis
 from dialect.utils.fishers import run_fishers_exact_analysis
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 # ---------------------------------------------------------------------------- #
 #                               Helper Functions                               #

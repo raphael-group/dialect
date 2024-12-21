@@ -7,6 +7,8 @@ from sklearn.metrics import confusion_matrix
 
 from dialect.models.gene import Gene
 
+# TODO: Create essential and verbose logging info for all methods
+
 
 class Interaction:
     def __init__(self, gene_a, gene_b):
