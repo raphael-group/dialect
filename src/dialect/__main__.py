@@ -8,25 +8,24 @@ from dialect.utils import (
     read_cbase_results_file,
 )
 
-# TODO: Create essential and verbose logging info for all methods
-
 
 def main():
     parser = build_argument_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
 
-    logging.info("Running DIALECT CLI")
-    logging.info(f"Arguments: {args}")
+    logging.info("Running DIALECT Command Line Interface")
+    logging.verbose(f"Arguments: {args}")
     logging.info(f"Command: {args.command}")
+    logging.verbose(f"Creating output directory: {args.out}")
 
     if args.command == "generate":
-        os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
+        os.makedirs(args.out, exist_ok=True)
         generate_bmr_and_counts(maf=args.maf, out=args.out, reference=args.reference)
 
     elif args.command == "identify":
-        os.makedirs(args.out, exist_ok=True)  # create output directory if nonexistent
-        cbase_stats = read_cbase_results_file(args)
+        os.makedirs(args.out, exist_ok=True)
+        cbase_stats = read_cbase_results_file(args.cbase_stats)
         identify_pairwise_interactions(
             cnt_mtx=args.cnt,
             bmr_pmfs=args.bmr,
