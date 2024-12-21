@@ -51,3 +51,11 @@ def initialize_interaction_objects(k, genes):
         interactions.append(Interaction(gene_a, gene_b))
     logging.info(f"Initialized {len(interactions)} Interaction objects.")
     return top_genes, interactions
+
+
+def read_cbase_results_file(args):
+    cbase_stats = None
+    if not args.cbase_stats is None:
+        logging.info(f"Reading CBaSE q-values file: {args.cbase_stats}")
+        cbase_stats = pd.read_csv(args.cbase_stats, sep="\t", skiprows=1)
+    return cbase_stats
