@@ -81,5 +81,4 @@ class TestGene(unittest.TestCase):
         with self.assertRaises(ValueError):
             simulate_single_gene(self.bmr_pmf, self.num_samples, 1.1)
 
-    # TODO Add additional edge cases and tests, including:
-    # - TODO: tests for missing values in bmr_pmf
+    # TODO: Add additional edge cases and tests, including:
