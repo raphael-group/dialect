@@ -15,6 +15,13 @@ def verbose(self, message, *args, **kwargs):
 logging.Logger.verbose = verbose
 
 
+def module_verbose(message, *args, **kwargs):
+    logging.getLogger()._log(VERBOSE_LEVEL, message, args, **kwargs)
+
+
+logging.verbose = module_verbose
+
+
 def configure_logging(verbose=False):
     """
     Configure logging with an optional verbose mode.
