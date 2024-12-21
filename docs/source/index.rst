@@ -3,7 +3,7 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-.. image:: _static/fulltext_logo.png
+.. image:: _static/logos/dark_full_text_transparent_bg.png
    :alt: DIALECT Logo
    :align: center
    :width: 800px
