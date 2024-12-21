@@ -55,9 +55,26 @@ def initialize_interaction_objects(k, genes):
     return top_genes, interactions
 
 
-def read_cbase_results_file(args):
-    cbase_stats = None
-    if not args.cbase_stats is None:
-        logging.info(f"Reading CBaSE q-values file: {args.cbase_stats}")
-        cbase_stats = pd.read_csv(args.cbase_stats, sep="\t", skiprows=1)
-    return cbase_stats
+def read_cbase_results_file(cbase_stats_fn):
+    """
+    Reads the CBaSE q-values file and returns it as a DataFrame.
+
+    :param cbase_stats_fn: Path to the CBaSE q-values file.
+    :type cbase_stats_fn: str or None
+    :return: DataFrame containing the CBaSE q-values or None if not provided.
+    :rtype: pandas.DataFrame or None
+    """
+    if cbase_stats_fn is None:
+        logging.info("No CBaSE q-values file provided.")
+        return None
+
+    logging.info(f"Reading CBaSE q-values file: {cbase_stats_fn}")
+    try:
+        cbase_stats_df = pd.read_csv(cbase_stats_fn, sep="\t", skiprows=1)
+        logging.info("Successfully read the CBaSE q-values file.")
+        logging.verbose(f"CBaSE file shape: {cbase_stats_df.shape}")
+        logging.verbose(f"CBaSE file preview:\n{cbase_stats_df.head()}")
+        return cbase_stats_df
+    except Exception as e:
+        logging.error(f"Failed to read CBaSE q-values file: {e}")
+        raise
