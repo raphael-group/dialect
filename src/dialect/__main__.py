@@ -8,16 +8,14 @@ from dialect.utils import (
     identify_pairwise_interactions,
 )
 
-configure_logging()
 
-
-# TODO: add option for verbose logging
 def main():
-    logging.info("Running DIALECT CLI")
-
     parser = build_argument_parser()
     args = parser.parse_args()
+    configure_logging(args.verbose)
+    # TODO: Add TODO statements to all files requiring logging changes
 
+    logging.info("Running DIALECT CLI")
     logging.info(f"Arguments: {args}")
     logging.info(f"Command: {args.command}")
 
