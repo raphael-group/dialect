@@ -6,6 +6,13 @@ def build_argument_parser():
     Creates and returns the argument parser for the command line interface.
     """
     parser = ArgumentParser(description="DIALECT")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging",
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Subparser for BMR and count matrix generation
