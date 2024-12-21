@@ -192,8 +192,8 @@ def identify_pairwise_interactions(
     out,
     k,
     cbase_stats,
-    run_fishers=True,  # TODO add this to the argument parser
-    run_discover=True,  # TODO add this to the argument parser
+    run_fishers=True,  # TODO: add this to the argument parser
+    run_discover=True,  # TODO: add this to the argument parser
 ):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
