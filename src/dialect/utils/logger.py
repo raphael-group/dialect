@@ -1,38 +1,42 @@
 import logging
 
-VERBOSE_LEVEL = 15  # Between INFO (20) and DEBUG (10)
+VERBOSE_LEVEL = 15
 logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
 
 
 def verbose(self, message, *args, **kwargs):
-    """
-    Logs a message with the custom VERBOSE level.
-    """
+    """Log a message with the custom VERBOSE level."""
     if self.isEnabledFor(VERBOSE_LEVEL):
         self._log(VERBOSE_LEVEL, message, args, **kwargs)
 
 
+# Attach the verbose method to logging.Logger
 logging.Logger.verbose = verbose
-
-
-def module_verbose(message, *args, **kwargs):
-    logging.getLogger()._log(VERBOSE_LEVEL, message, args, **kwargs)
-
-
-logging.verbose = module_verbose
 
 
 def configure_logging(verbose=False):
     """
-    Configure logging with an optional verbose mode.
+    Configures logging with optional verbose mode.
 
-    :param verbose: Enable verbose logging if True. Defaults to False.
-    :type verbose: bool
+    :param verbose: Enable verbose logging if True, default is False.
     """
-    logging.basicConfig(
-        level=VERBOSE_LEVEL if verbose else logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(funcName)s - %(message)s",
+    # Reset logging configuration
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(VERBOSE_LEVEL if verbose else logging.INFO)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(funcName)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    if verbose:
-        logging.getLogger().setLevel(VERBOSE_LEVEL)
+    console_handler.setFormatter(formatter)
+
+    root_logger.addHandler(console_handler)
+
+    # Ensure verbose method is accessible globally
+    def module_verbose(message, *args, **kwargs):
+        if verbose:
+            root_logger._log(VERBOSE_LEVEL, message, args, **kwargs)
+
+    logging.verbose = module_verbose
