@@ -178,7 +178,7 @@ class Interaction:
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
     # ---------------------------------------------------------------------------- #
-    # TODO (LOW PRIORITY): Add additional metrics (KL, MI, etc.)
+    # TODO: (LOW PRIORITY): Add additional metrics (KL, MI, etc.)
 
     def compute_joint_probability(self, tau, u, v):
         joint_probability = np.array(
@@ -571,7 +571,7 @@ class Interaction:
             f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}"
         )
 
-    # TODO (LOW PRIORITY): Implement EM w/ Pomegranate for Speed Improvement
+    # TODO: (LOW PRIORITY): Implement EM w/ Pomegranate for Speed Improvement
     def estimate_tau_with_em_using_pomegranate(self):
         logging.info("Estimating tau parameters using pomegranate.")
         raise NotImplementedError("Method is not yet implemented.")
