@@ -1,19 +1,12 @@
 import os
 import logging
 import pandas as pd
-from dialect.utils.logger import configure_logging
-
-from dialect.utils.argument_parser import (
+from dialect.utils import (
+    configure_logging,
     build_argument_parser,
-)  # TODO: export function from argument_parser.py
-
-from dialect.utils.generate import (
     generate_bmr_and_counts,
-)  # TODO: export function from generate.py
-
-from dialect.utils.identify import (
     identify_pairwise_interactions,
-)  # TODO: export function from identify.py
+)
 
 configure_logging()
 
