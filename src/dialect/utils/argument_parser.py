@@ -60,8 +60,7 @@ def build_argument_parser():
         help="Path to the cbase results file",
     )
 
-    # TODO: create subparser to run comparison methods
-    # TODO: create subparser to run simulations
-    # TODO: create subparser to run workflows end-to-end
+    # TODO: Build and integrate subparser compare subparser
+    # TODO: Build and integrate simulate subparser (create + evaluate)
 
     return parser
