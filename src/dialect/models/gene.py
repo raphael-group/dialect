@@ -20,6 +20,8 @@ class Gene:
         self.counts = counts
         self.bmr_pmf = bmr_pmf
         self.pi = None
+
+        # Metrics from alternative methods
         self.cbase_phi = None
 
     def __str__(self):
