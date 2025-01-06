@@ -60,9 +60,8 @@ def build_argument_parser():
         help="Path to the cbase results file",
     )
 
-    # Subparser for comparing methods
-    # TODO: integrate this and separate out overlap in identify script
-    compare_parser = subparsers.add_parser("compare", help="Run comparison of methods")
+    # Subparser for running comparison methods (fisher, discover, etc.)
+    compare_parser = subparsers.add_parser("compare", help="Run alternative methods")
     compare_parser.add_argument(
         "-c", "--cnt", required=True, help="Path to the input count matrix file"
     )
@@ -88,28 +87,16 @@ def build_argument_parser():
         dest="simulate_command", help="Available simulation commands"
     )
 
+    # TODO: finish implementing simulation subparsers
+    # TODO: add arguments to create simulation vs. evaluate simulation
+    # TODO: add arguments for bmr file, simulation parameters, etc.
+    # TODO: add evaluate subparser arguments to create tables and plots
     # Subparser for creating simulations
     simulate_create_parser = simulate_subparsers.add_parser(
         "create", help="Create simulation data"
     )
-    # TODO: add create arguments for bmr file, simulation parameters, etc.
-    simulate_create_parser.add_argument(
-        "-o",
-        "--out",
-        required=True,
-        help="Path to the output directory for simulations",
-    )
-
-    # Subparser for evaluating simulations
     simulate_evaluate_parser = simulate_subparsers.add_parser(
         "evaluate", help="Evaluate simulation results"
-    )
-    # TODO: add evaluate arguments to generate final tables and plots
-    simulate_evaluate_parser.add_argument(
-        "-r", "--results", required=True, help="Path to the results file"
-    )
-    simulate_evaluate_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output evaluation directory"
     )
 
     return parser
