@@ -2,8 +2,6 @@ import logging
 import pandas as pd
 
 from dialect.utils.helpers import *
-from dialect.utils.discover import run_discover_analysis
-from dialect.utils.fishers import run_fishers_exact_analysis
 
 # TODO: Create essential and verbose logging info for all methods
 
@@ -11,11 +9,6 @@ from dialect.utils.fishers import run_fishers_exact_analysis
 # ---------------------------------------------------------------------------- #
 #                               Helper Functions                               #
 # ---------------------------------------------------------------------------- #
-def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
-    check_file_exists(cnt_mtx)
-    check_file_exists(bmr_pmfs)
-
-
 def save_cbase_stats_to_gene_objects(genes, cbase_stats):
     """
     Save CBaSE Phi statistics to gene objects by updating their attributes.
@@ -132,10 +125,6 @@ def create_pairwise_results(interactions, output_path):
                 "Rho": rho,
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,
-                "Fisher's ME Q-Val": interaction.fisher_me_qval,
-                "Fisher's CO Q-Val": interaction.fisher_co_qval,
-                "DISCOVER ME Q-Val": interaction.discover_me_qval,
-                "DISCOVER CO Q-Val": interaction.discover_co_qval,
             }
         )
 
@@ -191,9 +180,7 @@ def identify_pairwise_interactions(
     bmr_pmfs,
     out,
     k,
-    cbase_stats,
-    run_fishers=True,  # TODO: add this to the argument parser
-    run_discover=True,  # TODO: add this to the argument parser
+    cbase_stats,  # TODO separate this out from here
 ):
     """
     Main function to identify pairwise interactions between genetic drivers in tumors using DIALECT.
@@ -216,23 +203,11 @@ def identify_pairwise_interactions(
 
     genes = initialize_gene_objects(cnt_df, bmr_dict)
     estimate_pi_for_each_gene(genes.values(), single_gene_fout)
-    top_genes, interactions = initialize_interaction_objects(k, genes.values())
+    _, interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
 
     cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
     create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
-
-    fishers_results = run_fishers_exact_analysis(interactions) if run_fishers else None
-    discover_results = (
-        run_discover_analysis(cnt_df, top_genes, interactions) if run_discover else None
-    )
-    for interaction in interactions:
-        if run_fishers:
-            interaction.fisher_me_qval = fishers_results[interaction.name]["me_qval"]
-            interaction.fisher_co_qval = fishers_results[interaction.name]["co_qval"]
-        if run_discover:
-            interaction.discover_me_qval = discover_results[interaction.name]["me_qval"]
-            interaction.discover_co_qval = discover_results[interaction.name]["co_qval"]
     create_pairwise_results(interactions, pairwise_interaction_fout)
 
     # TODO: Implement method to run WeSME/WeSCO and save results
