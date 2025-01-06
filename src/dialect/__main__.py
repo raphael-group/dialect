@@ -6,6 +6,7 @@ from dialect.utils import (
     generate_bmr_and_counts,
     identify_pairwise_interactions,
     read_cbase_results_file,
+    run_comparison_methods,
 )
 
 
@@ -32,6 +33,15 @@ def main():
             out=args.out,
             k=args.top_k,
             cbase_stats=cbase_stats,
+        )
+
+    elif args.command == "compare":
+        os.makedirs(args.out, exist_ok=True)
+        run_comparison_methods(
+            cnt_mtx=args.cnt,
+            bmr_pmfs=args.bmr,
+            out=args.out,
+            k=args.top_k,
         )
 
 
