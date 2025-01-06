@@ -3,6 +3,7 @@ import logging
 from dialect.utils.helpers import *
 from dialect.utils.fishers import run_fishers_exact_analysis
 from dialect.utils.discover import run_discover_analysis
+from dialect.utils.megsa import run_megsa_analysis
 
 
 # ---------------------------------------------------------------------------- #
@@ -47,20 +48,27 @@ def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
     top_genes, interactions = initialize_interaction_objects(k, genes.values())
 
     logging.info("Running Fisher's exact test...")
+    # TODO: modify run_fisher_exact_analysis to directly return a dataframe
     fisher_results = run_fishers_exact_analysis(interactions)
     fisher_df = results_to_dataframe(
         fisher_results, "Fisher's ME Q-Val", "Fisher's CO Q-Val"
     )
 
     logging.info("Running DISCOVER...")
+    # TODO: modify run_discover_analysis to directly return a dataframe
     discover_results = run_discover_analysis(cnt_df, top_genes, interactions)
     discover_df = results_to_dataframe(
         discover_results, "Discover ME Q-Val", "Discover CO Q-Val"
     )
 
-    # TODO: Run additional comparison methods here
+    logging.info("Running MEGSA...")
+    megsa_df = run_megsa_analysis(cnt_df, interactions)
+
+    # TODO: Implement WeSME/WeSCO Analysis
+    # TODO: Implement SELECT Analysis
 
     merged_df = pd.merge(fisher_df, discover_df, on=["Gene A", "Gene B"], how="inner")
+    merged_df = pd.merge(merged_df, megsa_df, on=["Gene A", "Gene B"], how="inner")
     comparison_interaction_fout = f"{out}/comparison_interaction_results.csv"
     merged_df.to_csv(comparison_interaction_fout, index=False)
     logging.info(f"Comparison results saved to {comparison_interaction_fout}")
