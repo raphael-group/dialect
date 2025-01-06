@@ -68,8 +68,6 @@ def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
     logging.info("Running WeSME/WeSCO...")
     wesme_df = run_wesme_analysis(cnt_df, out, interactions)
 
-    # TODO: Implement SELECT Analysis
-
     merged_df = pd.merge(fisher_df, discover_df, on=["Gene A", "Gene B"], how="inner")
     merged_df = pd.merge(merged_df, megsa_df, on=["Gene A", "Gene B"], how="inner")
     merged_df = pd.merge(merged_df, wesme_df, on=["Gene A", "Gene B"], how="inner")
