@@ -527,12 +527,12 @@ def compute_pairwise_pvalues(mut_fn, dout, gene_pairs):
         {
             "Gene A": [g[0] for g in ws_me_pv_dic.keys()],
             "Gene B": [g[1] for g in ws_me_pv_dic.keys()],
-            "ws_me_pv": list(ws_me_pv_dic.values()),
-            "ws_me_qv": ws_me_qv,
-            "ws_co_pv": list(ws_co_pv_dic.values()),
-            "ws_co_qv": ws_co_qv,
-            "jaccard": list(jaccard_dic.values()),
-            "fisher_co_pv": list(fisher_co_pv_dic.values()),
+            # "WeSME P-Val": list(ws_me_pv_dic.values()),
+            "WeSME Q-Val": ws_me_qv,
+            # "WeSCO P-Val": list(ws_co_pv_dic.values()),
+            "WeSCO Q-Val": ws_co_qv,
+            # "jaccard": list(jaccard_dic.values()),
+            # "fisher_co_pv": list(fisher_co_pv_dic.values()),
         }
     )
     return df
