@@ -10,6 +10,11 @@ from dialect.models.interaction import Interaction
 # TODO: Create essential and verbose logging info for all methods
 
 
+def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
+    check_file_exists(cnt_mtx)
+    check_file_exists(bmr_pmfs)
+
+
 def check_file_exists(fn):
     """
     Checks if the specified file exists.
