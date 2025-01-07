@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 
 
@@ -5,6 +6,7 @@ import pandas as pd
 #                                 MAIN FUNCTION                                #
 # ---------------------------------------------------------------------------- #
 def merge_pairwise_interaction_results(dialect_results, alt_results, out):
+    logging.info("Merging pairwise interaction results")
     dialect_results_df = pd.read_csv(dialect_results)
     alt_results_df = pd.read_csv(alt_results)
     merged_df = pd.merge(
@@ -15,3 +17,6 @@ def merge_pairwise_interaction_results(dialect_results, alt_results, out):
     )
     comparison_interaction_fout = f"{out}/complete_pairwise_ixn_results.csv"
     merged_df.to_csv(comparison_interaction_fout, index=False)
+    logging.info(
+        f"Merged interaction results saved to {comparison_interaction_fout}",
+    )
