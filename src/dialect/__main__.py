@@ -18,7 +18,6 @@ def main():
     logging.info("Running DIALECT Command Line Interface")
     logging.verbose(f"Arguments: {args}")
     logging.info(f"Command: {args.command}")
-    logging.verbose(f"Creating output directory: {args.out}")
 
     if args.command == "generate":
         os.makedirs(args.out, exist_ok=True)
