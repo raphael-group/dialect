@@ -198,6 +198,10 @@ def identify_pairwise_interactions(
     if k <= 0:
         raise ValueError("k must be a positive integer")
 
+    # TODO: change these names to be more concise: dialect_gene_results.csv
+    # TODO: separate out CBaSE stats into file CBaSE_gene_results.csv
+    # TODO: create functionality to run MutSigCV and save results into MutSigCV_gene_results.csv
+    # TODO: rename pairwise to be DIALECT_ixn_results.csv
     single_gene_fout = f"{out}/single_gene_results.csv"
     pairwise_interaction_fout = f"{out}/pairwise_interaction_results.csv"
 
@@ -209,8 +213,3 @@ def identify_pairwise_interactions(
     cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
     create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
     create_pairwise_results(interactions, pairwise_interaction_fout)
-
-    # TODO: Implement method to run WeSME/WeSCO and save results
-    # TODO: Implement method to run MEGSA and save results
-    # TODO: Implement method to run SELECT and save results
-    # TODO: Explore and implement other methods (e.g. CoME, MOCA, FaME, FSME, coselens)
