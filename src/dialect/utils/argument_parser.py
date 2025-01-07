@@ -81,6 +81,25 @@ def build_argument_parser():
         help="Number of genes to consider (default: 100 genes with highest mutation count)",
     )
 
+    merge_parser = subparsers.add_parser(
+        "merge", help="Merge DIALECT and alternative method results"
+    )
+    merge_parser.add_argument(
+        "-d",
+        "--dialect",
+        required=True,
+        help="Path to the DIALECT pairwise interaction results",
+    )
+    merge_parser.add_argument(
+        "-a",
+        "--alt",
+        required=True,
+        help="Path to the comparison interaction results",
+    )
+    merge_parser.add_argument(
+        "-o", "--out", required=True, help="Path to the output directory"
+    )
+
     # Subparser for simulations
     simulate_parser = subparsers.add_parser(
         "simulate", help="Run simulations for evaluation and benchmarking"
