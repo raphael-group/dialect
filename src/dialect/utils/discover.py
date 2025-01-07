@@ -99,6 +99,10 @@ def run_discover_analysis(cnt_df, top_genes, interactions):
     co_results = run_discover_for_interaction(events, interaction_type="co")
 
     # Step 3: Extract results for the specified interactions
-    discover_results = extract_discover_results(interactions, me_results, co_results)
+    discover_results = extract_discover_results(
+        interactions,
+        me_results,
+        co_results,
+    )
     logging.info("Finished running DISCOVER analysis.")
     return discover_results
