@@ -13,7 +13,9 @@ def build_argument_parser():
         help="Enable verbose logging",
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Available commands"
+    )
 
     # Subparser for BMR and count matrix generation
     generate_parser = subparsers.add_parser(
