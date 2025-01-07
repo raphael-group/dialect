@@ -13,6 +13,5 @@ for MAF_FILE in "${MAF_FILES[@]}"; do
 
     ## Submit job
     sbatch -o ${SLURM_OUT_FN} -e ${SLURM_OUT_FN} ${SCRIPT_DIR}/ssbatch.sh ${MAF_FILE}
-    exit
     sleep 0.25 ## Avoid overloading the scheduler
 done
