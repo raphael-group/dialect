@@ -14,7 +14,7 @@ cd ${DISCOVER_DIR}
 python setup.py install --user  # Use --user to install DISCOVER in user space
 cd ${ORIGINAL_DIR}
 
-K=100 ##TODO SPECIFY NUMBER OF TOPE GENES
+K=100 ##TODO SPECIFY NUMBER OF TOP GENES
 MAF_FILE=${1}                ## MAF file path
 SUBTYPE_NAME=$(basename ${MAF_FILE} .maf) ## Extract subtype name from MAF file
 OUTPUT_DIR=output/${SUBTYPE_NAME} ## Set output directory
