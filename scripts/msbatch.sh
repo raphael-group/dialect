@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 DATA_DIR=data/TCGA_PanCancer_Atlas_2018 ##TODO: SPECIFY DIR W/ MAF FILES
+DOUT=output/TOP_10_Genes ##TODO: SPECIFY OUTPUT DIR
 MAF_FILES=(${DATA_DIR}/*.maf) ## Array of all MAF files in the directory
 SCRIPT_DIR=$(dirname "$0") ## Directory of the current script
-SLURM_DIR=output/slurm_logs
+SLURM_DIR=${DOUT}/slurm_logs
 
 mkdir -p ${SLURM_DIR}
 
