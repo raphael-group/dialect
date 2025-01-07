@@ -7,6 +7,7 @@ from dialect.utils import (
     identify_pairwise_interactions,
     read_cbase_results_file,
     run_comparison_methods,
+    merge_pairwise_interaction_results,
 )
 
 
@@ -41,6 +42,14 @@ def main():
             bmr_pmfs=args.bmr,
             out=args.out,
             k=args.top_k,
+        )
+
+    elif args.command == "merge":
+        os.makedirs(args.out, exist_ok=True)
+        merge_pairwise_interaction_results(
+            dialect_results=args.dialect,
+            alt_results=args.alt,
+            out=args.out,
         )
 
 
