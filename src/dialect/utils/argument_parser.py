@@ -1,23 +1,12 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentTypeError
+
+# TODO: unify shared arguments across subparsers (output, seed, etc.) and create argument groups
 
 
-def build_argument_parser():
+def add_generate_parser(subparsers):
     """
-    Creates and returns the argument parser for the command line interface.
+    Adds the generate subparser to the given subparsers.
     """
-    parser = ArgumentParser(description="DIALECT")
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-
-    subparsers = parser.add_subparsers(
-        dest="command", required=True, help="Available commands"
-    )
-
-    # Subparser for BMR and count matrix generation
     generate_parser = subparsers.add_parser(
         "generate", help="Generate BMR and count matrix"
     )
@@ -35,7 +24,11 @@ def build_argument_parser():
         help="Reference genome (default: hg19)",
     )
 
-    # Subparser for DIALECT analysis
+
+def add_identify_parser(subparsers):
+    """
+    Adds the identify subparser to the given subparsers.
+    """
     identify_parser = subparsers.add_parser(
         "identify", help="Run DIALECT to identify interactions"
     )
@@ -62,7 +55,11 @@ def build_argument_parser():
         help="Path to the cbase results file",
     )
 
-    # Subparser for running comparison methods (fisher, discover, etc.)
+
+def add_compare_parser(subparsers):
+    """
+    Adds the compare subparser to the given subparsers.
+    """
     compare_parser = subparsers.add_parser("compare", help="Run alternative methods")
     compare_parser.add_argument(
         "-c", "--cnt", required=True, help="Path to the input count matrix file"
@@ -81,6 +78,11 @@ def build_argument_parser():
         help="Number of genes to consider (default: 100 genes with highest mutation count)",
     )
 
+
+def add_merge_parser(subparsers):
+    """
+    Adds the merge subparser to the given subparsers.
+    """
     merge_parser = subparsers.add_parser(
         "merge", help="Merge DIALECT and alternative method results"
     )
@@ -100,24 +102,94 @@ def build_argument_parser():
         "-o", "--out", required=True, help="Path to the output directory"
     )
 
-    # Subparser for simulations
+
+def add_simulate_create_single_gene_parser(subparsers):
+    single_gene_parser = subparsers.add_parser(
+        "single", help="Create single gene simulations"
+    )
+    single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
+    single_gene_parser.add_argument("-n", "--num-samples", type=int, default=1000)
+    single_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    single_gene_parser.add_argument("-ns", "--num-simulations", type=int, default=2500)
+    single_gene_parser.add_argument("-b", "--bmr", help="Path to the BMR file")
+    single_gene_parser.add_argument("-g", "--gene", type=str, help="Gene name")
+    single_gene_parser.add_argument(
+        "-pi",
+        "--pi",
+        type=lambda x: (
+            float(x)
+            if 0 <= float(x) <= 1
+            else ArgumentTypeError("Value for --pi must be between 0 and 1")
+        ),
+        required=True,
+        help="Pi value (must be between 0 and 1)",
+    )
+
+    # TODO add support for binomial BMR (exclusive of real bmr)
+    # single_gene_parser.add_argument("-l", "--length", type=int, default=10000)
+    # single_gene_parser.add_argument("-m", "--mu", type=float, default=1e-6)
+
+
+def add_simulate_create_parser(subparsers):
+    """
+    Adds the simulate subparser to the given subparsers.
+    """
+    simulate_create_parser = subparsers.add_parser(
+        "create", help="Create simulation data"
+    )
+    simulate_create_subparsers = simulate_create_parser.add_subparsers(
+        dest="type",
+        required=True,
+        help="Available simulation types (single, pair)",
+    )
+    add_simulate_create_single_gene_parser(simulate_create_subparsers)
+    # add_simulate_crete_pair_gene_parser(simulate_create_subparsers) # TODO
+
+
+def add_simulate_evaluate_parser(subparsers):
+    simulate_evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Evaluate simulation data"
+    )
+    simulate_evaluate_subparsers = simulate_evaluate_parser.add_subparsers(
+        dest="type",
+        required=True,
+        help="Available simulation types (single, pair)",
+    )
+    # add_simulate_evaluate_single_gene_parser(simulate_evaluate_subparsers) # TODO
+    # add_simulate_evaluate_pair_gene_parser(simulate_evaluate_subparsers) # TODO
+
+
+def add_simulate_parser(subparsers):
+    """
+    Adds the simulate subparser to the given subparsers.
+    """
     simulate_parser = subparsers.add_parser(
         "simulate", help="Run simulations for evaluation and benchmarking"
     )
     simulate_subparsers = simulate_parser.add_subparsers(
-        dest="simulate_command", help="Available simulation commands"
+        dest="mode", required=True, help="Available simulation modes (create, evaluate)"
     )
 
-    # TODO: finish implementing simulation subparsers
-    # TODO: add arguments to create simulation vs. evaluate simulation
-    # TODO: add arguments for bmr file, simulation parameters, etc.
-    # TODO: add evaluate subparser arguments to create tables and plots
-    # Subparser for creating simulations
-    simulate_create_parser = simulate_subparsers.add_parser(
-        "create", help="Create simulation data"
+    add_simulate_create_parser(simulate_subparsers)
+    add_simulate_evaluate_parser(simulate_subparsers)
+
+
+def build_argument_parser():
+    """
+    Creates and returns the argument parser for the command line interface.
+    """
+    parser = ArgumentParser(description="DIALECT")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging",
     )
-    simulate_evaluate_parser = simulate_subparsers.add_parser(
-        "evaluate", help="Evaluate simulation results"
-    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    add_generate_parser(subparsers)
+    add_identify_parser(subparsers)
+    add_compare_parser(subparsers)
+    add_merge_parser(subparsers)
+    add_simulate_parser(subparsers)
 
     return parser
