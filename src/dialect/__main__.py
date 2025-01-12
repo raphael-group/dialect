@@ -52,6 +52,12 @@ def main():
             out=args.out,
         )
 
+    elif args.command == "simulate":
+        raise NotImplementedError("Simulation functionality is not yet implemented.")
+
+    else:
+        parser.print_help()
+
 
 if __name__ == "__main__":
     main()
