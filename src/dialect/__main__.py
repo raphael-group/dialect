@@ -53,7 +53,22 @@ def main():
         )
 
     elif args.command == "simulate":
-        raise NotImplementedError("Simulation functionality is not yet implemented.")
+        if args.mode == "create":
+            logging.info("Creating simulated data")
+            if args.type == "single":
+                logging.info("Simulating data for a single gene")
+                raise NotImplementedError
+            else:  # args.type == "pair"
+                logging.info("Simulating data for a pair of genes")
+                raise NotImplementedError
+        else:  # args.mode == "evaluate"
+            logging.info("Evaluating methods on simulated data")
+            if args.type == "single":
+                logging.info("Evaluating methods on simulated data for a single gene")
+                raise NotImplementedError
+            else:  # args.type == "pair"
+                logging.info("Evaluating methods on simulated data for a pair of genes")
+                raise NotImplementedError
 
     else:
         parser.print_help()
