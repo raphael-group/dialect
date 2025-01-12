@@ -9,6 +9,7 @@ from dialect.utils import (
     run_comparison_methods,
     merge_pairwise_interaction_results,
     create_single_gene_simulation,
+    evaluate_single_gene_simulation,
 )
 
 
@@ -72,8 +73,7 @@ def main():
         else:  # args.mode == "evaluate"
             logging.info("Evaluating methods on simulated data")
             if args.type == "single":
-                logging.info("Evaluating methods on simulated data for a single gene")
-                raise NotImplementedError
+                evaluate_single_gene_simulation()
             else:  # args.type == "pair"
                 logging.info("Evaluating methods on simulated data for a pair of genes")
                 raise NotImplementedError
