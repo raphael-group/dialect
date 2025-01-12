@@ -150,6 +150,19 @@ def add_simulate_create_parser(subparsers):
     # add_simulate_crete_pair_gene_parser(simulate_create_subparsers) # TODO
 
 
+def add_simulate_evaluate_single_gene_parser(subparsers):
+    single_gene_parser = subparsers.add_parser(
+        "single", help="Evaluate single gene simulations"
+    )
+    single_gene_parser.add_argument(
+        "-p", "--params", required=True, help="Path to the parameters file"
+    )
+    single_gene_parser.add_argument(
+        "-d", "--data", required=True, help="Path to the data file"
+    )
+    single_gene_parser.add_argument("-o", "--out", type=str, required=True)
+
+
 def add_simulate_evaluate_parser(subparsers):
     simulate_evaluate_parser = subparsers.add_parser(
         "evaluate", help="Evaluate simulation data"
@@ -159,7 +172,7 @@ def add_simulate_evaluate_parser(subparsers):
         required=True,
         help="Available simulation types (single, pair)",
     )
-    # add_simulate_evaluate_single_gene_parser(simulate_evaluate_subparsers) # TODO
+    add_simulate_evaluate_single_gene_parser(simulate_evaluate_subparsers)
     # add_simulate_evaluate_pair_gene_parser(simulate_evaluate_subparsers) # TODO
 
 
