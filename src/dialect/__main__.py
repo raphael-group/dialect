@@ -8,6 +8,7 @@ from dialect.utils import (
     read_cbase_results_file,
     run_comparison_methods,
     merge_pairwise_interaction_results,
+    create_single_gene_simulation,
 )
 
 
@@ -56,8 +57,15 @@ def main():
         if args.mode == "create":
             logging.info("Creating simulated data")
             if args.type == "single":
-                logging.info("Simulating data for a single gene")
-                raise NotImplementedError
+                create_single_gene_simulation(
+                    pi=args.pi,
+                    num_samples=args.num_samples,
+                    num_simulations=args.num_simulations,
+                    bmr_pmfs=args.bmr,
+                    gene=args.gene,
+                    out=args.out,
+                    seed=args.seed,
+                )
             else:  # args.type == "pair"
                 logging.info("Simulating data for a pair of genes")
                 raise NotImplementedError
