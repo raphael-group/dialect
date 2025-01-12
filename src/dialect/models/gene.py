@@ -19,6 +19,7 @@ class Gene:
         self.samples = samples
         self.counts = counts
         self.bmr_pmf = bmr_pmf
+        # TODO: change all instances of bmr_pmf to bmr_pmf_arr
         self.pi = None
 
         # Metrics from alternative methods
