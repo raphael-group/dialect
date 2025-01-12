@@ -27,11 +27,16 @@ def check_file_exists(fn):
         raise FileNotFoundError(f"File not found: {fn}")
 
 
-def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
-    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
+def load_bmr_pmfs(bmr_pmfs):
     bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
     bmr_dict = bmr_df.T.to_dict(orient="list")  # key: gene, value: list of pmf values
     bmr_dict = {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
+    return bmr_dict
+
+
+def load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs):
+    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
+    bmr_dict = load_bmr_pmfs(bmr_pmfs)
     return cnt_df, bmr_dict
 
 
