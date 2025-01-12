@@ -293,3 +293,6 @@ def create_single_gene_simulation(
 # ---------------------------------------------------------------------------- #
 #                     SIMULATION EVALUATION MAIN FUNCTIONS                     #
 # ---------------------------------------------------------------------------- #
+def evaluate_single_gene_simulation():
+    logging.info("Evaluating DIALECT on simulated data for a single gene")
+    raise NotImplementedError
