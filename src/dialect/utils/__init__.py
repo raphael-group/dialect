@@ -5,6 +5,7 @@ from .logger import configure_logging
 from .helpers import read_cbase_results_file
 from .compare import run_comparison_methods
 from .merge import merge_pairwise_interaction_results
+from .simulate import create_single_gene_simulation
 
 __all__ = [
     "build_argument_parser",
@@ -14,4 +15,5 @@ __all__ = [
     "read_cbase_results_file",
     "run_comparison_methods",
     "merge_pairwise_interaction_results",
+    "create_single_gene_simulation",
 ]
