@@ -107,12 +107,6 @@ def add_simulate_create_single_gene_parser(subparsers):
     single_gene_parser = subparsers.add_parser(
         "single", help="Create single gene simulations"
     )
-    single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
-    single_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
-    single_gene_parser.add_argument("-o", "--out", type=str, required=True)
-    single_gene_parser.add_argument("-ns", "--num_simulations", type=int, default=2500)
-    single_gene_parser.add_argument("-b", "--bmr", help="Path to the BMR file")
-    single_gene_parser.add_argument("-g", "--gene", type=str, help="Gene name")
     single_gene_parser.add_argument(
         "-pi",
         "--pi",
@@ -124,6 +118,16 @@ def add_simulate_create_single_gene_parser(subparsers):
         required=True,
         help="Pi value (must be between 0 and 1)",
     )
+    single_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
+    single_gene_parser.add_argument("-ns", "--num_simulations", type=int, default=2500)
+    single_gene_parser.add_argument(
+        "-b", "--bmr", required=True, help="Path to the BMR file"
+    )
+    single_gene_parser.add_argument(
+        "-g", "--gene", required=True, type=str, help="Gene name"
+    )
+    single_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
     # TODO add support for binomial BMR (exclusive of real bmr)
     # single_gene_parser.add_argument("-l", "--length", type=int, default=10000)
