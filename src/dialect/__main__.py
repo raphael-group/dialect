@@ -70,6 +70,7 @@ def main():
             else:  # args.type == "pair"
                 logging.info("Simulating data for a pair of genes")
                 raise NotImplementedError
+            # TODO: add method for matrix
         else:  # args.mode == "evaluate"
             logging.info("Evaluating methods on simulated data")
             if args.type == "single":
@@ -81,6 +82,7 @@ def main():
             else:  # args.type == "pair"
                 logging.info("Evaluating methods on simulated data for a pair of genes")
                 raise NotImplementedError
+            # TODO: add method for matrix
 
     else:
         parser.print_help()
