@@ -258,6 +258,10 @@ def create_single_gene_simulation(
     bmr_dict = load_bmr_pmfs(bmr_pmfs)
     os.makedirs(out, exist_ok=True)
 
+    logging.info(
+        f"Simulating {num_simulations} single gene somatic mutations with "
+        f"{num_samples} samples and driver mutation rate pi={pi}"
+    )
     simulated_genes = []
     for _ in range(num_simulations):
         simulated_gene = simulate_single_gene_somatic_mutations(
@@ -267,6 +271,9 @@ def create_single_gene_simulation(
 
     counts_array = np.array(simulated_genes)
     np.save(os.path.join(out, "single_gene_simulated_data.npy"), counts_array)
+    logging.info(
+        f"Saved single gene simulation data to {out}/single_gene_simulated_data.npy"
+    )
 
     params = {
         "pi": pi,
@@ -278,6 +285,9 @@ def create_single_gene_simulation(
     }
     with open(os.path.join(out, "single_gene_simulation_parameters.json"), "w") as f:
         json.dump(params, f, indent=4)
+    logging.info(
+        f"Saved simulation parameters to {out}/single_gene_simulation_parameters.json"
+    )
 
 
 # ---------------------------------------------------------------------------- #
