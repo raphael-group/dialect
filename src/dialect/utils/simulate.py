@@ -1,8 +1,9 @@
+import os
+import json
+import logging
 import numpy as np
-import pandas as pd
 
-from itertools import combinations
-from dialect.utils.helpers import *
+from dialect.utils.helpers import load_bmr_pmfs
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
@@ -22,9 +23,11 @@ def simulate_single_gene_passenger_mutations(bmr_pmf, nsamples):
     :param nsamples (int): Number of samples to simulate.
     :return np.ndarray: Passenger mutation counts across samples.
     """
-    if not np.isclose(sum(bmr_pmf.values()), 1.0):
+    if not np.isclose(sum(bmr_pmf.values()), 1.0, atol=1e-6):
         raise ValueError("Background mutation rates (bmr_pmf) must sum to 1.")
 
+    # normalize bmr pmf values
+    bmr_pmf = {k: v / sum(bmr_pmf.values()) for k, v in bmr_pmf.items()}
     return np.random.choice(
         list(bmr_pmf.keys()),
         nsamples,
@@ -45,7 +48,7 @@ def simulate_single_gene_driver_mutations(pi, nsamples):
     return np.random.binomial(1, pi, size=nsamples)
 
 
-def simulate_single_gene_somatic_mutations(bmr_pmf, pi, nsamples):
+def simulate_single_gene_somatic_mutations(bmr_pmf_arr, pi, nsamples):
     """
     Simulate somatic mutation counts for a single gene.
 
@@ -56,14 +59,18 @@ def simulate_single_gene_somatic_mutations(bmr_pmf, pi, nsamples):
     :param nsamples (int): Number of samples to simulate.
     :return np.ndarray: Simulated somatic mutation counts for each sample.
     """
-    passenger_mutations = simulate_single_gene_passenger_mutations(bmr_pmf, nsamples)
+    bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
+    passenger_mutations = simulate_single_gene_passenger_mutations(
+        bmr_pmf,
+        nsamples,
+    )
     driver_mutations = simulate_single_gene_driver_mutations(pi, nsamples)
     somatic_mutations = (passenger_mutations + driver_mutations).astype(int)
     simulated_gene = Gene(
         name="SimulatedGene",
         samples=range(nsamples),
         counts=somatic_mutations,
-        bmr_pmf=bmr_pmf,
+        bmr_pmf=bmr_pmf_arr,
     )
     return simulated_gene
 
@@ -230,5 +237,49 @@ def simulate_pairwise_gene_somatic_mutations(
 
 
 # ---------------------------------------------------------------------------- #
-#                                 MAIN FUNCTION                                #
+#                      SIMULATION CREATION MAIN FUNCTIONS                      #
+# ---------------------------------------------------------------------------- #
+def create_single_gene_simulation(
+    pi, num_samples, num_simulations, bmr_pmfs, gene, out, seed
+):
+    """
+    Create a single gene simulation.
+
+    :param pi (float): Driver mutation rate (0 <= pi <= 1).
+    :param num_samples (int): Number of samples to simulate.
+    :param num_simulations (int): Number of simulations to run.
+    :param bmr (str): Path to the BMR file.
+    :param gene (str): Gene name.
+    :param out (str): Output path for the simulation results.
+    :param seed (int): Random seed for reproducibility.
+    """
+    logging.info(f"Creating single gene simulation for gene {gene}")
+    np.random.seed(seed)
+    bmr_dict = load_bmr_pmfs(bmr_pmfs)
+    os.makedirs(out, exist_ok=True)
+
+    simulated_genes = []
+    for _ in range(num_simulations):
+        simulated_gene = simulate_single_gene_somatic_mutations(
+            bmr_dict[gene], pi, num_samples
+        )
+        simulated_genes.append(simulated_gene.counts)
+
+    counts_array = np.array(simulated_genes)
+    np.save(os.path.join(out, "single_gene_simulated_data.npy"), counts_array)
+
+    params = {
+        "pi": pi,
+        "num_samples": num_samples,
+        "num_simulations": num_simulations,
+        "seed": seed,
+        "bmr_pmfs": bmr_pmfs,
+        "gene": gene,
+    }
+    with open(os.path.join(out, "single_gene_simulation_parameters.json"), "w") as f:
+        json.dump(params, f, indent=4)
+
+
+# ---------------------------------------------------------------------------- #
+#                     SIMULATION EVALUATION MAIN FUNCTIONS                     #
 # ---------------------------------------------------------------------------- #
