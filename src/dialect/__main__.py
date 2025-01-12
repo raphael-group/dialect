@@ -73,7 +73,11 @@ def main():
         else:  # args.mode == "evaluate"
             logging.info("Evaluating methods on simulated data")
             if args.type == "single":
-                evaluate_single_gene_simulation()
+                evaluate_single_gene_simulation(
+                    params=args.params,
+                    data=args.data,
+                    out=args.out,
+                )
             else:  # args.type == "pair"
                 logging.info("Evaluating methods on simulated data for a pair of genes")
                 raise NotImplementedError
