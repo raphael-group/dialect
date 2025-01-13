@@ -30,7 +30,7 @@ rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
 # ---------------------------------------------------------------------------- #
 #                                 MAIN FUNCTION                                #
 # ---------------------------------------------------------------------------- #
-def plotnine_decoy_gene_fractions(data_filepath, out_dir):
+def plot_decoy_gene_fractions(data_filepath, out_dir):
     df = pd.read_csv(data_filepath)
 
     subtypes = df["Subtype"].unique()
