@@ -22,7 +22,6 @@ from plotnine import (
 # ---------------------------------------------------------------------------- #
 #                          SET DEFAULT PLOTTING STYLE                          #
 # ---------------------------------------------------------------------------- #
-
 rcParams["font.family"] = "serif"
 rcParams["font.serif"] = ["Computer Modern"]
 rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
