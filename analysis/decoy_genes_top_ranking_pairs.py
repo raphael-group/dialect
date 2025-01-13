@@ -3,6 +3,7 @@ import logging
 import pandas as pd
 
 from argparse import ArgumentParser
+from dialect.utils.plotting import plot_decoy_gene_fractions
 
 
 # ---------------------------------------------------------------------------- #
@@ -97,8 +98,7 @@ def compute_decoy_gene_fractions_across_subtypes(results_dir, decoy_genes_dir, t
     return subtype_decoy_gene_fractions
 
 
-def save_output(subtype_decoy_gene_fractions, out):
-    fout = os.path.join(out, "decoy_gene_fractions_by_method.csv")
+def save_output(subtype_decoy_gene_fractions, fout):
     gene_fraction_data = [
         {"Subtype": subtype, "Method": method, "Fraction": fraction}
         for subtype, fractions in subtype_decoy_gene_fractions.items()
@@ -117,4 +117,6 @@ if __name__ == "__main__":
         args.decoy_genes_dir,
         args.top_k,
     )
-    save_output(subtype_decoy_gene_fractions, args.out)
+    fout = os.path.join(args.out, "decoy_gene_fractions_by_method.csv")
+    save_output(subtype_decoy_gene_fractions, fout)
+    plot_decoy_gene_fractions(fout, args.out)
