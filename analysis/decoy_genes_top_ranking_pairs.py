@@ -51,10 +51,10 @@ def compute_decoy_gene_fraction_across_methods(ixn_res_df, decoy_genes, k):
 
     methods = {
         "DIALECT": "Rho",
-        "DISCOVER": "Discover ME Q-Val",
-        "Fisher's Exact Test": "Fisher's ME Q-Val",
+        "DISCOVER": "Discover ME P-Val",
+        "Fisher's Exact Test": "Fisher's ME P-Val",
         "MEGSA": "MEGSA S-Score (LRT)",
-        "WeSME": "WeSME Q-Val",
+        "WeSME": "WeSME P-Val",
     }
 
     fractions = {}
