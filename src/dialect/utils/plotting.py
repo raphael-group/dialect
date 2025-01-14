@@ -143,12 +143,13 @@ def draw_network_gridplot_across_methods(
     decoy_genes,
     results_df,
 ):
+    # TODO: move this to shared location to use across this and decoy gene plot
     methods = {
         "DIALECT": "Rho",
-        "DISCOVER": "Discover ME Q-Val",
-        "Fisher's Exact Test": "Fisher's ME Q-Val",
+        "DISCOVER": "Discover ME P-Val",
+        "Fisher's Exact Test": "Fisher's ME P-Val",
         "MEGSA": "MEGSA S-Score (LRT)",
-        "WeSME": "WeSME Q-Val",
+        "WeSME": "WeSME P-Val",
     }
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
