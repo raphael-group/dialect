@@ -53,12 +53,24 @@ def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
     logging.info("Running Fisher's exact test...")
     # TODO: modify run_fisher_exact_analysis to directly return a dataframe
     fisher_results = run_fishers_exact_analysis(interactions)
-    fisher_df = results_to_dataframe(fisher_results, "Fisher's ME Q-Val", "Fisher's CO Q-Val")
+    fisher_df = results_to_dataframe(
+        fisher_results,
+        "Fisher's ME P-Val",
+        "Fisher's CO P-Val",
+        "Fisher's ME Q-Val",
+        "Fisher's CO Q-Val",
+    )
 
     logging.info("Running DISCOVER...")
     # TODO: modify run_discover_analysis to directly return a dataframe
     discover_results = run_discover_analysis(cnt_df, top_genes, interactions)
-    discover_df = results_to_dataframe(discover_results, "Discover ME Q-Val", "Discover CO Q-Val")
+    discover_df = results_to_dataframe(
+        discover_results,
+        "Discover ME P-Val",
+        "Discover CO P-Val",
+        "Discover ME Q-Val",
+        "Discover CO Q-Val",
+    )
 
     logging.info("Running MEGSA...")
     megsa_df = run_megsa_analysis(cnt_df, interactions)
