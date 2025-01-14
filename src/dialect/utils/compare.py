@@ -10,7 +10,7 @@ from dialect.utils.wesme import run_wesme_analysis
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
-def results_to_dataframe(results, me_col, co_col):
+def results_to_dataframe(results, me_pcol, co_pcol, me_qcol, co_qcol):
     """
     Converts a results dictionary into a pandas DataFrame.
 
@@ -26,10 +26,12 @@ def results_to_dataframe(results, me_col, co_col):
             {
                 "Gene A": key.split(":")[0],
                 "Gene B": key.split(":")[1],
-                me_col: qvals["me_qval"],
-                co_col: qvals["co_qval"],
+                me_pcol: vals["me_pval"],
+                co_pcol: vals["co_pval"],
+                me_qcol: vals["me_qval"],
+                co_qcol: vals["co_qval"],
             }
-            for key, qvals in results.items()
+            for key, vals in results.items()
         ]
     )
 
@@ -51,16 +53,12 @@ def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
     logging.info("Running Fisher's exact test...")
     # TODO: modify run_fisher_exact_analysis to directly return a dataframe
     fisher_results = run_fishers_exact_analysis(interactions)
-    fisher_df = results_to_dataframe(
-        fisher_results, "Fisher's ME Q-Val", "Fisher's CO Q-Val"
-    )
+    fisher_df = results_to_dataframe(fisher_results, "Fisher's ME Q-Val", "Fisher's CO Q-Val")
 
     logging.info("Running DISCOVER...")
     # TODO: modify run_discover_analysis to directly return a dataframe
     discover_results = run_discover_analysis(cnt_df, top_genes, interactions)
-    discover_df = results_to_dataframe(
-        discover_results, "Discover ME Q-Val", "Discover CO Q-Val"
-    )
+    discover_df = results_to_dataframe(discover_results, "Discover ME Q-Val", "Discover CO Q-Val")
 
     logging.info("Running MEGSA...")
     megsa_df = run_megsa_analysis(cnt_df, interactions)
