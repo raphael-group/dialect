@@ -64,35 +64,32 @@ def compute_decoy_gene_fraction_across_methods(ixn_res_df, decoy_genes, k):
         ).head(k)
 
         pairs_with_at_least_one_decoy_gene = (
-            top_ranking["Gene A"].isin(decoy_genes)
-            | top_ranking["Gene B"].isin(decoy_genes)
+            top_ranking["Gene A"].isin(decoy_genes) | top_ranking["Gene B"].isin(decoy_genes)
         ).sum()
         fractions[method] = pairs_with_at_least_one_decoy_gene / top_ranking.shape[0]
 
     return fractions
 
 
-def compute_decoy_gene_fractions_across_subtypes(results_dir, decoy_genes_dir, top_k):
+def compute_decoy_gene_fractions_across_subtypes(
+    results_dir,
+    decoy_genes_dir,
+    top_k,
+):
     subtypes = os.listdir(results_dir)
     subtype_decoy_gene_fractions = {}
     for subtype in subtypes:
-        results_fn = os.path.join(
-            results_dir, subtype, "complete_pairwise_ixn_results.csv"
-        )
+        results_fn = os.path.join(results_dir, subtype, "complete_pairwise_ixn_results.csv")
         decoy_genes_fn = os.path.join(decoy_genes_dir, f"{subtype}_decoy_genes.txt")
         if not os.path.exists(results_fn) or not os.path.exists(decoy_genes_fn):
             logging.info(f"Skipping {subtype} since input files not found")
             continue
         ixn_res_df = pd.read_csv(results_fn)
-        decoy_genes = set(
-            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"]
-        )
-        subtype_decoy_gene_fractions[subtype] = (
-            compute_decoy_gene_fraction_across_methods(
-                ixn_res_df,
-                decoy_genes,
-                k=top_k,
-            )
+        decoy_genes = set(pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"])
+        subtype_decoy_gene_fractions[subtype] = compute_decoy_gene_fraction_across_methods(
+            ixn_res_df,
+            decoy_genes,
+            k=top_k,
         )
 
     return subtype_decoy_gene_fractions
