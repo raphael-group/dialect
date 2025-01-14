@@ -59,9 +59,7 @@ def read_mut_list(filename, sep=",", samples=False, genes=True):
         else:
             slist = []
         for g in temp_dic:
-            if (
-                len(temp_dic) == 0
-            ):  # remove the entry if the gene is not mutated in any samples
+            if len(temp_dic) == 0:  # remove the entry if the gene is not mutated in any samples
                 continue
             rel_dic_list[g] = [int(x) for x in temp_dic[g].split(sep)]
         return rel_dic_list, slist
@@ -85,9 +83,7 @@ def read_mut_matrix(filename, mw=3, mutsig_file=None):
     data_dic = {}
 
     if mutsig_file is not None:  # if mutsig file is given
-        mutsig = pd.read_table(mutsig_file, sep=" ", index_col=0).to_dict()[
-            "mutsig_score"
-        ]
+        mutsig = pd.read_table(mutsig_file, sep=" ", index_col=0).to_dict()["mutsig_score"]
         mutsig_data_dic = {}
         for g in data_dic:
             # multiply mutsig_score to the gene
@@ -96,9 +92,7 @@ def read_mut_matrix(filename, mw=3, mutsig_file=None):
 
     elif mw > 0:  # convert based on weight_dic/mw
         # weight_dic = dict([('N', 0), ('C', 1), ('M', mw), ('B', mw+1)])
-        weight_dic = dict(
-            [("N", 0), ("A", 1), ("D", 1), ("M", mw), ("AM", mw + 1), ("DM", mw + 1)]
-        )
+        weight_dic = dict([("N", 0), ("A", 1), ("D", 1), ("M", mw), ("AM", mw + 1), ("DM", mw + 1)])
         for l in lines[1:]:
             tkns = l.split()
             data_dic[tkns[0]] = [float(weight_dic[x]) for x in tkns[1:]]
@@ -157,9 +151,7 @@ def write_dic(any_dic, filename, labels=None):
 def create_type_idx(samples, types, sample_type_dic):
     type_idx_dic = {}
     for ty in types:
-        type_idx_dic[ty] = filter(
-            lambda i: sample_type_dic[samples[i]] == ty, range(len(samples))
-        )
+        type_idx_dic[ty] = filter(lambda i: sample_type_dic[samples[i]] == ty, range(len(samples)))
 
     return type_idx_dic
 
@@ -238,9 +230,7 @@ def choose_random_tuples(ws_num, tsize, tnum, slack=0.3, max_attempts=100):
     return list(rtuples)[:tnum]  # Return the desired number of tuples
 
 
-def compute_ws_cover_sizes(
-    cover_sizes, ws_k_cover_dic, tuple_num, ws_ex_cover_sizes_dic
-):
+def compute_ws_cover_sizes(cover_sizes, ws_k_cover_dic, tuple_num, ws_ex_cover_sizes_dic):
     cover_sizes_key = gen_key(cover_sizes)
     if (
         cover_sizes_key not in ws_ex_cover_sizes_dic
@@ -270,9 +260,7 @@ def compute_ws_cover_sizes(
             len(compute_ex_cover(random_covers[i])) for i in range(len(random_covers))
         ]  # NULL ex_cover_sizes
         ws_ex_cover_sizes.sort()  # for efficiency
-        ws_ex_cover_sizes_dic[cover_sizes_key] = (
-            ws_ex_cover_sizes  # update ws_ex_cover_sizes_dic
-        )
+        ws_ex_cover_sizes_dic[cover_sizes_key] = ws_ex_cover_sizes  # update ws_ex_cover_sizes_dic
     else:  # reuse if already in the dictionary
         ws_ex_cover_sizes = ws_ex_cover_sizes_dic[cover_sizes_key]
 
@@ -370,9 +358,7 @@ def construct_mut_graph_per_type(mut_dic, cancers, type_idx_dic):
         mut_sam_idxs = misc.get_positives(mut_dic[gene])
         for cancer in cancers:
             # create edges to mutated samples in a given cancer type
-            edges = [
-                (gene, s) for s in set(type_idx_dic[cancer]).intersection(mut_sam_idxs)
-            ]
+            edges = [(gene, s) for s in set(type_idx_dic[cancer]).intersection(mut_sam_idxs)]
             mut_graphs[cancer].add_edges_from(edges)
     return mut_graphs
 
@@ -386,9 +372,7 @@ def construct_mut_graph_per_type_from_list(mut_list_dic, cancers, type_idx_dic):
         mut_sam_idxs = mut_list_dic[gene]
         for cancer in cancers:
             # create edges to mutated samples in a given cancer type
-            edges = [
-                (gene, s) for s in set(type_idx_dic[cancer]).intersection(mut_sam_idxs)
-            ]
+            edges = [(gene, s) for s in set(type_idx_dic[cancer]).intersection(mut_sam_idxs)]
             mut_graphs[cancer].add_edges_from(edges)
     return mut_graphs
 
@@ -470,9 +454,7 @@ def run_weighted_sampling(mut_fn, freq_fn, rnum, dout, use_all=False):
     for k in all_ks:
         if k == 0:
             continue
-        ws_file = open(
-            os.path.join(cur_wrs_dir, "_".join(["wr", str(k), str(rnum)]) + ".txt"), "w"
-        )
+        ws_file = open(os.path.join(cur_wrs_dir, "_".join(["wr", str(k), str(rnum)]) + ".txt"), "w")
         for i in range(rnum):
             wsamples = np.random.choice(range(nsamples), k, p=freqs, replace=False)
             ws_file.write("%s\n" % ",".join([str(idx) for idx in wsamples]))
@@ -489,9 +471,7 @@ def compute_pairwise_pvalues(mut_fn, dout, gene_pairs):
     ws_k_cover_dic = {}
     for kf in kfiles:
         k = int(kf.split(".")[0].split("_")[1])
-        ws_k_cover_dic[k], samples = read_mut_list(
-            os.path.join(cur_wrs_dir, kf), genes=False
-        )
+        ws_k_cover_dic[k], samples = read_mut_list(os.path.join(cur_wrs_dir, kf), genes=False)
 
     ws_me_pv_dic, ws_me_ex_cover_sizes_dic = {}, {}
     ws_co_pv_dic, ws_co_ex_cover_sizes_dic = {}, {}
@@ -514,9 +494,7 @@ def compute_pairwise_pvalues(mut_fn, dout, gene_pairs):
         )
         ws_me_pv_dic[gene_pair] = ws_me_pv  # WeSME pvalue
         ws_co_pv_dic[gene_pair] = ws_co_pv  # WeSCO pvalue
-        jaccard_dic[gene_pair] = compute_jaccard(
-            mut_list_dic[gene_a], mut_list_dic[gene_b]
-        )
+        jaccard_dic[gene_pair] = compute_jaccard(mut_list_dic[gene_a], mut_list_dic[gene_b])
         fisher_co_pv_dic[gene_pair] = compute_co_pv_hypergeom(
             mut_list_dic[gene_a], mut_list_dic[gene_b], nsamples
         )
@@ -527,9 +505,9 @@ def compute_pairwise_pvalues(mut_fn, dout, gene_pairs):
         {
             "Gene A": [g[0] for g in ws_me_pv_dic.keys()],
             "Gene B": [g[1] for g in ws_me_pv_dic.keys()],
-            # "WeSME P-Val": list(ws_me_pv_dic.values()),
+            "WeSME P-Val": list(ws_me_pv_dic.values()),
+            "WeSCO P-Val": list(ws_co_pv_dic.values()),
             "WeSME Q-Val": ws_me_qv,
-            # "WeSCO P-Val": list(ws_co_pv_dic.values()),
             "WeSCO Q-Val": ws_co_qv,
             # "jaccard": list(jaccard_dic.values()),
             # "fisher_co_pv": list(fisher_co_pv_dic.values()),
