@@ -1,8 +1,10 @@
 import os
 import pandas as pd
+import networkx as nx
 
 from itertools import product
 from matplotlib import rcParams
+from matplotlib.patches import FancyBboxPatch, BoxStyle
 from plotnine import (
     ggplot,
     aes,
@@ -27,8 +29,14 @@ rcParams["font.serif"] = ["Computer Modern"]
 rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
 
 
+DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
+DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
+DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
+EDGE_COLOR = "black"
+
+
 # ---------------------------------------------------------------------------- #
-#                                 MAIN FUNCTION                                #
+#                                MAIN FUNCTIONS                                #
 # ---------------------------------------------------------------------------- #
 def plot_decoy_gene_fractions(data_filepath, out_dir):
     df = pd.read_csv(data_filepath)
@@ -38,15 +46,9 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
     shapes = ["o", "s", "^", "D"]  # Circle, square, triangle, diamond
 
     color_shape_combinations = list(product(colors, shapes))
-    color_shape_mapping = {
-        subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))
-    }
-    color_mapping = {
-        subtype: combo[0] for subtype, combo in color_shape_mapping.items()
-    }
-    shape_mapping = {
-        subtype: combo[1] for subtype, combo in color_shape_mapping.items()
-    }
+    color_shape_mapping = {subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))}
+    color_mapping = {subtype: combo[0] for subtype, combo in color_shape_mapping.items()}
+    shape_mapping = {subtype: combo[1] for subtype, combo in color_shape_mapping.items()}
 
     # Create the Plot
     plot = (
@@ -92,5 +94,36 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
 
     # Step 4: Save Plot
     os.makedirs(out_dir, exist_ok=True)
-    plot.save(f"{out_dir}/decoy_gene_fractions_boxplot_plotnine.svg", dpi=300)
-    print(f"Plot saved to {out_dir}/decoy_gene_fractions_boxplot_plotnine.svg")
+    plot.save(f"{out_dir}/decoy_gene_fractions_boxplot.svg", dpi=300)
+    print(f"Plot saved to {out_dir}/decoy_gene_fractions_boxplot.svg")
+
+
+def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
+    nx.draw_networkx_edges(G, pos, ax=ax, edge_color=EDGE_COLOR, width=2)
+
+    if node_colors is None:
+        node_colors = [DEFAULT_GENE_COLOR] * len(G.nodes)
+
+    for node, (x, y), color in zip(G.nodes, pos.values(), node_colors):
+        label = labels[node] if labels else str(node)
+        bbox = FancyBboxPatch(
+            (x - 0.08, y),
+            0.16,
+            0,
+            boxstyle=BoxStyle.Round(pad=0.08),
+            edgecolor=EDGE_COLOR,
+            facecolor=color,
+            linewidth=1,
+        )
+        ax.add_patch(bbox)
+        ax.text(
+            x,
+            y,
+            label,
+            horizontalalignment="center",
+            verticalalignment="center",
+            fontsize=9,
+            bbox=dict(facecolor="none", edgecolor="none"),
+        )
+    ax.set_aspect("equal")
+    ax.axis("off")
