@@ -57,7 +57,16 @@ def extract_discover_results(interactions, me_results, co_results):
     for interaction in interactions:
         gene_a = interaction.gene_a.name
         gene_b = interaction.gene_b.name
-
+        me_pval = (
+            me_results.pvalues.loc[gene_a, gene_b]
+            if not pd.isna(me_results.pvalues.loc[gene_a, gene_b])
+            else me_results.pvalues.loc[gene_b, gene_a]
+        )
+        co_pval = (
+            co_results.pvalues.loc[gene_a, gene_b]
+            if not pd.isna(co_results.pvalues.loc[gene_a, gene_b])
+            else co_results.pvalues.loc[gene_b, gene_a]
+        )
         me_qval = (
             me_results.qvalues.loc[gene_a, gene_b]
             if not pd.isna(me_results.qvalues.loc[gene_a, gene_b])
@@ -69,7 +78,12 @@ def extract_discover_results(interactions, me_results, co_results):
             else co_results.qvalues.loc[gene_b, gene_a]
         )
 
-        results[interaction.name] = {"me_qval": me_qval, "co_qval": co_qval}
+        results[interaction.name] = {
+            "me_pval": me_pval,
+            "co_pval": co_pval,
+            "me_qval": me_qval,
+            "co_qval": co_qval,
+        }
 
     return results
 
