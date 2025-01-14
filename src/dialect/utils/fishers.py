@@ -32,7 +32,12 @@ def run_fishers_exact_analysis(interactions):
 
     # Step 3: Create the final dictionary with q-values
     fisher_results = {
-        name: {"me_qval": me_qvals[i], "co_qval": co_qvals[i]}
+        name: {
+            "me_pval": me_pvals[i],
+            "co_pval": co_pvals[i],
+            "me_qval": me_qvals[i],
+            "co_qval": co_qvals[i],
+        }
         for i, name in enumerate(interaction_names)
     }
 
