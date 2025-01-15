@@ -35,6 +35,7 @@ DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
 DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
 EPSILON = 0.02  # DIALECT Threshold for Tau_1X and Tau_X1
+PVALUE_THRESHOLD = 0.05
 
 
 # ---------------------------------------------------------------------------- #
@@ -171,11 +172,17 @@ def draw_network_gridplot_across_methods(
         elif method == "MEGSA":
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
         elif method == "DISCOVER":
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Discover ME P-Val"] < 0.05]
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["Discover ME P-Val"] < PVALUE_THRESHOLD
+            ]
         elif method == "Fisher's Exact Test":
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Fisher's ME P-Val"] < 0.05]
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["Fisher's ME P-Val"] < PVALUE_THRESHOLD
+            ]
         elif method == "WeSME":
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["WeSME P-Val"] < 0.05]
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["WeSME P-Val"] < PVALUE_THRESHOLD
+            ]
 
         edges = top_ranking_pairs[["Gene A", "Gene B"]].values
         G = nx.Graph()
