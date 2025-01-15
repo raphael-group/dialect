@@ -5,7 +5,7 @@ import pandas as pd
 from argparse import ArgumentParser
 from dialect.utils.plotting import plot_decoy_gene_fractions
 
-EPSILON = 0.05  # DIALECT Threshold for Tau_1X and Tau_X1
+EPSILON_MUTATION_COUNT = 10
 PVALUE_THRESHOLD = 1  # Treshold for other methods
 
 
@@ -48,7 +48,12 @@ def build_argument_parser():
 # ---------------------------------------------------------------------------- #
 #                                MAIN FUNCTIONS                                #
 # ---------------------------------------------------------------------------- #
-def compute_decoy_gene_fraction_across_methods(ixn_res_df, decoy_genes, k):
+def compute_decoy_gene_fraction_across_methods(
+    ixn_res_df,
+    decoy_genes,
+    num_samples,
+    k,
+):
     if ixn_res_df.empty:
         raise ValueError("Input DataFrame is empty")
 
@@ -68,10 +73,11 @@ def compute_decoy_gene_fraction_across_methods(ixn_res_df, decoy_genes, k):
 
         # TODO: UNIFY THIS INTO A HELPER FUNCTION TO USE ACROSS ANALYSIS MODULES
         if method == "DIALECT":
+            epsilon = EPSILON_MUTATION_COUNT / num_samples
             top_ranking_pairs = top_ranking_pairs[
                 (top_ranking_pairs["Rho"] < 0)
-                & (top_ranking_pairs["Tau_1X"] > EPSILON)
-                & (top_ranking_pairs["Tau_X1"] > EPSILON)
+                & (top_ranking_pairs["Tau_1X"] > epsilon)
+                & (top_ranking_pairs["Tau_X1"] > epsilon)
             ]
         elif method == "MEGSA":
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
@@ -109,15 +115,18 @@ def compute_decoy_gene_fractions_across_subtypes(
     subtype_decoy_gene_fractions = {}
     for subtype in subtypes:
         results_fn = os.path.join(results_dir, subtype, "complete_pairwise_ixn_results.csv")
+        cnt_mtx_fn = os.path.join(args.results_dir, subtype, "count_matrix.csv")
         decoy_genes_fn = os.path.join(decoy_genes_dir, f"{subtype}_decoy_genes.txt")
         if not os.path.exists(results_fn) or not os.path.exists(decoy_genes_fn):
             logging.info(f"Skipping {subtype} since input files not found")
             continue
         ixn_res_df = pd.read_csv(results_fn)
         decoy_genes = set(pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"])
+        num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         subtype_decoy_gene_fractions[subtype] = compute_decoy_gene_fraction_across_methods(
             ixn_res_df,
             decoy_genes,
+            num_samples,
             k=top_k,
         )
 
