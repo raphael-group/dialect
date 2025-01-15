@@ -51,7 +51,7 @@ def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
         label = labels[node] if labels else str(node)
         bbox = FancyBboxPatch(
             (x - 0.08, y),
-            0.16,
+            0.16,  # width
             0,
             boxstyle=BoxStyle.Round(pad=0.08),
             edgecolor=EDGE_COLOR,
@@ -146,7 +146,6 @@ def draw_network_gridplot_across_methods(
     results_df,
     num_samples,
 ):
-    # TODO: move this to shared location to use across this and decoy gene plot
     methods = {
         "DIALECT": "Rho",
         "DISCOVER": "Discover ME P-Val",
@@ -165,7 +164,6 @@ def draw_network_gridplot_across_methods(
         ).head(top_k)
 
         if method == "DIALECT":
-            # i want to set the epsilon proportionally to the number of samples
             epsilon = EPSILON_MUTATION_COUNT / num_samples
             top_ranking_pairs = top_ranking_pairs[
                 (top_ranking_pairs["Rho"] < 0)
@@ -191,6 +189,20 @@ def draw_network_gridplot_across_methods(
         G = nx.Graph()
         G.add_edges_from(edges)
 
+        if G.number_of_edges() == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No Interactions Identified",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax.transAxes,
+                fontsize=32,
+                color="dimgray",
+            )
+            ax.axis("off")
+            continue
+
         node_colors = []
         for node in G.nodes:
             if node in decoy_genes:
@@ -200,11 +212,15 @@ def draw_network_gridplot_across_methods(
             else:
                 node_colors.append(DEFAULT_GENE_COLOR)
 
-        pos = nx.circular_layout(G)
+        if G.number_of_nodes() == 2:
+            pos = nx.spring_layout(G, seed=42)
+        else:
+            pos = nx.circular_layout(G)
+
         labels = {node: node for node in G.nodes}
         draw_network_plot(ax, G, pos, labels, node_colors)
-    plt.subplots_adjust(hspace=6, wspace=2)
 
+    plt.subplots_adjust(hspace=6, wspace=2)
     legend_ax = axes[1, 2]
     legend_ax.axis("off")
     legend_ax.legend(
@@ -217,7 +233,7 @@ def draw_network_gridplot_across_methods(
                 markersize=50,
                 linestyle="None",
                 label="Driver Gene",
-            ),  # Driver gene
+            ),
             plt.Line2D(
                 [0],
                 [0],
@@ -226,7 +242,7 @@ def draw_network_gridplot_across_methods(
                 markersize=50,
                 linestyle="None",
                 label="Passenger Gene",
-            ),  # Default gene
+            ),
             plt.Line2D(
                 [0],
                 [0],
@@ -235,20 +251,15 @@ def draw_network_gridplot_across_methods(
                 markersize=50,
                 linestyle="None",
                 label="Decoy Passenger Gene",
-            ),  # Decoy gene
+            ),
             plt.Line2D(
-                [0],
-                [0],
-                linestyle="-",
-                color="black",
-                linewidth=4,
-                label="Mutual Exclusivity",
+                [0], [0], linestyle="-", color="black", linewidth=4, label="Mutual Exclusivity"
             ),
         ],
         labelspacing=2,
         borderpad=1.5,
         loc="center",
-        fontsize=24,  # Larger font size
+        fontsize=24,
     )
 
     plt.tight_layout(pad=0.5)
