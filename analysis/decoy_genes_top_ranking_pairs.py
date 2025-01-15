@@ -5,6 +5,9 @@ import pandas as pd
 from argparse import ArgumentParser
 from dialect.utils.plotting import plot_decoy_gene_fractions
 
+EPSILON = 0.05  # DIALECT Threshold for Tau_1X and Tau_X1
+PVALUE_THRESHOLD = 1  # Treshold for other methods
+
 
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
@@ -59,14 +62,40 @@ def compute_decoy_gene_fraction_across_methods(ixn_res_df, decoy_genes, k):
 
     fractions = {}
     for method, column in methods.items():
-        top_ranking = ixn_res_df.sort_values(
+        top_ranking_pairs = ixn_res_df.sort_values(
             column, ascending=column != "MEGSA S-Score (LRT)"
         ).head(k)
 
+        # TODO: UNIFY THIS INTO A HELPER FUNCTION TO USE ACROSS ANALYSIS MODULES
+        if method == "DIALECT":
+            top_ranking_pairs = top_ranking_pairs[
+                (top_ranking_pairs["Rho"] < 0)
+                & (top_ranking_pairs["Tau_1X"] > EPSILON)
+                & (top_ranking_pairs["Tau_X1"] > EPSILON)
+            ]
+        elif method == "MEGSA":
+            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
+        elif method == "DISCOVER":
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["Discover ME P-Val"] < PVALUE_THRESHOLD
+            ]
+        elif method == "Fisher's Exact Test":
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["Fisher's ME P-Val"] < PVALUE_THRESHOLD
+            ]
+        elif method == "WeSME":
+            top_ranking_pairs = top_ranking_pairs[
+                top_ranking_pairs["WeSME P-Val"] < PVALUE_THRESHOLD
+            ]
+
         pairs_with_at_least_one_decoy_gene = (
-            top_ranking["Gene A"].isin(decoy_genes) | top_ranking["Gene B"].isin(decoy_genes)
+            top_ranking_pairs["Gene A"].isin(decoy_genes)
+            | top_ranking_pairs["Gene B"].isin(decoy_genes)
         ).sum()
-        fractions[method] = pairs_with_at_least_one_decoy_gene / top_ranking.shape[0]
+        if top_ranking_pairs.shape[0] == 0:
+            fractions[method] = 0
+        else:
+            fractions[method] = pairs_with_at_least_one_decoy_gene / top_ranking_pairs.shape[0]
 
     return fractions
 
