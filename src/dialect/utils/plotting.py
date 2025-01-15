@@ -34,7 +34,7 @@ DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
 DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
 DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
-EPSILON_MUTATION_COUNT = 20  # minimum count of mutations
+EPSILON_MUTATION_COUNT = 10  # minimum count of mutations
 PVALUE_THRESHOLD = 1
 
 
@@ -144,6 +144,7 @@ def draw_network_gridplot_across_methods(
     driver_genes,
     decoy_genes,
     results_df,
+    num_samples,
 ):
     # TODO: move this to shared location to use across this and decoy gene plot
     methods = {
@@ -153,8 +154,6 @@ def draw_network_gridplot_across_methods(
         "MEGSA": "MEGSA S-Score (LRT)",
         "WeSME": "WeSME P-Val",
     }
-
-    num_samples = results_df.shape[0]
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     fig.suptitle(f"Top 10 Ranked ME Pairs in {subtype}", fontsize=42, y=0.999)
