@@ -34,8 +34,8 @@ DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
 DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
 DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
-EPSILON = 0.02  # DIALECT Threshold for Tau_1X and Tau_X1
-PVALUE_THRESHOLD = 0.05
+EPSILON = 0.05  # DIALECT Threshold for Tau_1X and Tau_X1
+PVALUE_THRESHOLD = 1
 
 
 # ---------------------------------------------------------------------------- #
