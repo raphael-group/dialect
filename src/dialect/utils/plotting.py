@@ -34,7 +34,7 @@ DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
 DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
 DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
-EPSILON = 0.05  # DIALECT Threshold for Tau_1X and Tau_X1
+EPSILON_MUTATION_COUNT = 20  # minimum count of mutations
 PVALUE_THRESHOLD = 1
 
 
@@ -154,6 +154,8 @@ def draw_network_gridplot_across_methods(
         "WeSME": "WeSME P-Val",
     }
 
+    num_samples = results_df.shape[0]
+
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     fig.suptitle(f"Top 10 Ranked ME Pairs in {subtype}", fontsize=42, y=0.999)
     for idx, (method, col) in enumerate(methods.items()):
@@ -164,10 +166,12 @@ def draw_network_gridplot_across_methods(
         ).head(top_k)
 
         if method == "DIALECT":
+            # i want to set the epsilon proportionally to the number of samples
+            epsilon = EPSILON_MUTATION_COUNT / num_samples
             top_ranking_pairs = top_ranking_pairs[
                 (top_ranking_pairs["Rho"] < 0)
-                & (top_ranking_pairs["Tau_1X"] > EPSILON)
-                & (top_ranking_pairs["Tau_X1"] > EPSILON)
+                & (top_ranking_pairs["Tau_1X"] > epsilon)
+                & (top_ranking_pairs["Tau_X1"] > epsilon)
             ]
         elif method == "MEGSA":
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
