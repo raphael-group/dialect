@@ -2,10 +2,9 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from argparse import ArgumentParser
 
-EPSILON_MUTATION_COUNT = 10
-PVALUE_THRESHOLD = 1
+from argparse import ArgumentParser
+from dialect.utils.postprocessing import generate_top_ranking_tables
 
 
 # ---------------------------------------------------------------------------- #
@@ -15,13 +14,13 @@ def build_argument_parser():
     """
     We do NOT modify this parser, as requested.
     """
-    parser = ArgumentParser(description="Generate LaTeX tables for top ME pairs across methods.")
+    parser = ArgumentParser(description="Generate LaTeX tables for top pairs across methods.")
     parser.add_argument(
-        "-k",
-        "--top_k",
+        "-n",
+        "--num_pairs",
         type=int,
         default=10,
-        help="Number of top ranking pairs to visualize",
+        help="Number of top ranking pairs to include in table",
     )
     parser.add_argument(
         "-r",
@@ -34,22 +33,33 @@ def build_argument_parser():
         "-dvr",
         "--driver_genes_fn",
         type=str,
-        required=True,
+        default="data/references/OncoKB_Cancer_Gene_List.tsv",
         help="File with driver genes",
     )
     parser.add_argument(
         "-d",
         "--decoy_genes_dir",
         type=str,
-        required=True,
+        default="data/decoy_genes",
         help="Directory with all decoy gene files",
     )
     parser.add_argument(
         "-o",
         "--out",
         type=str,
-        required=True,
+        default="tables",
         help="Output directory for tex files",
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--me",
+        action="store_true",
+        help="Perform analysis for mutual exclusivity",
+    )
+    group.add_argument(
+        "--co",
+        action="store_true",
+        help="Perform analysis for co-occurrence",
     )
     return parser
 
@@ -94,7 +104,7 @@ def escape_gene_name(gene_name):
     return gene_name.replace("_M", r"\_M").replace("_N", r"\_N")
 
 
-def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels):
+def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels, is_me):
     """
     Builds a LaTeX fragment for the given set of methods in a single row of columns.
     E.g., ["DIALECT","DISCOVER","Fisher's Exact Test"] -> a 3-method tabular.
@@ -103,7 +113,7 @@ def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels):
     col_spec = "||".join(["cc"] * num_methods)
 
     lines = []
-    lines.append(r"\renewcommand{\arraystretch}{1.2}")  # Slightly bigger spacing
+    lines.append(r"\renewcommand{\arraystretch}{1.2}")
     lines.append(r"\begin{tabular}{" + col_spec + r"}")
     lines.append(r"\hline")
 
@@ -114,7 +124,8 @@ def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels):
 
     subheader_parts = []
     for method in methods_list:
-        subheader_parts.append("ME Gene Pair")
+        col_name = "ME Gene Pair" if is_me else "CO Gene Pair"
+        subheader_parts.append(col_name)
         subheader_parts.append(metric_labels[method])
     lines.append(" & ".join(subheader_parts) + r" \\ \hline")
 
@@ -140,7 +151,7 @@ def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels):
 # ---------------------------------------------------------------------------- #
 #                                MAIN FUNCTIONS                                #
 # ---------------------------------------------------------------------------- #
-def create_final_table(subtype, top_pairs_by_method, top_k):
+def create_final_table(subtype, top_pairs_by_method, num_pairs, is_me):
     """
     Creates one big table environment with two "sub-tables":
      - First row (3 methods): DIALECT, DISCOVER, Fisher's Exact Test
@@ -153,26 +164,30 @@ def create_final_table(subtype, top_pairs_by_method, top_k):
         "Fisher's Exact Test": "p-value",
         "MEGSA": "S-Score",
         "WeSME": "p-value",
+        "WeSCO": "p-value",
     }
 
     top_row_methods = ["DIALECT", "DISCOVER", "Fisher's Exact Test"]
-    bottom_row_methods = ["MEGSA", "WeSME"]
+    bottom_row_methods = ["MEGSA"]
+    if is_me:
+        bottom_row_methods.append("WeSME")
+    else:
+        bottom_row_methods.append("WeSCO")
 
-    top_subtable = build_subtable_latex(top_row_methods, top_pairs_by_method, metric_labels)
-    bottom_subtable = build_subtable_latex(bottom_row_methods, top_pairs_by_method, metric_labels)
+    top_subtable = build_subtable_latex(top_row_methods, top_pairs_by_method, metric_labels, is_me)
+    bottom_subtable = build_subtable_latex(
+        bottom_row_methods, top_pairs_by_method, metric_labels, is_me
+    )
 
     lines = []
     lines.append(r"\begin{table}[htbp]")
     lines.append(r"\centering")
 
-    # Top sub-table (DIALECT, DISCOVER, FET)
     lines.append(top_subtable)
-    # Tiny vertical gap
     lines.append(r"\vspace{-0.2cm}")
-    # Bottom sub-table (MEGSA, WeSME)
     lines.append(bottom_subtable)
 
-    lines.append(rf"\caption{{Top {top_k} ranked ME pairs across methods in {subtype}}}")
+    lines.append(rf"\caption{{Top {num_pairs} ranked ME pairs across methods in {subtype}}}")
     lines.append(r"\label{tab:" + subtype + "}")
     lines.append(r"\end{table}")
 
@@ -185,99 +200,46 @@ if __name__ == "__main__":
 
     os.makedirs(args.out, exist_ok=True)
 
-    methods_info = {
-        "DIALECT": {
-            "column": "Rho",
-            "ascending": True,
-        },
-        "DISCOVER": {
-            "column": "Discover ME P-Val",
-            "ascending": True,
-        },
-        "Fisher's Exact Test": {
-            "column": "Fisher's ME P-Val",
-            "ascending": True,
-        },
-        "MEGSA": {
-            "column": "MEGSA S-Score (LRT)",
-            "ascending": False,
-        },
-        "WeSME": {
-            "column": "WeSME P-Val",
-            "ascending": True,
-        },
-    }
-
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
         results_fn = os.path.join(args.results_dir, subtype, "complete_pairwise_ixn_results.csv")
         cnt_mtx_fn = os.path.join(args.results_dir, subtype, "count_matrix.csv")
-        num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
-        if not os.path.exists(results_fn):
+        if not os.path.exists(results_fn) or not os.path.exists(cnt_mtx_fn):
             logging.info(f"Skipping {subtype}: file not found.")
             continue
+        num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
-
+        top_tables = generate_top_ranking_tables(
+            results_df=results_df,
+            is_me=args.me,
+            num_pairs=args.num_pairs,
+            num_samples=num_samples,
+        )
         top_pairs_by_method = {}
-        for method_name, info in methods_info.items():
-            col_name = info["column"]
-            ascending = info["ascending"]
-
-            if col_name not in results_df.columns:
-                logging.warning(
-                    f"Column {col_name} not found in {results_fn} for {subtype}. Skipping {method_name}."
-                )
+        for method_name, method_df in top_tables.items():
+            if method_df is None or method_df.empty:
+                logging.info(f"No top pairs for method: {method_name}")
                 top_pairs_by_method[method_name] = []
                 continue
-
-            # 1) Subset as per the method's rules
-            method_df = results_df.copy()
-
-            if method_name == "DIALECT":
-                epsilon = EPSILON_MUTATION_COUNT / num_samples
-                method_df = method_df[method_df["Rho"] < 0]
-                method_df = method_df[
-                    (method_df["Tau_1X"] > epsilon) & (method_df["Tau_X1"] > epsilon)
-                ]
-
-            if method_name == "MEGSA":
-                method_df = method_df[method_df["MEGSA S-Score (LRT)"] > 0]
-
-            if method_name == "DISCOVER":
-                method_df = method_df[method_df["Discover ME P-Val"] < PVALUE_THRESHOLD]
-
-            if method_name == "Fisher's Exact Test":
-                method_df = method_df[method_df["Fisher's ME P-Val"] < PVALUE_THRESHOLD]
-
-            if method_name == "WeSME":
-                method_df = method_df[method_df["WeSME P-Val"] < PVALUE_THRESHOLD]
-
-            # 2) Sort by the column, then pick top K
-            if not method_df.empty:
-                method_df = method_df.sort_values(col_name, ascending=ascending).head(args.top_k)
-            else:
-                top_pairs_by_method[method_name] = []
-                continue
-
-            # 3) Construct the final list of (ME Gene Pair, value_str)
             pairs_list = []
+            metric_col_name = method_df.columns[-1]
             for _, row in method_df.iterrows():
                 geneA = escape_gene_name(str(row["Gene A"]))
                 geneB = escape_gene_name(str(row["Gene B"]))
-
+                metric_val = row[metric_col_name]
+                val_str = format_float(metric_val) if metric_val is not None else "N/A"
                 interaction_str = f"{geneA}:{geneB}"
-                val = row[col_name]
-                val_str = format_float(val)
                 pairs_list.append((interaction_str, val_str))
-
+            if method_name == "WeSME" and args.co:
+                method_name = "WeSCO"
             top_pairs_by_method[method_name] = pairs_list
 
-        # Build the final LaTeX table
-        latex_str = create_final_table(subtype, top_pairs_by_method, args.top_k)
-
-        # Save to file
-        out_filename = os.path.join(args.out, f"table_of_top_pairs_{subtype}.tex")
-        with open(out_filename, "w") as f:
+        latex_str = create_final_table(subtype, top_pairs_by_method, args.num_pairs, args.me)
+        if args.me:
+            fout = os.path.join(args.out, f"table_of_top_me_pairs_{subtype}.tex")
+        else:
+            fout = os.path.join(args.out, f"table_of_top_co_pairs_{subtype}.tex")
+        with open(fout, "w") as f:
             f.write(latex_str)
 
-        logging.info(f"Wrote LaTeX table for {subtype} to {out_filename}")
+        logging.info(f"Wrote LaTeX table for {subtype} to {fout}")
