@@ -26,13 +26,13 @@ CO_COLUMN_MAP = {
 # ---------------------------------------------------------------------------- #
 #                               HELPER FUNCTIONS                               #
 # ---------------------------------------------------------------------------- #
-def get_sort_column(method: str, meco: str) -> str:
+def get_sort_column(method, is_me):
     """
     Returns the column name to sort on, depending on method and whether
     we're doing ME or CO. Returns None if method doesn't apply to the
     chosen meco (e.g. MEGSA for co-occurrence).
     """
-    if meco == "ME":
+    if is_me:
         return ME_COLUMN_MAP.get(method, None)
     else:
         return CO_COLUMN_MAP.get(method, None)
