@@ -93,7 +93,6 @@ def filter_by_method(
             top_ranking_pairs = top_ranking_pairs[
                 top_ranking_pairs["WeSCO P-Val"] < PVALUE_THRESHOLD
             ]
-            top_ranking_pairs = top_ranking_pairs.rename(columns={"WeSCO P-Val": "WeSCO"})
 
     return top_ranking_pairs
 
@@ -131,6 +130,7 @@ def get_top_ranked_pairs_by_method(
     if top_ranking_pairs is None or top_ranking_pairs.empty:
         return None
     top_ranking_pairs = top_ranking_pairs.head(num_pairs)
+    top_ranking_pairs = top_ranking_pairs[["Gene A", "Gene B", sort_col]]
     return top_ranking_pairs
 
 
@@ -148,7 +148,7 @@ def generate_top_ranking_tables(
         top_df = get_top_ranked_pairs_by_method(
             results_df=results_df,
             method=method,
-            meco=meco,
+            meco=meco,  # TODO change this
             num_pairs=num_pairs,
             num_samples=num_samples,
         )
