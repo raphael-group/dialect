@@ -39,14 +39,17 @@ def get_sort_column(method: str, meco: str) -> str:
 
 
 def filter_by_method(
-    top_ranking_pairs: pd.DataFrame, method: str, meco: str, num_samples: int
-) -> pd.DataFrame:
+    top_ranking_pairs,
+    method,
+    is_me,
+    num_samples,
+):
     """
     Applies method-specific filters to the top_ranking_pairs DataFrame,
     depending on whether we're seeking ME or CO.
     Returns the filtered DataFrame or None if not applicable.
     """
-    if method == "MEGSA" and meco == "CO":
+    if method == "MEGSA" and not is_me:
         return None
 
     if method == "DIALECT":
@@ -55,7 +58,7 @@ def filter_by_method(
         top_ranking_pairs = top_ranking_pairs[
             (top_ranking_pairs["Tau_1X"] > epsilon) & (top_ranking_pairs["Tau_X1"] > epsilon)
         ]
-        if meco == "ME":
+        if is_me:
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] < 0]
         else:
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] > 0]
@@ -65,7 +68,7 @@ def filter_by_method(
         top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
 
     elif method == "DISCOVER":
-        if meco == "ME":
+        if is_me:
             top_ranking_pairs = top_ranking_pairs[
                 top_ranking_pairs["Discover ME P-Val"] < PVALUE_THRESHOLD
             ]
@@ -75,7 +78,7 @@ def filter_by_method(
             ]
 
     elif method == "Fisher's Exact Test":
-        if meco == "ME":
+        if is_me:
             top_ranking_pairs = top_ranking_pairs[
                 top_ranking_pairs["Fisher's ME P-Val"] < PVALUE_THRESHOLD
             ]
@@ -85,7 +88,7 @@ def filter_by_method(
             ]
 
     elif method == "WeSME":
-        if meco == "ME":
+        if is_me:
             top_ranking_pairs = top_ranking_pairs[
                 top_ranking_pairs["WeSME P-Val"] < PVALUE_THRESHOLD
             ]
@@ -100,7 +103,7 @@ def filter_by_method(
 def get_top_ranked_pairs_by_method(
     results_df,
     method,
-    meco,
+    is_me,
     num_pairs,
     num_samples,
 ):
@@ -110,14 +113,14 @@ def get_top_ranked_pairs_by_method(
     after applying the appropriate filters/sorting.
     Returns None if not applicable (e.g. MEGSA + CO).
     """
-    sort_col = get_sort_column(method, meco)
+    sort_col = get_sort_column(method, is_me)
     if sort_col is None:
         return None
 
     if method == "DIALECT":
         # sort rho ascending for ME and descending for CO
         # negative rho values indicate mutual exclusivity
-        ascending = meco == "ME"
+        ascending = is_me
     elif method == "MEGSA":
         # MEGSA uses LRT scores, which you sort descending
         ascending = False
@@ -126,7 +129,7 @@ def get_top_ranked_pairs_by_method(
         ascending = True
 
     top_ranking_pairs = results_df.sort_values(by=sort_col, ascending=ascending)
-    top_ranking_pairs = filter_by_method(top_ranking_pairs, method, meco, num_samples)
+    top_ranking_pairs = filter_by_method(top_ranking_pairs, method, is_me, num_samples)
     if top_ranking_pairs is None or top_ranking_pairs.empty:
         return None
     top_ranking_pairs = top_ranking_pairs.head(num_pairs)
@@ -135,7 +138,10 @@ def get_top_ranked_pairs_by_method(
 
 
 def generate_top_ranking_tables(
-    results_df: pd.DataFrame, meco: str, num_pairs: int, num_samples: int
+    results_df,
+    is_me,
+    num_pairs,
+    num_samples,
 ):
     """
     Generates a dictionary of top-ranked dataframes for each method w/ ME or CO
@@ -148,7 +154,7 @@ def generate_top_ranking_tables(
         top_df = get_top_ranked_pairs_by_method(
             results_df=results_df,
             method=method,
-            meco=meco,  # TODO change this
+            is_me=is_me,
             num_pairs=num_pairs,
             num_samples=num_samples,
         )
