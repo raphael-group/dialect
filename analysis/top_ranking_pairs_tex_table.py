@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from argparse import ArgumentParser
 
-EPSILON_THRESHOLD = 0.05
+EPSILON_MUTATION_COUNT = 10
 PVALUE_THRESHOLD = 1
 
 
@@ -211,6 +211,8 @@ if __name__ == "__main__":
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
         results_fn = os.path.join(args.results_dir, subtype, "complete_pairwise_ixn_results.csv")
+        cnt_mtx_fn = os.path.join(args.results_dir, subtype, "count_matrix.csv")
+        num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         if not os.path.exists(results_fn):
             logging.info(f"Skipping {subtype}: file not found.")
             continue
@@ -232,10 +234,10 @@ if __name__ == "__main__":
             method_df = results_df.copy()
 
             if method_name == "DIALECT":
+                epsilon = EPSILON_MUTATION_COUNT / num_samples
                 method_df = method_df[method_df["Rho"] < 0]
                 method_df = method_df[
-                    (method_df["Tau_1X"] > EPSILON_THRESHOLD)
-                    & (method_df["Tau_X1"] > EPSILON_THRESHOLD)
+                    (method_df["Tau_1X"] > epsilon) & (method_df["Tau_X1"] > epsilon)
                 ]
 
             if method_name == "MEGSA":
