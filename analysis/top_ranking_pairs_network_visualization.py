@@ -12,8 +12,8 @@ from dialect.utils.plotting import draw_network_gridplot_across_methods
 def build_argument_parser():
     parser = ArgumentParser(description="Decoy Gene Analysis")
     parser.add_argument(
-        "-k",
-        "--top_k",
+        "-n",
+        "--num_edges",
         type=int,
         default=10,
         help="Number of top ranking pairs to visualize",
@@ -29,22 +29,33 @@ def build_argument_parser():
         "-dvr",
         "--driver_genes_fn",
         type=str,
-        required=True,
+        default="data/references/OncoKB_Cancer_Gene_List.tsv",
         help="File with driver genes",
     )
     parser.add_argument(
         "-d",
         "--decoy_genes_dir",
         type=str,
-        required=True,
+        default="data/decoy_genes",
         help="Directory with all decoy gene files",
     )
     parser.add_argument(
         "-o",
         "--out",
         type=str,
-        required=True,
+        default="figures",
         help="Output directory",
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--me",
+        action="store_true",
+        help="Perform analysis for mutual exclusivity",
+    )
+    group.add_argument(
+        "--co",
+        action="store_true",
+        help="Perform analysis for co-occurrence",
     )
     return parser
 
@@ -70,10 +81,11 @@ if __name__ == "__main__":
         decoy_genes = set(pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"])
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         draw_network_gridplot_across_methods(
-            args.top_k,
+            args.num_edges,
             subtype,
             driver_genes,
             decoy_genes,
             results_df,
             num_samples,
+            args.me,
         )
