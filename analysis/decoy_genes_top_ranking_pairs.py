@@ -74,6 +74,13 @@ def compute_prop_unique_decoy_genes_in_top_pairs(decoy_genes, top_ranking_pairs)
     return total_unique_decoy_genes / len(total_unique_genes)
 
 
+def compute_prop_decoy_genes_in_top_pairs(decoy_genes, top_ranking_pairs):
+    all_genes_list = top_ranking_pairs["Gene A"].tolist() + top_ranking_pairs["Gene B"].tolist()
+    total_decoy_genes = len([x for x in all_genes_list if x in decoy_genes])
+    decoy_gene_proportion = total_decoy_genes / len(all_genes_list)
+    return decoy_gene_proportion
+
+
 # ---------------------------------------------------------------------------- #
 #                                MAIN FUNCTIONS                                #
 # ---------------------------------------------------------------------------- #
@@ -83,6 +90,7 @@ def compute_decoy_gene_fraction_across_methods(
     num_samples,
     num_pairs,
     is_me,
+    comp_scheme=3,
 ):
     if ixn_res_df.empty:
         raise ValueError("Input DataFrame is empty")
@@ -98,12 +106,18 @@ def compute_decoy_gene_fraction_across_methods(
         if top_ranking_pairs is None or top_ranking_pairs.empty:
             decoy_gene_proportion = 0
         else:
-            # decoy_gene_proportion = compute_prop_pairs_with_at_least_one_decoy(
-            # decoy_genes, top_ranking_pairs
-            # )
-            decoy_gene_proportion = compute_prop_unique_decoy_genes_in_top_pairs(
-                decoy_genes, top_ranking_pairs
-            )
+            if comp_scheme == 1:
+                decoy_gene_proportion = compute_prop_pairs_with_at_least_one_decoy(
+                    decoy_genes, top_ranking_pairs
+                )
+            elif comp_scheme == 2:
+                decoy_gene_proportion = compute_prop_unique_decoy_genes_in_top_pairs(
+                    decoy_genes, top_ranking_pairs
+                )
+            else:
+                decoy_gene_proportion = compute_prop_decoy_genes_in_top_pairs(
+                    decoy_genes, top_ranking_pairs
+                )
         proportions[method] = decoy_gene_proportion
 
     return proportions
