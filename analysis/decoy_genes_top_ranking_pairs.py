@@ -163,5 +163,7 @@ if __name__ == "__main__":
     save_output(subtype_decoy_gene_fractions, fout)
     plot_decoy_gene_fractions(
         fout,
+        args.num_pairs,
+        args.me,
         args.out,
     )

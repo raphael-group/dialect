@@ -21,6 +21,7 @@ from plotnine import (
     guides,
     guide_legend,
     position_jitter,
+    ylim,
 )
 
 # ---------------------------------------------------------------------------- #
@@ -76,8 +77,16 @@ def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
 # ---------------------------------------------------------------------------- #
 #                                MAIN FUNCTIONS                                #
 # ---------------------------------------------------------------------------- #
-def plot_decoy_gene_fractions(data_filepath, out_dir):
+def plot_decoy_gene_fractions(
+    data_filepath,
+    num_pairs,
+    is_me,
+    out_dir,
+):
+
     df = pd.read_csv(data_filepath)
+    if not is_me:  # remove MEGSA from plot for CO analysis
+        df = df[df["Method"] != "MEGSA"]
 
     subtypes = df["Subtype"].unique()
     colors = ["green", "blue", "red", "purple", "yellow", "orange", "black", "brown"]
@@ -87,8 +96,8 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
     color_shape_mapping = {subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))}
     color_mapping = {subtype: combo[0] for subtype, combo in color_shape_mapping.items()}
     shape_mapping = {subtype: combo[1] for subtype, combo in color_shape_mapping.items()}
+    ixn_type = "ME" if is_me else "CO"
 
-    # Create the Plot
     plot = (
         ggplot(
             df,
@@ -98,7 +107,6 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
             aes(group="Method"),
             alpha=0.5,
             outlier_alpha=0,
-            # TODO set y limit to 1
             show_legend=False,
         )
         + geom_point(
@@ -110,9 +118,9 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
         + scale_color_manual(values=color_mapping)  # Custom color mapping
         + scale_shape_manual(values=shape_mapping)  # Custom shape mapping
         + labs(
-            title="Proportion of Top-Ranked Pairs with Decoy Genes by Method",
+            title=f"Proportion of Top-Ranked {ixn_type} Pairs with Decoy Genes by Method",
             x="Method",
-            y="Proportion of Top 100 Pairs with Decoy Genes",
+            y=f"Proportion of Top {num_pairs} {ixn_type} Pairs with Decoy Genes",
             color="Subtype",
             shape="Subtype",
         )
@@ -131,12 +139,13 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
             color=guide_legend(title="Subtypes", ncol=11),
             shape=guide_legend(title="Subtypes", ncol=11),
         )
+        + ylim(0, 1)
     )
 
     # Step 4: Save Plot
     os.makedirs(out_dir, exist_ok=True)
-    plot.save(f"{out_dir}/decoy_gene_fractions_boxplot.svg", dpi=300)
-    print(f"Plot saved to {out_dir}/decoy_gene_fractions_boxplot.svg")
+    plot.save(f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg", dpi=300)
+    print(f"Plot saved to {out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg")
 
 
 def draw_network_gridplot_across_methods(
