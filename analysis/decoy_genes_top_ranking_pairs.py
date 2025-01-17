@@ -4,6 +4,7 @@ import pandas as pd
 
 from argparse import ArgumentParser
 from dialect.utils.plotting import plot_decoy_gene_fractions
+from dialect.utils.postprocessing import generate_top_ranking_tables
 
 EPSILON_MUTATION_COUNT = 10
 PVALUE_THRESHOLD = 1  # Treshold for other methods
@@ -15,10 +16,10 @@ PVALUE_THRESHOLD = 1  # Treshold for other methods
 def build_argument_parser():
     parser = ArgumentParser(description="Decoy Gene Analysis")
     parser.add_argument(
-        "-k",
-        "--top_k",
+        "-n",
+        "--num_pairs",
         type=int,
-        default=100,
+        default=10,
         help="Number of top ranking pairs to analyze",
     )
     parser.add_argument(
@@ -32,17 +33,45 @@ def build_argument_parser():
         "-d",
         "--decoy_genes_dir",
         type=str,
-        required=True,
+        default="data/decoy_genes",
         help="Directory with all decoy gene files",
     )
     parser.add_argument(
         "-o",
         "--out",
         type=str,
-        required=True,
+        default="output/RESULTS",
         help="Output directory",
     )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--me",
+        action="store_true",
+        help="Perform analysis for mutual exclusivity",
+    )
+    group.add_argument(
+        "--co",
+        action="store_true",
+        help="Perform analysis for co-occurrence",
+    )
     return parser
+
+
+def compute_prop_pairs_with_at_least_one_decoy(decoy_genes, top_ranking_pairs):
+    pairs_with_at_least_one_decoy_gene = (
+        top_ranking_pairs["Gene A"].isin(decoy_genes)
+        | top_ranking_pairs["Gene B"].isin(decoy_genes)
+    ).sum()
+    total_pairs = top_ranking_pairs.shape[0]
+    return pairs_with_at_least_one_decoy_gene / total_pairs
+
+
+def compute_prop_unique_decoy_genes_in_top_pairs(decoy_genes, top_ranking_pairs):
+    total_unique_genes = set(
+        top_ranking_pairs["Gene A"].tolist() + top_ranking_pairs["Gene B"].tolist()
+    )
+    total_unique_decoy_genes = len(total_unique_genes.intersection(decoy_genes))
+    return total_unique_decoy_genes / len(total_unique_genes)
 
 
 # ---------------------------------------------------------------------------- #
@@ -52,64 +81,39 @@ def compute_decoy_gene_fraction_across_methods(
     ixn_res_df,
     decoy_genes,
     num_samples,
-    k,
+    num_pairs,
+    is_me,
 ):
     if ixn_res_df.empty:
         raise ValueError("Input DataFrame is empty")
 
-    methods = {
-        "DIALECT": "Rho",
-        "DISCOVER": "Discover ME P-Val",
-        "Fisher's Exact Test": "Fisher's ME P-Val",
-        "MEGSA": "MEGSA S-Score (LRT)",
-        "WeSME": "WeSME P-Val",
-    }
-
-    fractions = {}
-    for method, column in methods.items():
-        top_ranking_pairs = ixn_res_df.sort_values(
-            column, ascending=column != "MEGSA S-Score (LRT)"
-        ).head(k)
-
-        # TODO: UNIFY THIS INTO A HELPER FUNCTION TO USE ACROSS ANALYSIS MODULES
-        if method == "DIALECT":
-            epsilon = EPSILON_MUTATION_COUNT / num_samples
-            top_ranking_pairs = top_ranking_pairs[
-                (top_ranking_pairs["Rho"] < 0)
-                & (top_ranking_pairs["Tau_1X"] > epsilon)
-                & (top_ranking_pairs["Tau_X1"] > epsilon)
-            ]
-        elif method == "MEGSA":
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
-        elif method == "DISCOVER":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["Discover ME P-Val"] < PVALUE_THRESHOLD
-            ]
-        elif method == "Fisher's Exact Test":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["Fisher's ME P-Val"] < PVALUE_THRESHOLD
-            ]
-        elif method == "WeSME":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["WeSME P-Val"] < PVALUE_THRESHOLD
-            ]
-
-        pairs_with_at_least_one_decoy_gene = (
-            top_ranking_pairs["Gene A"].isin(decoy_genes)
-            | top_ranking_pairs["Gene B"].isin(decoy_genes)
-        ).sum()
-        if top_ranking_pairs.shape[0] == 0:
-            fractions[method] = 0
+    top_tables = generate_top_ranking_tables(
+        results_df=ixn_res_df,
+        is_me=is_me,
+        num_pairs=num_pairs,
+        num_samples=num_samples,
+    )
+    proportions = {}
+    for method, top_ranking_pairs in top_tables.items():
+        if top_ranking_pairs is None or top_ranking_pairs.empty:
+            decoy_gene_proportion = 0
         else:
-            fractions[method] = pairs_with_at_least_one_decoy_gene / top_ranking_pairs.shape[0]
+            # decoy_gene_proportion = compute_prop_pairs_with_at_least_one_decoy(
+            # decoy_genes, top_ranking_pairs
+            # )
+            decoy_gene_proportion = compute_prop_unique_decoy_genes_in_top_pairs(
+                decoy_genes, top_ranking_pairs
+            )
+        proportions[method] = decoy_gene_proportion
 
-    return fractions
+    return proportions
 
 
 def compute_decoy_gene_fractions_across_subtypes(
     results_dir,
     decoy_genes_dir,
-    top_k,
+    num_pairs,
+    is_me,
 ):
     subtypes = os.listdir(results_dir)
     subtype_decoy_gene_fractions = {}
@@ -127,7 +131,8 @@ def compute_decoy_gene_fractions_across_subtypes(
             ixn_res_df,
             decoy_genes,
             num_samples,
-            k=top_k,
+            num_pairs,
+            is_me,
         )
 
     return subtype_decoy_gene_fractions
@@ -150,8 +155,13 @@ if __name__ == "__main__":
     subtype_decoy_gene_fractions = compute_decoy_gene_fractions_across_subtypes(
         args.results_dir,
         args.decoy_genes_dir,
-        args.top_k,
+        args.num_pairs,
+        args.me,
     )
-    fout = os.path.join(args.out, "decoy_gene_fractions_by_method.csv")
+    ixn_type = "ME" if args.me else "CO"
+    fout = os.path.join(args.out, f"{ixn_type}_decoy_gene_fractions_by_method.csv")
     save_output(subtype_decoy_gene_fractions, fout)
-    plot_decoy_gene_fractions(fout, args.out)
+    plot_decoy_gene_fractions(
+        fout,
+        args.out,
+    )
