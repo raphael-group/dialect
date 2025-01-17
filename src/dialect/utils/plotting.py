@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from itertools import product
 from matplotlib import rcParams
 from matplotlib.patches import FancyBboxPatch, BoxStyle
+from dialect.utils.postprocessing import generate_top_ranking_tables
 from plotnine import (
     ggplot,
     aes,
@@ -139,53 +140,29 @@ def plot_decoy_gene_fractions(data_filepath, out_dir):
 
 
 def draw_network_gridplot_across_methods(
-    top_k,
+    num_edges,
     subtype,
     driver_genes,
     decoy_genes,
     results_df,
     num_samples,
+    is_me,
 ):
-    methods = {
-        "DIALECT": "Rho",
-        "DISCOVER": "Discover ME P-Val",
-        "Fisher's Exact Test": "Fisher's ME P-Val",
-        "MEGSA": "MEGSA S-Score (LRT)",
-        "WeSME": "WeSME P-Val",
-    }
-
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
-    fig.suptitle(f"Top 10 Ranked ME Pairs in {subtype}", fontsize=42, y=0.999)
-    for idx, (method, col) in enumerate(methods.items()):
+    suptitle = (
+        f"Top 10 Ranked ME Pairs in {subtype}" if is_me else f"Top 10 Ranked CO Pairs in {subtype}"
+    )
+    fig.suptitle(suptitle, fontsize=42, y=0.999)
+    top_tables = generate_top_ranking_tables(
+        results_df=results_df,
+        is_me=is_me,
+        num_pairs=num_edges,
+        num_samples=num_samples,
+    )
+    for idx, (method, top_ranking_pairs) in enumerate(top_tables.items()):
         ax = axes[idx // 3, idx % 3]
         ax.set_title(method, fontsize=36)
-        top_ranking_pairs = results_df.sort_values(
-            col, ascending=col != "MEGSA S-Score (LRT)"
-        ).head(top_k)
-
-        if method == "DIALECT":
-            epsilon = EPSILON_MUTATION_COUNT / num_samples
-            top_ranking_pairs = top_ranking_pairs[
-                (top_ranking_pairs["Rho"] < 0)
-                & (top_ranking_pairs["Tau_1X"] > epsilon)
-                & (top_ranking_pairs["Tau_X1"] > epsilon)
-            ]
-        elif method == "MEGSA":
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
-        elif method == "DISCOVER":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["Discover ME P-Val"] < PVALUE_THRESHOLD
-            ]
-        elif method == "Fisher's Exact Test":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["Fisher's ME P-Val"] < PVALUE_THRESHOLD
-            ]
-        elif method == "WeSME":
-            top_ranking_pairs = top_ranking_pairs[
-                top_ranking_pairs["WeSME P-Val"] < PVALUE_THRESHOLD
-            ]
-
-        edges = top_ranking_pairs[["Gene A", "Gene B"]].values
+        edges = [] if top_ranking_pairs is None else top_ranking_pairs[["Gene A", "Gene B"]].values
         G = nx.Graph()
         G.add_edges_from(edges)
 
@@ -263,4 +240,6 @@ def draw_network_gridplot_across_methods(
     )
 
     plt.tight_layout(pad=0.5)
-    plt.savefig(f"figures/{subtype}_network_plots_across_methods.png", dpi=300)
+    ranking_type = "ME" if is_me else "CO"
+    fout = f"figures/{subtype}_{ranking_type}_network_plots_across_methods.png"
+    plt.savefig(fout, dpi=300)
