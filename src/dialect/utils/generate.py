@@ -43,7 +43,7 @@ def convert_maf_to_CBaSE_input_file(maf, out):
     return out_fn
 
 
-def generate_bmr_using_CBaSE(maf, out, reference):
+def generate_bmr_using_CBaSE(maf, out, reference, threshold="1e-100"):
     """
     Generates background mutation rate (BMR) distributions and count matrix using the CBaSE method.
 
@@ -103,6 +103,7 @@ def generate_bmr_using_CBaSE(maf, out, reference):
             CBaSE_qvals_script,
             out,
             CBaSE_output_dir,
+            threshold,
         ]
         subprocess.run(cbase_qvals_cmd, check=True)
         logging.info("CBaSE q-value script completed successfully.")
@@ -124,14 +125,20 @@ def generate_counts_from_CBaSE_output(out):
     logging.info(
         "Generating count matrix from CBaSE output of retained missense and nonsense mutations."
     )
-    CBaSE_kept_mutations_fn = os.path.join(out, "CBaSE_output", "kept_mutations.csv")
+    CBaSE_kept_mutations_fn = os.path.join(
+        out, "CBaSE_output", "kept_mutations.csv"
+    )
 
     df = pd.read_csv(CBaSE_kept_mutations_fn, sep="\t")
     df = df[df["effect"].isin(["missense", "nonsense"])]
     df["gene"] = df["gene"] + "_" + df["effect"].str[0].str.upper()
-    df = df.pivot_table(index="gene", columns="sample", aggfunc="size", fill_value=0).T
+    df = df.pivot_table(
+        index="gene", columns="sample", aggfunc="size", fill_value=0
+    ).T
     df.to_csv(os.path.join(out, "count_matrix.csv"), index=True)
-    logging.info(f"Count matrix saved to: {os.path.join(out, 'count_matrix.csv')}")
+    logging.info(
+        f"Count matrix saved to: {os.path.join(out, 'count_matrix.csv')}"
+    )
 
 
 def generate_bmr_files_from_CBaSE_output(out):
@@ -167,7 +174,9 @@ def generate_bmr_files_from_CBaSE_output(out):
 
     df = pd.concat(all_dfs)
     df.to_csv(os.path.join(out, "bmr_pmfs.csv"), index=True)
-    logging.info(f"CBaSE BMR PMFs saved to: {os.path.join(out, 'bmr_pmfs.csv')}")
+    logging.info(
+        f"CBaSE BMR PMFs saved to: {os.path.join(out, 'bmr_pmfs.csv')}"
+    )
 
 
 # ---------------------------------------------------------------------------- #
