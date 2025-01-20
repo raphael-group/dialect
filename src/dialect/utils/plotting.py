@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from itertools import product
 from matplotlib import rcParams
 from matplotlib.lines import Line2D
+from upsetplot import from_contents, UpSet
 from matplotlib.patches import FancyBboxPatch, BoxStyle, Patch
 
 from dialect.utils.postprocessing import generate_top_ranking_tables
@@ -463,3 +464,32 @@ def plot_cbase_driver_decoy_gene_fractions(subtype_decoy_gene_fractions, fout):
     plt.tight_layout()
 
     plt.savefig(fout, transparent=True)
+
+
+def plot_cbase_top_decoy_genes_upset(
+    subtype_to_high_ranked_decoys,
+    high_ranked_decoy_freqs,
+    top_n,
+    fout,
+):
+    top_genes = sorted(
+        high_ranked_decoy_freqs, key=high_ranked_decoy_freqs.get, reverse=True
+    )[:top_n]
+    contents = {}
+    for gene in top_genes:
+        subtypes_with_gene = [
+            subtype
+            for subtype, decoys in subtype_to_high_ranked_decoys.items()
+            if gene in decoys
+        ]
+        contents[gene] = set(subtypes_with_gene)
+
+    df = from_contents(contents)
+
+    upset = UpSet(df, totals_plot_elements=0, element_size=40)
+    plt.figure(figsize=(16, 8))
+    subplots = upset.plot()
+    subplots["intersections"].set_ylabel("Number of Subtypes")
+    subplots["matrix"].set_ylabel("Likely Passengers")
+    plt.savefig(fout, transparent=True)
+    plt.close()
