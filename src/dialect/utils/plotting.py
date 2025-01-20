@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 
 from itertools import product
 from matplotlib import rcParams
-from matplotlib.patches import FancyBboxPatch, BoxStyle
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyBboxPatch, BoxStyle, Patch
+
 from dialect.utils.postprocessing import generate_top_ranking_tables
 from plotnine import (
     ggplot,
@@ -27,8 +29,9 @@ from plotnine import (
 # ---------------------------------------------------------------------------- #
 #                          SET DEFAULT PLOTTING STYLE                          #
 # ---------------------------------------------------------------------------- #
-rcParams["font.family"] = "serif"
+rcParams["font.family"] = "sans-serif"
 rcParams["font.serif"] = ["Computer Modern"]
+rcParams["font.sans-serif"] = ["Computer Modern"]
 rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
 
 
@@ -38,6 +41,35 @@ DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
 EPSILON_MUTATION_COUNT = 10  # minimum count of mutations
 PVALUE_THRESHOLD = 1
+
+COLOR_MAPPING = {
+    "UCEC": "lightcoral",
+    "SKCM": "lightcoral",
+    "CRAD": "moccasin",
+    "STAD": "moccasin",
+    "LUAD": "khaki",
+    "LUSC": "khaki",
+}
+
+XLIM_MAPPING = {
+    "UCEC": 32000,
+    "SKCM": 32000,
+    "CRAD": 10000,
+    "STAD": 10000,
+    "LUAD": 2000,
+    "LUSC": 2000,
+}
+
+
+def apply_tufte_style(ax):
+    """
+    Hides top/right spines, moves left/bottom outward, larger tick labels.
+    """
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_position(("outward", 6))
+    ax.spines["bottom"].set_position(("outward", 6))
+    ax.tick_params(axis="both", which="major", labelsize=20)
 
 
 # ---------------------------------------------------------------------------- #
@@ -72,6 +104,41 @@ def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
         )
     ax.set_aspect("equal")
     ax.axis("off")
+
+
+def plot_subtype_histogram(ax, subtype, data_series, avg_across_others):
+    """
+    Plots a histogram of mutation counts (x-axis) for 'subtype' on log-scale Y.
+    Draws a red dashed vertical line at 'avg_across_others', if within x-lim.
+    """
+    color = COLOR_MAPPING[subtype]
+    xlim = XLIM_MAPPING[subtype]
+
+    ax.hist(
+        data_series,
+        bins=20,
+        range=(0, xlim),
+        # ylim
+        color=color,
+        alpha=0.8,
+        edgecolor="black",
+        log=True,
+    )
+    ax.set_ylim(1, 1000)
+
+    if 0 < avg_across_others < xlim:
+        ax.axvline(
+            avg_across_others,
+            color="red",
+            linewidth=2,
+            linestyle="--",
+            label="Avg. Sample Mutation Count Across Other Subtypes",
+        )
+
+    apply_tufte_style(ax)
+
+    ax.set_xlim(0, xlim)
+    ax.set_title(subtype, fontsize=28, pad=5)
 
 
 # ---------------------------------------------------------------------------- #
@@ -239,7 +306,12 @@ def draw_network_gridplot_across_methods(
                 label="Decoy Passenger Gene",
             ),
             plt.Line2D(
-                [0], [0], linestyle="-", color="black", linewidth=4, label="Mutual Exclusivity"
+                [0],
+                [0],
+                linestyle="-",
+                color="black",
+                linewidth=4,
+                label="Mutual Exclusivity",
             ),
         ],
         labelspacing=2,
@@ -252,3 +324,68 @@ def draw_network_gridplot_across_methods(
     ranking_type = "ME" if is_me else "CO"
     fout = f"figures/{subtype}_{ranking_type}_network_plots_across_methods.png"
     plt.savefig(fout, dpi=300)
+
+
+def plot_sample_mutation_count_subtype_histograms(
+    subtype_sample_mut_counts,
+    avg_mut_cnt,
+    fout,
+):
+    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 20))
+    axes = axes.flatten()
+
+    for i, (subtype, data_series) in enumerate(subtype_sample_mut_counts.items()):
+        ax = axes[i]
+        plot_subtype_histogram(ax, subtype, data_series, avg_mut_cnt)
+
+    plt.subplots_adjust(hspace=0.3, wspace=0.2, bottom=0.1)
+
+    fig.text(
+        0.5,
+        0.06,
+        "Total Sample Mutation Count",
+        ha="center",
+        va="center",
+        fontsize=28,
+    )
+    fig.text(
+        0.06,
+        0.5,
+        "Number of Samples",
+        ha="center",
+        va="center",
+        rotation="vertical",
+        fontsize=28,
+    )
+
+    legend_handles = [
+        Patch(facecolor="lightcoral", edgecolor="black", label="Mut Cnt: 0–30k"),
+        Patch(facecolor="moccasin", edgecolor="black", label="Mut Cnt: 0–10k"),
+        Patch(facecolor="khaki", edgecolor="black", label="Mut Cnt: 0–2k"),
+        Line2D(
+            [0],
+            [0],
+            color="red",
+            linewidth=2,
+            linestyle="--",
+            label="Avg. Sample Mutation Count Across Other Subtypes",
+        ),
+    ]
+
+    fig.legend(
+        handles=legend_handles,
+        loc="lower center",
+        ncol=4,
+        fontsize=24,
+        frameon=False,
+    )
+
+    os.makedirs(os.path.dirname(fout), exist_ok=True)
+    fig.savefig(
+        fout,
+        format="svg",
+        bbox_inches="tight",
+        transparent=True,
+    )
+    plt.close(fig)
+    print(f"3×2 histogram figure saved as SVG to: {fout}")
