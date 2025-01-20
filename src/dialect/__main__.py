@@ -24,7 +24,12 @@ def main():
 
     if args.command == "generate":
         os.makedirs(args.out, exist_ok=True)
-        generate_bmr_and_counts(maf=args.maf, out=args.out, reference=args.reference)
+        generate_bmr_and_counts(
+            maf=args.maf,
+            out=args.out,
+            reference=args.reference,
+            threshold=args.threshold,
+        )
 
     elif args.command == "identify":
         os.makedirs(args.out, exist_ok=True)
@@ -80,7 +85,9 @@ def main():
                     out=args.out,
                 )
             else:  # args.type == "pair"
-                logging.info("Evaluating methods on simulated data for a pair of genes")
+                logging.info(
+                    "Evaluating methods on simulated data for a pair of genes"
+                )
                 raise NotImplementedError
             # TODO: add method for matrix
 

@@ -43,7 +43,7 @@ def convert_maf_to_CBaSE_input_file(maf, out):
     return out_fn
 
 
-def generate_bmr_using_CBaSE(maf, out, reference, threshold="1e-100"):
+def generate_bmr_using_CBaSE(maf, out, reference, threshold):
     """
     Generates background mutation rate (BMR) distributions and count matrix using the CBaSE method.
 
@@ -184,7 +184,12 @@ def generate_bmr_files_from_CBaSE_output(out):
 # ---------------------------------------------------------------------------- #
 
 
-def generate_bmr_and_counts(maf, out, reference):
+def generate_bmr_and_counts(
+    maf,
+    out,
+    reference,
+    threshold,
+):
     """
     Main function to generate background mutation rate (BMR) distributions and a count matrix.
 
@@ -195,7 +200,7 @@ def generate_bmr_and_counts(maf, out, reference):
     """
     logging.info(f"Generating BMR and count matrix for MAF file: {maf}")
     check_file_exists(maf)
-    generate_bmr_using_CBaSE(maf, out, reference)
+    generate_bmr_using_CBaSE(maf, out, reference, threshold)
     generate_bmr_files_from_CBaSE_output(out)
     generate_counts_from_CBaSE_output(out)
     logging.info("BMR and count matrix generation completed successfully.")
