@@ -30,9 +30,17 @@ def save_cbase_stats_to_gene_objects(genes, cbase_stats):
         f"{row['gene']}_M": row["phi_m_pos_or_p(m=0|s)"]
         for _, row in cbase_stats.iterrows()
     }
+    missense_gene_to_positive_selection_p = {
+        f"{row['gene']}_M": row["p_phi_m_pos"]
+        for _, row in cbase_stats.iterrows()
+    }
 
     nonsense_gene_to_positive_selection_phi = {
         f"{row['gene']}_N": row["phi_k_pos_or_p(k=0|s)"]
+        for _, row in cbase_stats.iterrows()
+    }
+    nonsense_gene_to_positive_selection_p = {
+        f"{row['gene']}_N": row["p_phi_k_pos"]
         for _, row in cbase_stats.iterrows()
     }
 
@@ -40,11 +48,18 @@ def save_cbase_stats_to_gene_objects(genes, cbase_stats):
         **missense_gene_to_positive_selection_phi,
         **nonsense_gene_to_positive_selection_phi,
     }
+    gene_to_positive_select_p = {
+        **missense_gene_to_positive_selection_p,
+        **nonsense_gene_to_positive_selection_p,
+    }
 
     for name, gene in genes.items():
         if name not in gene_to_positive_selection_phi:
-            raise ValueError(f"Gene {name} not found in the CBaSE results file.")
+            raise ValueError(
+                f"Gene {name} not found in the CBaSE results file."
+            )
         gene.cbase_phi = gene_to_positive_selection_phi[name]
+        gene.cbase_p = gene_to_positive_select_p[name]
 
     logging.info("Finished saving CBaSE phi statistic to gene objects.")
     return True
@@ -66,6 +81,7 @@ def create_single_gene_results(genes, output_path, cbase_phi_vals_present):
         expected_mutations = gene.calculate_expected_mutations()
         obs_minus_exp_mutations = observed_mutations - expected_mutations
         cbase_phi = gene.cbase_phi
+        cbase_p = gene.cbase_p
 
         results.append(
             {
@@ -77,6 +93,7 @@ def create_single_gene_results(genes, output_path, cbase_phi_vals_present):
                 "Expected Mutations": expected_mutations,
                 "Obs. - Exp. Mutations": obs_minus_exp_mutations,
                 "CBaSE Pos. Sel. Phi": cbase_phi,
+                "CBaSE Pos. Sel. P-Val": cbase_p,
             }
         )
     results_df = pd.DataFrame(results)
@@ -210,6 +227,10 @@ def identify_pairwise_interactions(
     _, interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
 
-    cbase_phi_vals_present = save_cbase_stats_to_gene_objects(genes, cbase_stats)
-    create_single_gene_results(genes.values(), single_gene_fout, cbase_phi_vals_present)
+    cbase_phi_vals_present = save_cbase_stats_to_gene_objects(
+        genes, cbase_stats
+    )
+    create_single_gene_results(
+        genes.values(), single_gene_fout, cbase_phi_vals_present
+    )
     create_pairwise_results(interactions, pairwise_interaction_fout)
