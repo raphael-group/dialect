@@ -24,15 +24,19 @@ class Gene:
 
         # Metrics from alternative methods
         self.cbase_phi = None
+        self.cbase_p = None
 
     def __str__(self):
         """
         Return a string representation of the Gene object.
         """
         bmr_preview = ", ".join(
-            f"{k}: {v:.3e}" for k, v in itertools.islice(self.bmr_pmf.items(), 3)
+            f"{k}: {v:.3e}"
+            for k, v in itertools.islice(self.bmr_pmf.items(), 3)
         )  # Format the first three key-value pairs in bmr_pmf
-        pi_info = f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
+        pi_info = (
+            f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
+        )
         total_mutations = np.sum(self.counts)
         return (
             f"Gene: {self.name}\n"
@@ -75,7 +79,9 @@ class Gene:
         Logs a warning if any counts are missing in `bmr_pmf` and skips those samples.
         Issue occurs when BMR PMF does not include all possible counts in categorical distribution.
         """
-        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
+        missing_bmr_pmf_counts = [
+            c for c in self.counts if c not in self.bmr_pmf
+        ]
         if missing_bmr_pmf_counts:
             logging.warning(
                 f"Counts {missing_bmr_pmf_counts} are not in bmr_pmf for gene {self.name}."
@@ -96,12 +102,16 @@ class Gene:
         :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
         """
         if pi is None or not 0 <= pi <= 1:
-            raise ValueError(f"Invalid pi value: {pi}. Pi must be in the range [0, 1].")
+            raise ValueError(
+                f"Invalid pi value: {pi}. Pi must be in the range [0, 1]."
+            )
         if pi == 1:
             logging.info(
                 f"Pi for gene {self.name} is 1, which will result in log(0) issues when computing log likelihood."
             )
-            raise ValueError("Estimated pi is 1. Please ensure pi is less than 1.")
+            raise ValueError(
+                "Estimated pi is 1. Please ensure pi is less than 1."
+            )
 
     # ---------------------------------------------------------------------------- #
     #                        Likelihood & Metric Evaluation                        #
@@ -139,7 +149,9 @@ class Gene:
         self.verify_bmr_pmf_contains_all_count_keys()
 
         log_likelihood = sum(
-            np.log(self.bmr_pmf.get(c) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi)
+            np.log(
+                self.bmr_pmf.get(c) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi
+            )
             for c in self.counts
         )
 
@@ -210,12 +222,16 @@ class Gene:
         def negative_log_likelihood(pi):
             return -self.compute_log_likelihood(pi)
 
-        logging.info(f"Estimating pi for gene {self.name} using SLSQP optimization.")
+        logging.info(
+            f"Estimating pi for gene {self.name} using SLSQP optimization."
+        )
 
         self.verify_bmr_pmf_and_counts_exist()
 
         alpha = 1e-13  # Small value to avoid edge cases at 0 or 1
-        bounds = [(alpha, 1 - alpha)]  # Restrict pi to (0, 1) to avoid log issues
+        bounds = [
+            (alpha, 1 - alpha)
+        ]  # Restrict pi to (0, 1) to avoid log issues
         result = minimize(
             negative_log_likelihood,
             x0=[pi_init],  # Initial guess for pi
@@ -232,7 +248,9 @@ class Gene:
         self.pi = result.x[0]
         logging.info(f"Estimated pi for gene {self.name}: {self.pi}")
 
-    def estimate_pi_with_em_from_scratch(self, max_iter=1000, tol=1e-3, pi_init=0.5):
+    def estimate_pi_with_em_from_scratch(
+        self, max_iter=1000, tol=1e-3, pi_init=0.5
+    ):
         """
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
 
@@ -261,7 +279,9 @@ class Gene:
         **Returns**:
         :return: (float) The estimated value of \( \pi \).
         """
-        logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
+        logging.info(
+            f"Estimating pi for gene {self.name} using the EM algorithm."
+        )
 
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_bmr_pmf_contains_all_count_keys()
@@ -274,7 +294,10 @@ class Gene:
         for it in range(max_iter):
             z_i = [
                 (pi * self.bmr_pmf.get(c - 1, 0))
-                / (pi * self.bmr_pmf.get(c - 1, 0) + (1 - pi) * self.bmr_pmf.get(c, 0))
+                / (
+                    pi * self.bmr_pmf.get(c - 1, 0)
+                    + (1 - pi) * self.bmr_pmf.get(c, 0)
+                )
                 for c in nonzero_probability_counts
             ]  # E-step
 
@@ -298,5 +321,7 @@ class Gene:
         Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
         Uses the Pomegranate library for the EM algorithm.
         """
-        logging.info(f"Estimating pi for gene {self.name} using the EM algorithm.")
+        logging.info(
+            f"Estimating pi for gene {self.name} using the EM algorithm."
+        )
         raise NotImplementedError("EM algorithm not implemented yet.")
