@@ -27,7 +27,6 @@ import numpy as np
 import scipy.special as sp
 import scipy.stats as st
 
-THRESHOLD = 1e-100
 
 # ************************************ FUNCTION DEFINITIONS *************************************
 
@@ -92,7 +91,9 @@ def compute_p_values(p, genes, aux):
                     + x * np.log(r)
                     + (1 / 2.0 * (-s - x + a)) * np.log((L * (1 + r)) / b)
                     + a * np.log(b)
-                    + mp.log(mp.besselk(s + x - a, 2 * math.sqrt(L * (1 + r) * b)))
+                    + mp.log(
+                        mp.besselk(s + x - a, 2 * math.sqrt(L * (1 + r) * b))
+                    )
                     - sp.gammaln(s + 1)
                     - sp.gammaln(x + 1)
                     - sp.gammaln(a)
@@ -192,7 +193,9 @@ def compute_p_values(p, genes, aux):
                         + x * np.log(r)
                         + (0.5 * (-s - x + a)) * np.log((L * (1 + r)) / b)
                         + a * np.log(b)
-                        + mp.log(mp.besselk(s + x - a, 2 * np.sqrt(L * (1 + r) * b)))
+                        + mp.log(
+                            mp.besselk(s + x - a, 2 * np.sqrt(L * (1 + r) * b))
+                        )
                         - sp.gammaln(s + 1)
                         - sp.gammaln(x + 1)
                         - sp.gammaln(a)
@@ -323,7 +326,9 @@ def compute_p_values(p, genes, aux):
                         + x * np.log(r)
                         + (0.5 * (-s - x + g)) * np.log((L * (1 + r)) / d)
                         + g * np.log(d)
-                        + mp.log(mp.besselk(s + x - g, 2 * np.sqrt(L * (1 + r) * d)))
+                        + mp.log(
+                            mp.besselk(s + x - g, 2 * np.sqrt(L * (1 + r) * d))
+                        )
                         - sp.gammaln(s + 1)
                         - sp.gammaln(x + 1)
                         - sp.gammaln(g)
@@ -397,7 +402,10 @@ def compute_p_values(p, genes, aux):
             diff = cur_p - last_p
             last_p = cur_p
             if pofx_given_s(mtest, sobs, L, ratm, 0) > 1.0:
-                if pofx_given_s(mtest - 1, sobs, L, ratm, 0) > 1.0 / runC or diff > 0:
+                if (
+                    pofx_given_s(mtest - 1, sobs, L, ratm, 0) > 1.0 / runC
+                    or diff > 0
+                ):
                     large_flag = 1  # 	Going to large-x mode.
 
                     class P_of_x_given_s(st.rv_continuous):
@@ -485,7 +493,12 @@ def compute_p_values(p, genes, aux):
                 m_ppos = 1.0 - cum_p
                 m_ppos = float(m_ppos.real)
                 m_pneg = float(m_pneg.real)
-                if m_ppos < 0 or m_ppos > 1 or math.isinf(m_ppos) or math.isnan(m_ppos):
+                if (
+                    m_ppos < 0
+                    or m_ppos > 1
+                    or math.isinf(m_ppos)
+                    or math.isnan(m_ppos)
+                ):
                     cum_p = 0.0
                     for x in range(mobs):
                         next_prob = pofx_given_s(x, sobs, L, ratm, 1)
@@ -524,7 +537,12 @@ def compute_p_values(p, genes, aux):
                 k_ppos = 1.0 - cum_p
                 k_ppos = float(k_ppos.real)
                 k_pneg = float(k_pneg.real)
-                if k_ppos < 0 or k_ppos > 1 or math.isinf(k_ppos) or math.isnan(k_ppos):
+                if (
+                    k_ppos < 0
+                    or k_ppos > 1
+                    or math.isinf(k_ppos)
+                    or math.isnan(k_ppos)
+                ):
                     cum_p = 0.0
                     for x in range(kobs):
                         next_prob = pofx_given_s(x, sobs, L, ratk, 1)
@@ -591,39 +609,65 @@ def compute_p_values(p, genes, aux):
             pofk_per_sample = []
             if simC == 0:
                 i = 0
-                test_prob = pofx_given_s(i, sobs, L, ratm / N_samples, large_flag)
+                test_prob = pofx_given_s(
+                    i, sobs, L, ratm / N_samples, large_flag
+                )
                 while abs(test_prob) < THRESHOLD:
                     pofm_per_sample.append([i, test_prob])
                     i += 1
-                    test_prob = pofx_given_s(i, sobs, L, ratm / N_samples, large_flag)
+                    test_prob = pofx_given_s(
+                        i, sobs, L, ratm / N_samples, large_flag
+                    )
                     if test_prob - pofm_per_sample[-1][1] < 0:
                         break
                 while test_prob > THRESHOLD and math.isinf(test_prob) == 0:
                     pofm_per_sample.append([i, test_prob])
                     i += 1
-                    test_prob = pofx_given_s(i, sobs, L, ratm / N_samples, large_flag)
+                    test_prob = pofx_given_s(
+                        i, sobs, L, ratm / N_samples, large_flag
+                    )
                 i = 0
-                test_prob = pofx_given_s(i, sobs, L, ratk / N_samples, large_flag)
+                test_prob = pofx_given_s(
+                    i, sobs, L, ratk / N_samples, large_flag
+                )
                 while abs(test_prob) < THRESHOLD:
                     pofk_per_sample.append([i, test_prob])
                     i += 1
-                    test_prob = pofx_given_s(i, sobs, L, ratk / N_samples, large_flag)
+                    test_prob = pofx_given_s(
+                        i, sobs, L, ratk / N_samples, large_flag
+                    )
                     if test_prob - pofk_per_sample[-1][1] < 0:
                         break
                 while test_prob > THRESHOLD and math.isinf(test_prob) == 0:
                     pofk_per_sample.append([i, test_prob])
                     i += 1
-                    test_prob = pofx_given_s(i, sobs, L, ratk / N_samples, large_flag)
+                    test_prob = pofx_given_s(
+                        i, sobs, L, ratk / N_samples, large_flag
+                    )
 
             pm0 = pofx_given_s(0, sobs, L, ratm, 0)
             pk0 = pofx_given_s(0, sobs, L, ratk, 0)
             dxds = (kobs + mobs) / (lams * (ratk + ratm))
             if ratm < 1e-30:
-                m_pneg, m_ppos, pm0, dmds, pofm, pofm_per_sample = 1, 1, 1, 1, [], []
+                m_pneg, m_ppos, pm0, dmds, pofm, pofm_per_sample = (
+                    1,
+                    1,
+                    1,
+                    1,
+                    [],
+                    [],
+                )
             else:
                 dmds = mobs / (lams * ratm)
             if ratk < 1e-30:
-                k_pneg, k_ppos, pk0, dkds, pofk, pofk_per_sample = 1, 1, 1, 1, [], []
+                k_pneg, k_ppos, pk0, dkds, pofk, pofk_per_sample = (
+                    1,
+                    1,
+                    1,
+                    1,
+                    [],
+                    [],
+                )
             else:
                 dkds = kobs / (lams * ratk)
 
@@ -692,7 +736,9 @@ def construct_histogram(var_array, bin_var):
     hist = [0.0 for i in range(int(var_max / bin_var))]
     for var in noinf:
         hist[int(var / bin_var)] += 1
-    return [[(i + 0.5) * bin_var, hist[i] / len(noinf)] for i in range(len(hist))]
+    return [
+        [(i + 0.5) * bin_var, hist[i] / len(noinf)] for i in range(len(hist))
+    ]
 
 
 def compute_phi_sim(pvals_array, ind1, ind2):
@@ -826,7 +872,9 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
             )
         else:
             if abs(gene["phi"]) < 1e-30:
-                use_phi = [gene["p0m"] * gene["p0k"], gene["p0m"], gene["p0k"]][noncat]
+                use_phi = [gene["p0m"] * gene["p0k"], gene["p0m"], gene["p0k"]][
+                    noncat
+                ]
                 phi_pvals_obs.append(
                     {
                         "gene": gene["gene"],
@@ -964,6 +1012,7 @@ modC_map = [2, 2, 4, 4, 5, 5]  # 	map model --> number of params
 run_no = 30  # 	No. of simulation replicates used for computing FDR (default 50)
 outname = str(sys.argv[1])  # 	name for the output file containing the q values
 TEMP_DIR = str(sys.argv[2])  #   path to the temp files folder
+THRESHOLD = float(sys.argv[3])  # 	threshold for categorical bmr pmf generation
 
 # ***********************************************************************************************
 # ***********************************************************************************************
@@ -983,17 +1032,29 @@ for p_file in p_files:
 cur_min = 1e20
 cur_ind = 10
 for m in range(len(all_models)):
-    if 2.0 * modC_map[int(all_models[m][-1]) - 1] + 2.0 * all_models[m][-2] < cur_min:
-        cur_min = 2.0 * modC_map[int(all_models[m][-1]) - 1] + 2.0 * all_models[m][-2]
+    if (
+        2.0 * modC_map[int(all_models[m][-1]) - 1] + 2.0 * all_models[m][-2]
+        < cur_min
+    ):
+        cur_min = (
+            2.0 * modC_map[int(all_models[m][-1]) - 1] + 2.0 * all_models[m][-2]
+        )
         cur_ind = m
 if cur_min < 1e20:
-    sys.stderr.write("Best model fit: model %i.\n" % int(all_models[cur_ind][-1]))
+    sys.stderr.write(
+        "Best model fit: model %i.\n" % int(all_models[cur_ind][-1])
+    )
     fout = open("%s/used_params_and_model.txt" % TEMP_DIR, "w")
     fout.write(
         "".join(
             [
                 "".join(
-                    ["%e, " for i in range(modC_map[int(all_models[cur_ind][-1]) - 1])]
+                    [
+                        "%e, "
+                        for i in range(
+                            modC_map[int(all_models[cur_ind][-1]) - 1]
+                        )
+                    ]
                 ),
                 "%i\n",
             ]
@@ -1060,7 +1121,8 @@ pvals_sim = compute_p_values(params, mks_type, [mod_C, 1, run_no])
 phi_sim, phi_sim_m, phi_sim_k = compute_phi_sim(pvals_sim, 1, 2)
 gene_phi_obs, gene_phi_obs_m, gene_phi_obs_k = compute_phi_obs(pvals_obs, 1, 2)
 q_neg_adj = sorted(
-    FDR_discrete(phi_sim, gene_phi_obs, 0.02, 0.000001, 0), key=lambda arg: arg["gene"]
+    FDR_discrete(phi_sim, gene_phi_obs, 0.02, 0.000001, 0),
+    key=lambda arg: arg["gene"],
 )
 q_neg_adj_m = sorted(
     FDR_discrete(phi_sim_m, gene_phi_obs_m, 0.02, 0.000001, 1),
@@ -1075,7 +1137,8 @@ q_neg_adj_k = sorted(
 phi_sim, phi_sim_m, phi_sim_k = compute_phi_sim(pvals_sim, 3, 4)
 gene_phi_obs, gene_phi_obs_m, gene_phi_obs_k = compute_phi_obs(pvals_obs, 3, 4)
 q_pos_adj = sorted(
-    FDR_discrete(phi_sim, gene_phi_obs, 0.02, 0.000001, 0), key=lambda arg: arg["gene"]
+    FDR_discrete(phi_sim, gene_phi_obs, 0.02, 0.000001, 0),
+    key=lambda arg: arg["gene"],
 )
 q_pos_adj_m = sorted(
     FDR_discrete(phi_sim_m, gene_phi_obs_m, 0.02, 0.000001, 1),
