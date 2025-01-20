@@ -1,7 +1,11 @@
 import os
 import pandas as pd
+import matplotlib.pyplot as plt
 
-from dialect.utils.plotting import plot_cbase_driver_decoy_gene_fractions
+from dialect.utils.plotting import (
+    plot_cbase_driver_decoy_gene_fractions,
+    plot_cbase_top_decoy_genes_upset,
+)
 
 SINGLE_GENE_RESULTS_DIR = "single_gene_results"
 DECOY_GENES_DIR = "data/decoy_genes"
@@ -42,4 +46,10 @@ if __name__ == "__main__":
     plot_cbase_driver_decoy_gene_fractions(
         subtype_decoy_gene_fractions,
         fout="figures/cbase_decoy_fractions_barplot.svg",
+    )
+    plot_cbase_top_decoy_genes_upset(
+        subtype_to_high_ranked_decoys,
+        high_ranked_decoy_freqs,
+        top_n=6,
+        fout="figures/cbase_upset_plot_top_likely_passengers.svg",
     )
