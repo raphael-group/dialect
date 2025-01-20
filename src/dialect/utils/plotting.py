@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import networkx as nx
+import seaborn as sns
 import matplotlib.pyplot as plt
 
 from itertools import product
@@ -156,13 +157,28 @@ def plot_decoy_gene_fractions(
         df = df[df["Method"] != "MEGSA"]
 
     subtypes = df["Subtype"].unique()
-    colors = ["green", "blue", "red", "purple", "yellow", "orange", "black", "brown"]
+    colors = [
+        "green",
+        "blue",
+        "red",
+        "purple",
+        "yellow",
+        "orange",
+        "black",
+        "brown",
+    ]
     shapes = ["o", "s", "^", "D"]  # Circle, square, triangle, diamond
 
     color_shape_combinations = list(product(colors, shapes))
-    color_shape_mapping = {subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))}
-    color_mapping = {subtype: combo[0] for subtype, combo in color_shape_mapping.items()}
-    shape_mapping = {subtype: combo[1] for subtype, combo in color_shape_mapping.items()}
+    color_shape_mapping = {
+        subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))
+    }
+    color_mapping = {
+        subtype: combo[0] for subtype, combo in color_shape_mapping.items()
+    }
+    shape_mapping = {
+        subtype: combo[1] for subtype, combo in color_shape_mapping.items()
+    }
     ixn_type = "ME" if is_me else "CO"
 
     plot = (
@@ -212,7 +228,9 @@ def plot_decoy_gene_fractions(
     # Step 4: Save Plot
     os.makedirs(out_dir, exist_ok=True)
     plot.save(f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg", dpi=300)
-    print(f"Plot saved to {out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg")
+    print(
+        f"Plot saved to {out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg"
+    )
 
 
 def draw_network_gridplot_across_methods(
@@ -226,7 +244,9 @@ def draw_network_gridplot_across_methods(
 ):
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     suptitle = (
-        f"Top 10 Ranked ME Pairs in {subtype}" if is_me else f"Top 10 Ranked CO Pairs in {subtype}"
+        f"Top 10 Ranked ME Pairs in {subtype}"
+        if is_me
+        else f"Top 10 Ranked CO Pairs in {subtype}"
     )
     fig.suptitle(suptitle, fontsize=42, y=0.999)
     top_tables = generate_top_ranking_tables(
@@ -238,7 +258,11 @@ def draw_network_gridplot_across_methods(
     for idx, (method, top_ranking_pairs) in enumerate(top_tables.items()):
         ax = axes[idx // 3, idx % 3]
         ax.set_title(method, fontsize=36)
-        edges = [] if top_ranking_pairs is None else top_ranking_pairs[["Gene A", "Gene B"]].values
+        edges = (
+            []
+            if top_ranking_pairs is None
+            else top_ranking_pairs[["Gene A", "Gene B"]].values
+        )
         G = nx.Graph()
         G.add_edges_from(edges)
 
@@ -334,7 +358,9 @@ def plot_sample_mutation_count_subtype_histograms(
     fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 20))
     axes = axes.flatten()
 
-    for i, (subtype, data_series) in enumerate(subtype_sample_mut_counts.items()):
+    for i, (subtype, data_series) in enumerate(
+        subtype_sample_mut_counts.items()
+    ):
         ax = axes[i]
         plot_subtype_histogram(ax, subtype, data_series, avg_mut_cnt)
 
@@ -359,7 +385,9 @@ def plot_sample_mutation_count_subtype_histograms(
     )
 
     legend_handles = [
-        Patch(facecolor="lightcoral", edgecolor="black", label="Mut Cnt: 0–30k"),
+        Patch(
+            facecolor="lightcoral", edgecolor="black", label="Mut Cnt: 0–30k"
+        ),
         Patch(facecolor="moccasin", edgecolor="black", label="Mut Cnt: 0–10k"),
         Patch(facecolor="khaki", edgecolor="black", label="Mut Cnt: 0–2k"),
         Line2D(
@@ -389,3 +417,49 @@ def plot_sample_mutation_count_subtype_histograms(
     )
     plt.close(fig)
     print(f"3×2 histogram figure saved as SVG to: {fout}")
+
+
+def plot_cbase_driver_decoy_gene_fractions(subtype_decoy_gene_fractions, fout):
+    df = pd.DataFrame(
+        list(subtype_decoy_gene_fractions.items()),
+        columns=["Subtype", "Decoy Fraction"],
+    )
+
+    df["Decoy Fraction"] = df["Decoy Fraction"].replace(0, 0.001)
+    df.sort_values("Decoy Fraction", ascending=False, inplace=True)
+
+    sns.set_context("talk", rc={"axes.linewidth": 0.8, "grid.linewidth": 0.5})
+
+    plt.figure(figsize=(6, 10))
+    ax = sns.barplot(
+        data=df,
+        y="Subtype",
+        x="Decoy Fraction",
+        palette="Greys_r",
+        edgecolor="black",
+        hue="Subtype",
+        legend=False,
+        # edges="black",
+    )
+    apply_tufte_style(ax)
+    ax.set_xlim(0, 1)
+    ax.set_yticks([])
+    ax.set_ylabel("")
+    for container, label in zip(ax.containers, df["Subtype"]):
+        ax.bar_label(
+            container,
+            labels=[label] * len(container),
+            fontsize=14,
+            label_type="edge",
+            padding=3,
+        )
+
+    plt.title(
+        "Fraction of Likely Passenger Genes in Top 50",
+        fontsize=20,
+        pad=10,
+    )
+    plt.xlabel("Likely Passenger Fraction", fontsize=18)
+    plt.tight_layout()
+
+    plt.savefig(fout, transparent=True)
