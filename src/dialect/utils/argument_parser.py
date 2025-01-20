@@ -23,6 +23,12 @@ def add_generate_parser(subparsers):
         choices=["hg19", "hg38"],
         help="Reference genome (default: hg19)",
     )
+    generate_parser.add_argument(
+        "-t",
+        "--threshold",
+        default="1e-100",
+        help="Threshold for generation of BMR distributions (default: 1e-100)",
+    )
 
 
 def add_identify_parser(subparsers):
@@ -60,7 +66,9 @@ def add_compare_parser(subparsers):
     """
     Adds the compare subparser to the given subparsers.
     """
-    compare_parser = subparsers.add_parser("compare", help="Run alternative methods")
+    compare_parser = subparsers.add_parser(
+        "compare", help="Run alternative methods"
+    )
     compare_parser.add_argument(
         "-c", "--cnt", required=True, help="Path to the input count matrix file"
     )
@@ -118,8 +126,12 @@ def add_simulate_create_single_gene_parser(subparsers):
         required=True,
         help="Pi value (must be between 0 and 1)",
     )
-    single_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
-    single_gene_parser.add_argument("-ns", "--num_simulations", type=int, default=2500)
+    single_gene_parser.add_argument(
+        "-n", "--num_samples", type=int, default=1000
+    )
+    single_gene_parser.add_argument(
+        "-ns", "--num_simulations", type=int, default=2500
+    )
     single_gene_parser.add_argument(
         "-b", "--bmr", required=True, help="Path to the BMR file"
     )
@@ -184,7 +196,9 @@ def add_simulate_parser(subparsers):
         "simulate", help="Run simulations for evaluation and benchmarking"
     )
     simulate_subparsers = simulate_parser.add_subparsers(
-        dest="mode", required=True, help="Available simulation modes (create, evaluate)"
+        dest="mode",
+        required=True,
+        help="Available simulation modes (create, evaluate)",
     )
 
     add_simulate_create_parser(simulate_subparsers)
