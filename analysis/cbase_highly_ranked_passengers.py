@@ -1,21 +1,26 @@
 import os
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from dialect.utils.plotting import (
     plot_cbase_driver_decoy_gene_fractions,
     plot_cbase_top_decoy_genes_upset,
+    plot_cbase_driver_and_passenger_mutation_counts,
 )
 
 SINGLE_GENE_RESULTS_DIR = "single_gene_results"
 DECOY_GENES_DIR = "data/decoy_genes"
+DRIVER_FN = "data/references/OncoKB_Cancer_Gene_List.tsv"
 
 
 if __name__ == "__main__":
+    driver_df = pd.read_csv(DRIVER_FN, sep="\t", index_col=0)
+    drivers = set(driver_df.index + "_M") | set(driver_df.index + "_N")
+
     high_ranked_decoy_freqs = {}
     subtype_decoy_gene_fractions = {}
     subtype_to_high_ranked_decoys = {}
-
     for file_name in os.listdir(SINGLE_GENE_RESULTS_DIR):
         subtype = os.path.splitext(file_name)[0]
         fpath = os.path.join(SINGLE_GENE_RESULTS_DIR, f"{subtype}.csv")
@@ -28,6 +33,13 @@ if __name__ == "__main__":
         )
 
         subtype_res_df = pd.read_csv(fpath)
+        plot_cbase_driver_and_passenger_mutation_counts(
+            subtype_decoy_genes,
+            drivers,
+            subtype_res_df,
+            subtype,
+        )
+
         subtype_cbase_drivers = set(
             subtype_res_df.sort_values(
                 by="CBaSE Pos. Sel. Phi", ascending=False
@@ -43,13 +55,13 @@ if __name__ == "__main__":
                 high_ranked_decoy_freqs[gene] = 0
             high_ranked_decoy_freqs[gene] += 1
 
-    plot_cbase_driver_decoy_gene_fractions(
-        subtype_decoy_gene_fractions,
-        fout="figures/cbase_decoy_fractions_barplot.svg",
-    )
-    plot_cbase_top_decoy_genes_upset(
-        subtype_to_high_ranked_decoys,
-        high_ranked_decoy_freqs,
-        top_n=6,
-        fout="figures/cbase_upset_plot_top_likely_passengers.svg",
-    )
+    # plot_cbase_driver_decoy_gene_fractions(
+    #     subtype_decoy_gene_fractions,
+    #     fout="figures/cbase_decoy_fractions_barplot.svg",
+    # )
+    # plot_cbase_top_decoy_genes_upset(
+    #     subtype_to_high_ranked_decoys,
+    #     high_ranked_decoy_freqs,
+    #     top_n=6,
+    #     fout="figures/cbase_upset_plot_top_likely_passengers.svg",
+    # )
