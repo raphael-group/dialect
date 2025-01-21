@@ -56,7 +56,8 @@ def filter_by_method(
         epsilon = MIN_DRIVER_COUNT / num_samples
         # only keep pairs w/ both driver marginals > epsilon
         top_ranking_pairs = top_ranking_pairs[
-            (top_ranking_pairs["Tau_1X"] > epsilon) & (top_ranking_pairs["Tau_X1"] > epsilon)
+            (top_ranking_pairs["Tau_1X"] > epsilon)
+            & (top_ranking_pairs["Tau_X1"] > epsilon)
         ]
         if is_me:
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] < 0]
@@ -65,7 +66,9 @@ def filter_by_method(
 
     elif method == "MEGSA":
         # For ME, keep only S-Score > 0
-        top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["MEGSA S-Score (LRT)"] > 0]
+        top_ranking_pairs = top_ranking_pairs[
+            top_ranking_pairs["MEGSA S-Score (LRT)"] > 0
+        ]
 
     elif method == "DISCOVER":
         if is_me:
@@ -128,8 +131,12 @@ def get_top_ranked_pairs_by_method(
         # all other methods have p-values that you sort ascending
         ascending = True
 
-    top_ranking_pairs = results_df.sort_values(by=sort_col, ascending=ascending)
-    top_ranking_pairs = filter_by_method(top_ranking_pairs, method, is_me, num_samples)
+    top_ranking_pairs = results_df.sort_values(
+        by=sort_col, ascending=ascending
+    )
+    top_ranking_pairs = filter_by_method(
+        top_ranking_pairs, method, is_me, num_samples
+    )
     if top_ranking_pairs is None or top_ranking_pairs.empty:
         return None
     top_ranking_pairs = top_ranking_pairs.head(num_pairs)
