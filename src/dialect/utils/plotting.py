@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pandas as pd
 import networkx as nx
 import seaborn as sns
@@ -228,7 +229,9 @@ def plot_decoy_gene_fractions(
 
     # Step 4: Save Plot
     os.makedirs(out_dir, exist_ok=True)
-    plot.save(f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg", dpi=300)
+    plot.save(
+        f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg", dpi=300
+    )
     print(
         f"Plot saved to {out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg"
     )
@@ -493,3 +496,77 @@ def plot_cbase_top_decoy_genes_upset(
     subplots["matrix"].set_ylabel("Likely Passengers")
     plt.savefig(fout, transparent=True)
     plt.close()
+
+
+def plot_cbase_driver_and_passenger_mutation_counts(
+    decoys,
+    drivers,
+    res_df,
+    subtype,
+):
+    decoy_df = res_df[res_df["Gene Name"].isin(decoys)]
+    top5_decoys = decoy_df.nlargest(5, "Observed Mutations")
+    driver_df = res_df[res_df["Gene Name"].isin(drivers)]
+    top5_drivers = driver_df.nlargest(5, "Observed Mutations")
+    top10 = pd.concat([top5_decoys, top5_drivers], ignore_index=True)
+    top10 = top10.sort_values("Observed Mutations", ascending=False)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    apply_tufte_style(ax)
+    x = np.arange(len(top10))
+    bar_width = 0.4
+    ax.bar(
+        x - bar_width / 2,
+        top10["Observed Mutations"],
+        width=bar_width,
+        color="black",
+        label="Observed",
+    )
+    ax.bar(
+        x + bar_width / 2,
+        top10["Expected Mutations"],
+        width=bar_width,
+        color="slategray",
+        label="Expected",
+    )
+    ax.set_xlabel("Gene", fontsize=14)
+    ax.set_ylabel("Mutation Count", fontsize=14)
+    ax.set_xticks(x)
+    ax.tick_params(axis="x", labelsize=12)
+    ax.set_xticklabels(top10["Gene Name"], rotation=25, ha="right")
+    for label, gene in zip(ax.get_xticklabels(), top10["Gene Name"]):
+        if gene in drivers:
+            label.set_bbox(
+                dict(
+                    facecolor="#9999FF",
+                    alpha=0.35,
+                    edgecolor="none",
+                    boxstyle="round,pad=0.3",
+                )
+            )
+        else:
+            label.set_bbox(
+                dict(
+                    facecolor="#FF9999",
+                    alpha=0.35,
+                    edgecolor="none",
+                    boxstyle="round,pad=0.3",
+                )
+            )
+    driver_patch = plt.Rectangle((0, 0), 1, 1, facecolor="#9999FF", alpha=0.35)
+    passenger_patch = plt.Rectangle(
+        (0, 0), 1, 1, facecolor="#FF9999", alpha=0.35
+    )
+    handles, labels = ax.get_legend_handles_labels()
+    handles += [driver_patch, passenger_patch]
+    labels += ["Putative Driver", "Likely Passenger"]
+    ax.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.25),
+        ncol=2,
+    )
+    plt.tight_layout()
+    plt.savefig(
+        f"figures/cbase_obs_exp_plots/{subtype}_cbase_driver_vs_passenger_counts.png"
+    )
