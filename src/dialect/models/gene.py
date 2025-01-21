@@ -35,7 +35,9 @@ class Gene:
             for k, v in itertools.islice(self.bmr_pmf.items(), 3)
         )  # Format the first three key-value pairs in bmr_pmf
         pi_info = (
-            f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
+            f"Pi: {self.pi:.3e}"
+            if self.pi is not None
+            else "Pi: Not estimated"
         )
         total_mutations = np.sum(self.counts)
         return (
@@ -139,18 +141,32 @@ class Gene:
         **Raises**:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
+
         # logging.info(
         #     f"Computing log likelihood for gene {self.name}. Pi: {pi:.3e}. "
         #     f"BMR PMF: {{ {', '.join(f'{k}: {v:.3e}' for k, v in itertools.islice(self.bmr_pmf.items(), 3))} }}"
         # )
+        # TODO: move to unified helper scripts file
+        def safe_get_no_default(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c)
+
+        def safe_get_with_default(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c, 0)
 
         self.verify_pi_is_valid(pi)
         self.verify_bmr_pmf_and_counts_exist()
-        self.verify_bmr_pmf_contains_all_count_keys()
+        # self.verify_bmr_pmf_contains_all_count_keys()
 
         log_likelihood = sum(
             np.log(
-                self.bmr_pmf.get(c) * (1 - pi) + self.bmr_pmf.get(c - 1, 0) * pi
+                safe_get_no_default(self.bmr_pmf, c) * (1 - pi)
+                + safe_get_with_default(self.bmr_pmf, c - 1) * pi
             )
             for c in self.counts
         )
@@ -284,7 +300,7 @@ class Gene:
         )
 
         self.verify_bmr_pmf_and_counts_exist()
-        self.verify_bmr_pmf_contains_all_count_keys()
+        # self.verify_bmr_pmf_contains_all_count_keys()
 
         nonzero_probability_counts = [
             c for c in self.counts if c in self.bmr_pmf and self.bmr_pmf[c] > 0

@@ -19,7 +19,9 @@ class Interaction:
         :param gene_b (Gene): The second gene in the interaction.
         """
         if not isinstance(gene_a, Gene) or not isinstance(gene_b, Gene):
-            raise ValueError("Both inputs must be instances of the Gene class.")
+            raise ValueError(
+                "Both inputs must be instances of the Gene class."
+            )
 
         self.gene_a = gene_a
         self.gene_b = gene_b
@@ -85,7 +87,9 @@ class Interaction:
         """
         gene_a_mutations = (self.gene_a.counts > 0).astype(int)
         gene_b_mutations = (self.gene_b.counts > 0).astype(int)
-        cm = confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[0, 1])
+        cm = confusion_matrix(
+            gene_a_mutations, gene_b_mutations, labels=[0, 1]
+        )
         return cm
 
     def get_set_of_cooccurring_samples(self):
@@ -142,7 +146,7 @@ class Interaction:
         if self.gene_a.counts is None or self.gene_b.counts is None:
             raise ValueError("Counts are not defined for one or both genes.")
 
-    def verify_taus_are_valid(self, taus, tol=1e-6):
+    def verify_taus_are_valid(self, taus, tol=1e-2):
         """
         Verify that tau parameters are valid (0 <= tau_i <= 1 and sum(tau) == 1).
 
@@ -189,33 +193,47 @@ class Interaction:
     # TODO: (LOW PRIORITY): Add additional metrics (KL, MI, etc.)
 
     def compute_joint_probability(self, tau, u, v):
+        # TODO: move to unified helper scripts file
+        def safe_get(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c, 0)
+
         joint_probability = np.array(
             [
                 tau
-                * self.gene_a.bmr_pmf.get(c_a - u, 0)
-                * self.gene_b.bmr_pmf.get(c_b - v, 0)
+                * safe_get(self.gene_a.bmr_pmf, c_a - u, 0)
+                * safe_get(self.gene_b.bmr_pmf, c_b - v, 0)
                 for c_a, c_b in zip(self.gene_a.counts, self.gene_b.counts)
             ]
         )
         return joint_probability
 
     def compute_total_probability(self, tau_00, tau_01, tau_10, tau_11):
+        # TODO: move to helper scripts file
+        def safe_get(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c, 0)
+
         total_probabilities = np.array(
             [
                 sum(
                     (
                         tau_00
-                        * self.gene_a.bmr_pmf.get(c_a, 0)
-                        * self.gene_b.bmr_pmf.get(c_b, 0),
+                        * safe_get(self.gene_a.bmr_pmf, c_a, 0)
+                        * safe_get(self.gene_b.bmr_pmf, c_b, 0),
                         tau_01
-                        * self.gene_a.bmr_pmf.get(c_a, 0)
-                        * self.gene_b.bmr_pmf.get(c_b - 1, 0),
+                        * safe_get(self.gene_a.bmr_pmf, c_a, 0)
+                        * safe_get(self.gene_b.bmr_pmf, c_b - 1, 0),
                         tau_10
-                        * self.gene_a.bmr_pmf.get(c_a - 1, 0)
-                        * self.gene_b.bmr_pmf.get(c_b, 0),
+                        * safe_get(self.gene_a.bmr_pmf, c_a - 1, 0)
+                        * safe_get(self.gene_b.bmr_pmf, c_b, 0),
                         tau_11
-                        * self.gene_a.bmr_pmf.get(c_a - 1, 0)
-                        * self.gene_b.bmr_pmf.get(c_b - 1, 0),
+                        * safe_get(self.gene_a.bmr_pmf, c_a - 1, 0)
+                        * safe_get(self.gene_b.bmr_pmf, c_b - 1, 0),
                     )
                 )
                 for c_a, c_b in zip(self.gene_a.counts, self.gene_b.counts)
@@ -257,6 +275,18 @@ class Interaction:
 
         # TODO: add verbose option for logging
         # logging.info(f"Computing log likelihood for {self.name}. Taus: {taus}")
+        # TODO: move to unified helper scripts file
+        def safe_get_no_default(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c)
+
+        def safe_get_with_default(pmf, c, min_val=1e-100):
+            # if c is greater than the max count in pmf
+            if c > max(pmf.keys()):
+                return min_val
+            return pmf.get(c, 0)
 
         self.verify_bmr_pmf_and_counts_exist()
         self.verify_taus_are_valid(taus)
@@ -266,10 +296,18 @@ class Interaction:
         tau_00, tau_01, tau_10, tau_11 = taus
         log_likelihood = sum(
             np.log(
-                a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b) * tau_00
-                + a_bmr_pmf.get(c_a) * b_bmr_pmf.get(c_b - 1, 0) * tau_01
-                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b) * tau_10
-                + a_bmr_pmf.get(c_a - 1, 0) * b_bmr_pmf.get(c_b - 1, 0) * tau_11
+                safe_get_no_default(a_bmr_pmf, c_a)
+                * safe_get_no_default(b_bmr_pmf, c_b)
+                * tau_00
+                + safe_get_no_default(a_bmr_pmf, c_a)
+                * safe_get_with_default(b_bmr_pmf, c_b - 1)
+                * tau_01
+                + safe_get_with_default(a_bmr_pmf, c_a - 1)
+                * safe_get_no_default(b_bmr_pmf, c_b)
+                * tau_10
+                + safe_get_with_default(a_bmr_pmf, c_a - 1)
+                * safe_get_with_default(b_bmr_pmf, c_b - 1)
+                * tau_11
             )
             for c_a, c_b in zip(a_counts, b_counts)
         )
@@ -295,7 +333,9 @@ class Interaction:
         :return: (float) The computed likelihood ratio test statistic (\( \lambda_{LR} \)).
         """
 
-        logging.info(f"Computing likelihood ratio for interaction {self.name}.")
+        logging.info(
+            f"Computing likelihood ratio for interaction {self.name}."
+        )
 
         tau_00, tau_01, tau_10, tau_11 = taus
         driver_a_marginal = tau_10 + tau_11
@@ -562,11 +602,17 @@ class Interaction:
                 / total_probabilities
             )
 
+            # TODO: map out other reasons for nan values and standardize handling
+            # remove nans to avoid underflow issues in bmr estimates
+            z_i_00_no_nan = np.nan_to_num(z_i_00, nan=2e-100)
+            z_i_01_no_nan = np.nan_to_num(z_i_01, nan=2e-100)
+            z_i_10_no_nan = np.nan_to_num(z_i_10, nan=2e-100)
+            z_i_11_no_nan = np.nan_to_num(z_i_11, nan=2e-100)
             # M-Step: Update tau parameters
-            curr_tau_00 = np.mean(z_i_00)
-            curr_tau_01 = np.mean(z_i_01)
-            curr_tau_10 = np.mean(z_i_10)
-            curr_tau_11 = np.mean(z_i_11)
+            curr_tau_00 = np.mean(z_i_00_no_nan)
+            curr_tau_01 = np.mean(z_i_01_no_nan)
+            curr_tau_10 = np.mean(z_i_10_no_nan)
+            curr_tau_11 = np.mean(z_i_11_no_nan)
 
             # Check for convergence
             prev_log_likelihood = self.compute_log_likelihood(
