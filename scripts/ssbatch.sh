@@ -40,7 +40,8 @@ for STEP in "${STEPS_ARRAY[@]}"; do
             dialect identify -c "${OUTPUT_DIR}/count_matrix.csv" -b "${OUTPUT_DIR}/bmr_pmfs.csv" -o "${OUTPUT_DIR}" -k "${K}" -cb "${OUTPUT_DIR}/CBaSE_output/q_values.txt"
             ;;
         compare)
-            dialect compare -c "${OUTPUT_DIR}/count_matrix.csv" -b "${OUTPUT_DIR}/bmr_pmfs.csv" -o "${OUTPUT_DIR}" -k "${K}"
+            dialect compare -c "${OUTPUT_DIR}/count_matrix.csv" -o "${OUTPUT_DIR}" -k "${K}"
+            dialect compare -c "${OUTPUT_DIR}/gene_level_count_matrix.csv" -o "${OUTPUT_DIR}" -k "${K}" -g
             ;;
         merge)
             dialect merge -d "${OUTPUT_DIR}/pairwise_interaction_results.csv" -a "${OUTPUT_DIR}/comparison_interaction_results.csv" -o "${OUTPUT_DIR}"

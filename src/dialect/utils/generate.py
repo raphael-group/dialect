@@ -131,6 +131,15 @@ def generate_counts_from_CBaSE_output(out):
 
     df = pd.read_csv(CBaSE_kept_mutations_fn, sep="\t")
     df = df[df["effect"].isin(["missense", "nonsense"])]
+    gene_level_df = df.pivot_table(
+        index="gene",
+        columns="sample",
+        aggfunc="size",
+        fill_value=0,
+    ).T
+    gene_level_df.to_csv(
+        os.path.join(out, "gene_level_count_matrix.csv"), index=True
+    )
     df["gene"] = df["gene"] + "_" + df["effect"].str[0].str.upper()
     df = df.pivot_table(
         index="gene", columns="sample", aggfunc="size", fill_value=0

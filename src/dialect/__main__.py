@@ -46,9 +46,9 @@ def main():
         os.makedirs(args.out, exist_ok=True)
         run_comparison_methods(
             cnt_mtx=args.cnt,
-            bmr_pmfs=args.bmr,
             out=args.out,
             k=args.top_k,
+            gene_level=args.gene_level,
         )
 
     elif args.command == "merge":

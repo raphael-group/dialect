@@ -1,10 +1,16 @@
+import pandas as pd
 import logging
 
-from dialect.utils.helpers import *
+from dialect.utils.helpers import (
+    check_file_exists,
+    initialize_gene_objects,
+    initialize_interaction_objects,
+)
 from dialect.utils.fishers import run_fishers_exact_analysis
 from dialect.utils.discover import run_discover_analysis
 from dialect.utils.megsa import run_megsa_analysis
 from dialect.utils.wesme import run_wesme_analysis
+from dialect.models.gene import Gene
 
 
 # ---------------------------------------------------------------------------- #
@@ -39,16 +45,32 @@ def results_to_dataframe(results, me_pcol, co_pcol, me_qcol, co_qcol):
 # ---------------------------------------------------------------------------- #
 #                                 MAIN FUNCTION                                #
 # ---------------------------------------------------------------------------- #
-def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
+def run_comparison_methods(
+    cnt_mtx,
+    out,
+    k,
+    gene_level,
+):
     logging.info("Running comparison methods")
-    verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
-    cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
+    check_file_exists(cnt_mtx)
+    cnt_df = pd.read_csv(cnt_mtx, index_col=0)
 
     if k <= 0:
         raise ValueError("k must be a positive integer")
 
-    genes = initialize_gene_objects(cnt_df, bmr_dict)
-    top_genes, interactions = initialize_interaction_objects(k, genes.values())
+    # TODO: integrate this logic into helper function
+    genes = []
+    for gene_name in cnt_df.columns:
+        counts = cnt_df[gene_name].values
+        genes.append(
+            Gene(
+                name=gene_name,
+                samples=cnt_df.index,
+                counts=counts,
+                bmr_pmf=None,
+            )
+        )
+    top_genes, interactions = initialize_interaction_objects(k, genes)
 
     logging.info("Running Fisher's exact test...")
     # TODO: modify run_fisher_exact_analysis to directly return a dataframe
@@ -88,6 +110,10 @@ def run_comparison_methods(cnt_mtx, bmr_pmfs, out, k):
         merged_df, wesme_df, on=["Gene A", "Gene B"], how="inner"
     )
     comparison_interaction_fout = f"{out}/comparison_interaction_results.csv"
+    if gene_level:
+        comparison_interaction_fout = (
+            f"{out}/gene_level_comparison_interaction_results.csv"
+        )
     merged_df.to_csv(comparison_interaction_fout, index=False)
     logging.info(f"Comparison results saved to {comparison_interaction_fout}")
     logging.info("Finished running comparison methods")

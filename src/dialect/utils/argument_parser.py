@@ -70,10 +70,10 @@ def add_compare_parser(subparsers):
         "compare", help="Run alternative methods"
     )
     compare_parser.add_argument(
-        "-c", "--cnt", required=True, help="Path to the input count matrix file"
-    )
-    compare_parser.add_argument(
-        "-b", "--bmr", required=True, help="Path to the BMR file"
+        "-c",
+        "--cnt",
+        required=True,
+        help="Path to the input count matrix file",
     )
     compare_parser.add_argument(
         "-o", "--out", required=True, help="Path to the output directory"
@@ -84,6 +84,12 @@ def add_compare_parser(subparsers):
         default=100,
         type=int,
         help="Number of genes to consider (default: 100 genes with highest mutation count)",
+    )
+    compare_parser.add_argument(
+        "-g",
+        "--gene_level",
+        action="store_true",
+        help="Run comparison methods on gene level features",
     )
 
 

@@ -72,7 +72,8 @@ for MAF_FILE in "${MAF_FILES[@]}"; do
                     ;;
                 compare)
                     echo "Running compare for ${SUBTYPE_NAME}..."
-                    dialect compare -c "${OUTPUT_DIR}/count_matrix.csv" -b "${OUTPUT_DIR}/bmr_pmfs.csv" -o "${OUTPUT_DIR}" -k "${TOP_GENES}"
+                    dialect compare -c "${OUTPUT_DIR}/count_matrix.csv" -o "${OUTPUT_DIR}" -k "${TOP_GENES}"
+                    dialect compare -c "${OUTPUT_DIR}/gene_level_count_matrix.csv" -o "${OUTPUT_DIR}" -k "${TOP_GENES}" -g
                     ;;
                 merge)
                     echo "Running merge for ${SUBTYPE_NAME}..."
