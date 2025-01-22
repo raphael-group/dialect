@@ -245,6 +245,7 @@ def draw_network_gridplot_across_methods(
     results_df,
     num_samples,
     is_me,
+    dout,
 ):
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     suptitle = (
@@ -350,8 +351,9 @@ def draw_network_gridplot_across_methods(
 
     plt.tight_layout(pad=0.5)
     ranking_type = "ME" if is_me else "CO"
-    fout = f"figures/{subtype}_{ranking_type}_network_plots_across_methods.png"
+    fout = f"{dout}/{subtype}_{ranking_type}_network_plots_across_methods.png"
     plt.savefig(fout, dpi=300)
+    plt.close(fig)
 
 
 def plot_sample_mutation_count_subtype_histograms(

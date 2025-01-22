@@ -43,7 +43,7 @@ def build_argument_parser():
         "-o",
         "--out",
         type=str,
-        default="figures",
+        default="figures/network_plots",
         help="Output directory",
     )
     group = parser.add_mutually_exclusive_group(required=True)
@@ -71,14 +71,24 @@ if __name__ == "__main__":
     driver_genes = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
-        results_fn = os.path.join(args.results_dir, subtype, "complete_pairwise_ixn_results.csv")
-        cnt_mtx_fn = os.path.join(args.results_dir, subtype, "count_matrix.csv")
-        decoy_genes_fn = os.path.join(args.decoy_genes_dir, f"{subtype}_decoy_genes.txt")
-        if not os.path.exists(results_fn) or not os.path.exists(decoy_genes_fn):
+        results_fn = os.path.join(
+            args.results_dir, subtype, "complete_pairwise_ixn_results.csv"
+        )
+        cnt_mtx_fn = os.path.join(
+            args.results_dir, subtype, "count_matrix.csv"
+        )
+        decoy_genes_fn = os.path.join(
+            args.decoy_genes_dir, f"{subtype}_decoy_genes.txt"
+        )
+        if not os.path.exists(results_fn) or not os.path.exists(
+            decoy_genes_fn
+        ):
             logging.info(f"Skipping {subtype} since input files not found")
             continue
         results_df = pd.read_csv(results_fn)
-        decoy_genes = set(pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"])
+        decoy_genes = set(
+            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"]
+        )
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         draw_network_gridplot_across_methods(
             args.num_edges,
@@ -88,4 +98,5 @@ if __name__ == "__main__":
             results_df,
             num_samples,
             args.me,
+            args.out,
         )
