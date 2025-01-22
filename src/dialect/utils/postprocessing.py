@@ -1,4 +1,6 @@
-import pandas as pd
+from math import sqrt
+from scipy.stats import norm
+from scipy.optimize import brentq
 
 # ---------------------------------------------------------------------------- #
 #                                   CONSTANTS                                  #
@@ -53,8 +55,7 @@ def filter_by_method(
         return None
 
     if method == "DIALECT":
-        epsilon = MIN_DRIVER_COUNT / num_samples
-        # only keep pairs w/ both driver marginals > epsilon
+        epsilon = compute_epsilon_threshold(num_samples)
         top_ranking_pairs = top_ranking_pairs[
             (top_ranking_pairs["Tau_1X"] > epsilon)
             & (top_ranking_pairs["Tau_X1"] > epsilon)
@@ -65,7 +66,6 @@ def filter_by_method(
             top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] > 0]
 
     elif method == "MEGSA":
-        # For ME, keep only S-Score > 0
         top_ranking_pairs = top_ranking_pairs[
             top_ranking_pairs["MEGSA S-Score (LRT)"] > 0
         ]
@@ -101,6 +101,40 @@ def filter_by_method(
             ]
 
     return top_ranking_pairs
+
+
+def compute_epsilon_threshold(num_samples, alpha=0.001):
+    """
+    Compute the epsilon threshold for the one-sided normal approximation confidence interval.
+
+    We solve the equation:
+
+    .. math::
+
+        \\max\\Bigl(\\epsilon - z_{(1 - \\alpha)}
+        \\sqrt{\\frac{\\epsilon (1 - \\epsilon)}{n}}, 0\\Bigr) = 0
+
+    for \\(\\epsilon \\in [0, 1]\\), where:
+    - \\(n\\) = ``num_samples``,
+    - \\(\\alpha\\) is the one-sided significance level,
+    - \\(z_{(1 - \\alpha)}\\) is the critical value from the standard normal distribution
+      at the \\((1 - \\alpha)\\) quantile.
+
+    **Parameters**:
+      :param num_samples: (int) Number of samples (\\(n\\))
+      :param alpha: (float) Significance level for the one-sided interval
+                    (default 0.001 for a 99.9% one-sided CI)
+
+    **Returns**:
+      :return: (float) The marginal driver mutation rate threshold \\(\\epsilon\\) such that
+               the lower bound of the one-sided normal CI is exactly 0.
+    """
+    z = norm.ppf(1 - alpha)
+
+    def f(eps):
+        return eps - z * sqrt(eps * (1 - eps) / num_samples)
+
+    return brentq(f, 1e-6, 1.0)
 
 
 def get_top_ranked_pairs_by_method(
