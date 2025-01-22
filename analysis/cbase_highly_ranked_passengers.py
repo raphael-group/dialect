@@ -1,7 +1,5 @@
 import os
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from dialect.utils.plotting import (
     plot_cbase_driver_decoy_gene_fractions,
@@ -55,13 +53,13 @@ if __name__ == "__main__":
                 high_ranked_decoy_freqs[gene] = 0
             high_ranked_decoy_freqs[gene] += 1
 
-    # plot_cbase_driver_decoy_gene_fractions(
-    #     subtype_decoy_gene_fractions,
-    #     fout="figures/cbase_decoy_fractions_barplot.svg",
-    # )
-    # plot_cbase_top_decoy_genes_upset(
-    #     subtype_to_high_ranked_decoys,
-    #     high_ranked_decoy_freqs,
-    #     top_n=6,
-    #     fout="figures/cbase_upset_plot_top_likely_passengers.svg",
-    # )
+    plot_cbase_driver_decoy_gene_fractions(
+        subtype_decoy_gene_fractions,
+        fout="figures/cbase_decoy_fractions_barplot.svg",
+    )
+    plot_cbase_top_decoy_genes_upset(
+        subtype_to_high_ranked_decoys,
+        high_ranked_decoy_freqs,
+        top_n=6,
+        fout="figures/cbase_upset_plot_top_likely_passengers.svg",
+    )
