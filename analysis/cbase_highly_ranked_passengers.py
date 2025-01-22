@@ -1,10 +1,14 @@
+"""Analyze highly ranked passengers in cbase data."""
+
 import os
+from pathlib import Path
+
 import pandas as pd
 
 from dialect.utils.plotting import (
+    plot_cbase_driver_and_passenger_mutation_counts,
     plot_cbase_driver_decoy_gene_fractions,
     plot_cbase_top_decoy_genes_upset,
-    plot_cbase_driver_and_passenger_mutation_counts,
 )
 
 SINGLE_GENE_RESULTS_DIR = "single_gene_results"
@@ -20,14 +24,12 @@ if __name__ == "__main__":
     subtype_decoy_gene_fractions = {}
     subtype_to_high_ranked_decoys = {}
     for file_name in os.listdir(SINGLE_GENE_RESULTS_DIR):
-        subtype = os.path.splitext(file_name)[0]
-        fpath = os.path.join(SINGLE_GENE_RESULTS_DIR, f"{subtype}.csv")
+        subtype = Path(file_name).stem
+        fpath = Path(SINGLE_GENE_RESULTS_DIR) / f"{subtype}.csv"
 
-        decoy_genes_fn = os.path.join(
-            DECOY_GENES_DIR, f"{subtype}_decoy_genes.txt"
-        )
+        decoy_genes_fn = Path(DECOY_GENES_DIR) / f"{subtype}_decoy_genes.txt"
         subtype_decoy_genes = set(
-            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"]
+            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"],
         )
 
         subtype_res_df = pd.read_csv(fpath)
@@ -40,11 +42,12 @@ if __name__ == "__main__":
 
         subtype_cbase_drivers = set(
             subtype_res_df.sort_values(
-                by="CBaSE Pos. Sel. Phi", ascending=False
-            )["Gene Name"].head(50)
+                by="CBaSE Pos. Sel. Phi",
+                ascending=False,
+            )["Gene Name"].head(50),
         )
         high_ranked_decoys = subtype_cbase_drivers.intersection(
-            subtype_decoy_genes
+            subtype_decoy_genes,
         )
         subtype_decoy_gene_fractions[subtype] = len(high_ranked_decoys) / 50.0
         subtype_to_high_ranked_decoys[subtype] = high_ranked_decoys

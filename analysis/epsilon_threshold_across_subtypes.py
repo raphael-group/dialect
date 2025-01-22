@@ -1,3 +1,4 @@
+"""Create simple plot of epsilon threshold vs. cohort sizes."""
 import matplotlib.pyplot as plt
 
 from dialect.utils.postprocessing import compute_epsilon_threshold
@@ -16,5 +17,5 @@ if __name__ == "__main__":
     plt.ylabel("Epsilon Threshold", fontsize=16)
     plt.xticks(fontsize=14)
     plt.yticks(fontsize=14)
-    plt.grid(True)
+    plt.grid(visible=True)
     plt.savefig("figures/epsilon_threshold_across_subtypes.png")

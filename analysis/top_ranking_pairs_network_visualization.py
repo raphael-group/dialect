@@ -1,15 +1,19 @@
-import os
+"""Create network plots for top ranking pairs across methods."""
+
 import logging
+import os
+from argparse import ArgumentParser
+from pathlib import Path
+
 import pandas as pd
 
-from argparse import ArgumentParser
 from dialect.utils.plotting import draw_network_gridplot_across_methods
 
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def build_argument_parser():
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def _build_argument_parser_() -> ArgumentParser:
     parser = ArgumentParser(description="Decoy Gene Analysis")
     parser.add_argument(
         "-n",
@@ -60,34 +64,28 @@ def build_argument_parser():
     return parser
 
 
-# ---------------------------------------------------------------------------- #
-#                                 MAIN FUNCTION                                #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                     MAIN FUNCTION                                    #
+# ------------------------------------------------------------------------------------ #
 if __name__ == "__main__":
-    parser = build_argument_parser()
+    parser = _build_argument_parser_()
     args = parser.parse_args()
 
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
     driver_genes = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
-        results_fn = os.path.join(
-            args.results_dir, subtype, "complete_pairwise_ixn_results.csv"
+        results_fn = (
+            Path(args.results_dir) / subtype / "complete_pairwise_ixn_results.csv"
         )
-        cnt_mtx_fn = os.path.join(
-            args.results_dir, subtype, "count_matrix.csv"
-        )
-        decoy_genes_fn = os.path.join(
-            args.decoy_genes_dir, f"{subtype}_decoy_genes.txt"
-        )
-        if not os.path.exists(results_fn) or not os.path.exists(
-            decoy_genes_fn
-        ):
-            logging.info(f"Skipping {subtype} since input files not found")
+        cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
+        decoy_genes_fn = Path(args.decoy_genes_dir) / f"{subtype}_decoy_genes.txt"
+        if not results_fn.exists() or not decoy_genes_fn.exists():
+            logging.info("Skipping %s since input files not found", subtype)
             continue
         results_df = pd.read_csv(results_fn)
         decoy_genes = set(
-            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"]
+            pd.read_csv(decoy_genes_fn, header=None, names=["Gene"])["Gene"],
         )
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         draw_network_gridplot_across_methods(

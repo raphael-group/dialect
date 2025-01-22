@@ -1,20 +1,27 @@
-import os
-import logging
-import pandas as pd
-import numpy as np
+"""Create tex tables for top ranking pairs across methods."""
 
+import logging
+import os
 from argparse import ArgumentParser
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 from dialect.utils.postprocessing import generate_top_ranking_tables
 
+FLOAT_LOW_THRESHOLD = 0.01
+MANTISSA_MAX_THRESHOLD = 10
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def build_argument_parser():
-    """
-    We do NOT modify this parser, as requested.
-    """
-    parser = ArgumentParser(description="Generate LaTeX tables for top pairs across methods.")
+
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def _build_argument_parser_() -> ArgumentParser:
+    """We do NOT modify this parser, as requested."""
+    parser = ArgumentParser(
+        description="Generate LaTeX tables for top pairs across methods.",
+    )
     parser.add_argument(
         "-n",
         "--num_pairs",
@@ -64,51 +71,48 @@ def build_argument_parser():
     return parser
 
 
-def format_float(value):
-    """
-    Handles positive and negative floats:
-      - If |value| >= 0.01, display with up to 2 decimals (no trailing zeros).
-      - If |value| < 0.01 (and not zero), use base-10 notation: e.g. 3x10^{-3}.
-      - Preserve a '-' sign if the original value is negative.
-      - Ensures the mantissa stays in the range [1, 10) and uses two significant digits
-        to avoid outputs like '1e+01x10^{-4}'.
+def format_float(value: float) -> str:
+    """Format float value for LaTeX table.
+
+    - If |value| >= 0.01, display with up to 2 decimals (no trailing zeros).
+    - If |value| < 0.01 (and not zero), use base-10 notation: e.g. 3x10^{-3}.
+    - Preserve a '-' sign if the original value is negative.
+    - Ensures the mantissa stays in the range [1, 10) and uses two significant digits
+      to avoid outputs like '1e+01x10^{-4}'.
     """
     sign = "-" if value < 0 else ""
     abs_val = abs(value)
 
     if abs_val == 0:
         return "0"
-    elif abs_val >= 0.01:
+    if abs_val >= FLOAT_LOW_THRESHOLD:
         val_str = f"{abs_val:.2f}".rstrip("0").rstrip(".")
         return sign + val_str
-    else:
-        exponent = int(np.floor(np.log10(abs_val)))
-        mantissa = abs_val / (10**exponent)
-        # Adjust if mantissa >= 10 or < 1
-        while mantissa >= 10:
-            mantissa /= 10
-            exponent += 1
-        while mantissa < 1:
-            mantissa *= 10
-            exponent -= 1
+    exponent = int(np.floor(np.log10(abs_val)))
+    mantissa = abs_val / (10**exponent)
+    while mantissa >= MANTISSA_MAX_THRESHOLD:
+        mantissa /= 10
+        exponent += 1
+    while mantissa < 1:
+        mantissa *= 10
+        exponent -= 1
 
-        # Keep two significant digits for the mantissa
-        mantissa_str = f"{mantissa:.2g}"
-        return f"{sign}{mantissa_str}x10^{{{exponent}}}"
+    mantissa_str = f"{mantissa:.2g}"
+    return f"{sign}{mantissa_str}x10^{{{exponent}}}"
 
 
-def escape_gene_name(gene_name):
-    """
-    Convert '_M' -> '\_M' and '_N' -> '\_N' so LaTeX can render underscores.
-    """
+def _escape_gene_name_(gene_name: str) -> str:
+    r"""Convert '_M' -> '\_M' and '_N' -> '\_N' so LaTeX can render underscores."""
     return gene_name.replace("_M", r"\_M").replace("_N", r"\_N")
 
 
-def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels, is_me):
-    """
-    Builds a LaTeX fragment for the given set of methods in a single row of columns.
-    E.g., ["DIALECT","DISCOVER","Fisher's Exact Test"] -> a 3-method tabular.
-    """
+def _build_subtable_latex_(
+    methods_list: list,
+    top_pairs_by_method: dict,
+    metric_labels: dict,
+    ixn_type: str,
+) -> str:
+    """Build a LaTeX table for the given set of methods in a single row of columns."""
     num_methods = len(methods_list)
     col_spec = "||".join(["cc"] * num_methods)
 
@@ -117,14 +121,12 @@ def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels, is_me
     lines.append(r"\begin{tabular}{" + col_spec + r"}")
     lines.append(r"\hline")
 
-    header_parts = []
-    for method in methods_list:
-        header_parts.append(r"\multicolumn{2}{c}{" + method + "}")
+    header_parts = [r"\multicolumn{2}{c}{" + method + "}" for method in methods_list]
     lines.append(" & ".join(header_parts) + r" \\ \hline")
 
     subheader_parts = []
     for method in methods_list:
-        col_name = "ME Gene Pair" if is_me else "CO Gene Pair"
+        col_name = f"{ixn_type} Gene Pair"
         subheader_parts.append(col_name)
         subheader_parts.append(metric_labels[method])
     lines.append(" & ".join(subheader_parts) + r" \\ \hline")
@@ -148,15 +150,19 @@ def build_subtable_latex(methods_list, top_pairs_by_method, metric_labels, is_me
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------- #
-#                                MAIN FUNCTIONS                                #
-# ---------------------------------------------------------------------------- #
-def create_final_table(subtype, top_pairs_by_method, num_pairs, is_me):
-    """
-    Creates one big table environment with two "sub-tables":
-     - First row (3 methods): DIALECT, DISCOVER, Fisher's Exact Test
-     - Second row (2 methods): MEGSA, WeSME
-    We place them in consecutive tabulars with minimal spacing.
+# ------------------------------------------------------------------------------------ #
+#                                    MAIN FUNCTIONS                                    #
+# ------------------------------------------------------------------------------------ #
+def _create_final_table_(
+    subtype: str,
+    top_pairs_by_method: dict,
+    num_pairs: int,
+    ixn_type: str,
+) -> str:
+    """Create one big table environment with two "sub-tables" across methods.
+
+    - First row (3 methods): DIALECT, DISCOVER, Fisher's Exact Test
+    - Second row (2 methods): MEGSA, WeSME
     """
     metric_labels = {
         "DIALECT": r"$\rho$",
@@ -169,14 +175,22 @@ def create_final_table(subtype, top_pairs_by_method, num_pairs, is_me):
 
     top_row_methods = ["DIALECT", "DISCOVER", "Fisher's Exact Test"]
     bottom_row_methods = ["MEGSA"]
-    if is_me:
+    if ixn_type == "ME":
         bottom_row_methods.append("WeSME")
     else:
         bottom_row_methods.append("WeSCO")
 
-    top_subtable = build_subtable_latex(top_row_methods, top_pairs_by_method, metric_labels, is_me)
-    bottom_subtable = build_subtable_latex(
-        bottom_row_methods, top_pairs_by_method, metric_labels, is_me
+    top_subtable = _build_subtable_latex_(
+        top_row_methods,
+        top_pairs_by_method,
+        metric_labels,
+        ixn_type,
+    )
+    bottom_subtable = _build_subtable_latex_(
+        bottom_row_methods,
+        top_pairs_by_method,
+        metric_labels,
+        ixn_type,
     )
 
     lines = []
@@ -187,7 +201,8 @@ def create_final_table(subtype, top_pairs_by_method, num_pairs, is_me):
     lines.append(r"\vspace{-0.2cm}")
     lines.append(bottom_subtable)
 
-    lines.append(rf"\caption{{Top {num_pairs} ranked ME pairs across methods in {subtype}}}")
+    caption_str = rf"Top {num_pairs} ranked ME pairs across methods in {subtype}"
+    lines.append(rf"\caption{{{caption_str}}}")
     lines.append(r"\label{tab:" + subtype + "}")
     lines.append(r"\end{table}")
 
@@ -195,17 +210,19 @@ def create_final_table(subtype, top_pairs_by_method, num_pairs, is_me):
 
 
 if __name__ == "__main__":
-    parser = build_argument_parser()
+    parser = _build_argument_parser_()
     args = parser.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
+    Path(args.out).mkdir(parents=True, exist_ok=True)
 
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
-        results_fn = os.path.join(args.results_dir, subtype, "complete_pairwise_ixn_results.csv")
-        cnt_mtx_fn = os.path.join(args.results_dir, subtype, "count_matrix.csv")
-        if not os.path.exists(results_fn) or not os.path.exists(cnt_mtx_fn):
-            logging.info(f"Skipping {subtype}: file not found.")
+        results_fn = (
+            Path(args.results_dir) / subtype / "complete_pairwise_ixn_results.csv"
+        )
+        cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
+        if not results_fn.exists() or not cnt_mtx_fn.exists():
+            logging.info("Skipping %s: file not found.", subtype)
             continue
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
@@ -218,28 +235,35 @@ if __name__ == "__main__":
         top_pairs_by_method = {}
         for method_name, method_df in top_tables.items():
             if method_df is None or method_df.empty:
-                logging.info(f"No top pairs for method: {method_name}")
+                logging.info("No top pairs for method: %s", method_name)
                 top_pairs_by_method[method_name] = []
                 continue
             pairs_list = []
             metric_col_name = method_df.columns[-1]
             for _, row in method_df.iterrows():
-                geneA = escape_gene_name(str(row["Gene A"]))
-                geneB = escape_gene_name(str(row["Gene B"]))
+                gene_a = _escape_gene_name_(str(row["Gene A"]))
+                gene_b = _escape_gene_name_(str(row["Gene B"]))
                 metric_val = row[metric_col_name]
                 val_str = format_float(metric_val) if metric_val is not None else "N/A"
-                interaction_str = f"{geneA}:{geneB}"
+                interaction_str = f"{gene_a}:{gene_b}"
                 pairs_list.append((interaction_str, val_str))
             if method_name == "WeSME" and args.co:
-                method_name = "WeSCO"
-            top_pairs_by_method[method_name] = pairs_list
+                adjusted_method_name = "WeSCO"
+                top_pairs_by_method[adjusted_method_name] = pairs_list
+            else:
+                top_pairs_by_method[method_name] = pairs_list
 
-        latex_str = create_final_table(subtype, top_pairs_by_method, args.num_pairs, args.me)
+        latex_str = _create_final_table_(
+            subtype,
+            top_pairs_by_method,
+            args.num_pairs,
+            args.me,
+        )
         if args.me:
-            fout = os.path.join(args.out, f"table_of_top_me_pairs_{subtype}.tex")
+            fout = Path(args.out) / f"table_of_top_me_pairs_{subtype}.tex"
         else:
-            fout = os.path.join(args.out, f"table_of_top_co_pairs_{subtype}.tex")
-        with open(fout, "w") as f:
+            fout = Path(args.out) / f"table_of_top_co_pairs_{subtype}.tex"
+        with fout.open("w") as f:
             f.write(latex_str)
 
-        logging.info(f"Wrote LaTeX table for {subtype} to {fout}")
+        logging.info("Wrote LaTeX table for %s to %s", subtype, fout)

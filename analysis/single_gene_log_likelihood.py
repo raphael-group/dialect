@@ -1,25 +1,28 @@
-"""
-This script computes, analyzes, and visualizes log-likelihood curves for genes
-based on count matrix and BMR PMFs, exploring the presence of a single optimum.
+"""Compute, analyze, and visualize log-likelihood curves for genes.
+
+Estimate based on count matrix and BMR PMFs to pinpoint number of optima.
 """
 
-# ---------------------------------------------------------------------------- #
-#                                    IMPORTS                                   #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                        IMPORTS                                       #
+# ------------------------------------------------------------------------------------ #
 
+import contextlib
 import logging
-import numpy as np
+
 import matplotlib.pyplot as plt
-from dialect.utils.identify import *
+import numpy as np
+import pandas as pd
+
 from dialect.models.gene import Gene
+from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def is_single_optimum(log_likelihoods):
-    """
-    Check if the log-likelihood function has a single optimum (convex/concave).
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def _is_single_optimum_(log_likelihoods: list) -> bool:
+    """Check if the log-likelihood function has a single optimum (convex/concave).
 
     :param log_likelihoods: (list of float) Log-likelihood values.
     :return: (bool) True if there is a single optimum, False otherwise.
@@ -29,10 +32,14 @@ def is_single_optimum(log_likelihoods):
     return np.count_nonzero(sign_changes != 0) <= 1
 
 
-def explore_log_likelihoods_for_single_gene_estimation(cnt_df, bmr_dict):
+def _explore_log_likelihoods_for_single_gene_estimation_(
+    cnt_df: pd.DataFrame,
+    bmr_dict: dict,
+) -> None:
     logging.info("Exploring log-likelihood curves for single-gene estimation.")
     logging.info(
-        f"Evaluating which of {len(cnt_df.columns)} genes have non-convex log likelihood curves..."
+        "Evaluating which of %d genes have non-convex log likelihood curves...",
+        len(cnt_df.columns),
     )
     for gene_name in cnt_df.columns:
         gene = Gene(
@@ -45,17 +52,22 @@ def explore_log_likelihoods_for_single_gene_estimation(cnt_df, bmr_dict):
         )
         pi_values = np.linspace(0, 0.99, 100)
         log_likelihoods = [gene.compute_log_likelihood(pi) for pi in pi_values]
-        if not is_single_optimum(log_likelihoods):
-            print(f"The log-likelihood function for gene {gene_name} is not convex.")
+        if not _is_single_optimum_(log_likelihoods):
+            pass
 
     logging.info(
-        "Exploration of log-likelihood curves for single-gene estimation complete."
+        "Exploration of log-likelihood curves for single-gene estimation complete.",
     )
 
 
-def visualize_log_likelihood_plot_for_gene(cnt_df, bmr_dict, gene_name):
+def _visualize_log_likelihood_plot_for_gene_(
+    cnt_df: pd.DataFrame,
+    bmr_dict: dict,
+    gene_name: str,
+) -> None:
     if gene_name not in cnt_df.columns or gene_name not in bmr_dict:
-        raise ValueError(f"Gene {gene_name} not found in count matrix or BMR PMFs.")
+        msg = f"Gene {gene_name} not found in count matrix or BMR PMFs."
+        raise ValueError(msg)
 
     gene = Gene(
         name=gene_name,
@@ -72,9 +84,9 @@ def visualize_log_likelihood_plot_for_gene(cnt_df, bmr_dict, gene_name):
     plt.show()
 
 
-# ---------------------------------------------------------------------------- #
-#                                 MAIN FUNCTION                                #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                     MAIN FUNCTION                                    #
+# ------------------------------------------------------------------------------------ #
 if __name__ == "__main__":
     cnt_mtx_path = input("Enter the path to the count matrix file: ").strip()
     bmr_pmfs_path = input("Enter the path to the BMR PMFs file: ").strip()
@@ -82,32 +94,23 @@ if __name__ == "__main__":
     cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_path, bmr_pmfs_path)
     check_convexity = (
         input(
-            "Would you like to check if all genes have convex log-likelihood curves? (yes/no): "
+            "Would you like to check if all genes have convex log-likelihood curves? "
+            "(yes/no): ",
         )
         .strip()
         .lower()
     )
     if check_convexity in ["yes", "y"]:
-        explore_log_likelihoods_for_single_gene_estimation(cnt_df, bmr_dict)
-
-    print("\nType 'exit' to quit the program at any time.")
-    print("Note: Gene names should end with '_M' (missense) or '_N' (nonsense).")
+        _explore_log_likelihoods_for_single_gene_estimation_(cnt_df, bmr_dict)
 
     while True:
         gene_name = input("Enter the name of the gene to visualize: ").strip()
 
         if gene_name.lower() == "exit":
-            print("Exiting the program. Goodbye!")
             break
 
         if gene_name not in cnt_df.columns:
-            print(
-                f"Gene '{gene_name}' does not exist in the count matrix. "
-                "Please ensure the name ends with '_M' or '_N'. Try again."
-            )
+            pass
         else:
-            # Visualize the log-likelihood plot
-            try:
-                visualize_log_likelihood_plot_for_gene(cnt_df, bmr_dict, gene_name)
-            except Exception as e:
-                print(f"An error occurred: {e}")
+            with contextlib.suppress(Exception):
+                _visualize_log_likelihood_plot_for_gene_(cnt_df, bmr_dict, gene_name)
