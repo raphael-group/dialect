@@ -2,8 +2,8 @@ import os
 import json
 import logging
 import numpy as np
+from scipy.stats import binom
 
-from dialect.utils.helpers import load_bmr_pmfs
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
@@ -12,9 +12,26 @@ from dialect.models.interaction import Interaction
 # TODO: ADD SUPPORT FOR SINGLE GENE EVALUATE
 
 
-# ---------------------------------------------------------------------------- #
-#                         SINGLE GENE HELPER FUNCTIONS                         #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def generate_bmr_pmf(length, mu, threshold=1e-50):
+    """
+    Generate the binomial mutation rate (BMR) PMF for a given gene length and mutation rate.
+
+    Parameters:
+    - length: int, the length of the gene in nucleotides.
+    - mu: float, the per nucleotide mutation rate.
+    - threshold: float, the PMF value threshold for inclusion in the distribution.
+
+    Returns:
+    - dict: Keys are counts (0 to length) and values are the PMF for those counts, filtered by the threshold.
+    """
+    pmf_values = binom.pmf(range(length + 1), n=length, p=mu)
+    bmr_pmf_arr = [pmf for pmf in pmf_values if pmf >= threshold]
+    return bmr_pmf_arr
+
+
 def simulate_single_gene_passenger_mutations(bmr_pmf, nsamples):
     """
     Simulate passenger mutation counts for a single gene.
@@ -75,9 +92,6 @@ def simulate_single_gene_somatic_mutations(bmr_pmf_arr, pi, nsamples):
     return simulated_gene
 
 
-# ---------------------------------------------------------------------------- #
-#                        PAIRWISE GENE HELPER FUNCTIONS                        #
-# ---------------------------------------------------------------------------- #
 def simulate_pairwise_gene_driver_mutations(tau_01, tau_10, tau_11, nsamples):
     """
     Simulate driver mutations for a pair of genes.
@@ -157,7 +171,150 @@ def simulate_pairwise_gene_somatic_mutations(
     return simulated_interaction
 
 
-# # TODO: test usage
+# ------------------------------------------------------------------------------------ #
+#                               SIMULATE CREATE FUNCTIONS                              #
+# ------------------------------------------------------------------------------------ #
+
+
+# ------------------------------------ SINGLE GENE ----------------------------------- #
+def create_single_gene_simulation(
+    pi,
+    num_samples,
+    num_simulations,
+    length,
+    mu,
+    out,
+    seed,
+):
+    """
+    Create a single gene simulation.
+
+    :param pi (float): Driver mutation rate (0 <= pi <= 1).
+    :param num_samples (int): Number of samples to simulate.
+    :param num_simulations (int): Number of simulations to run.
+    :param bmr (str): Path to the BMR file.
+    :param gene (str): Gene name.
+    :param out (str): Output path for the simulation results.
+    :param seed (int): Random seed for reproducibility.
+    """
+    logging.info("Creating single gene simulation")
+    np.random.seed(seed)
+    os.makedirs(out, exist_ok=True)
+
+    logging.info(
+        f"Simulating {num_simulations} single gene somatic mutations with "
+        f"{num_samples} samples and driver mutation rate pi={pi}"
+    )
+
+    bmr_pmf_arr = generate_bmr_pmf(length, mu)
+    simulated_genes = []
+    for _ in range(num_simulations):
+        simulated_gene = simulate_single_gene_somatic_mutations(
+            bmr_pmf_arr,
+            pi,
+            num_samples,
+        )
+        simulated_genes.append(simulated_gene.counts)
+
+    counts_array = np.array(simulated_genes)
+    np.save(os.path.join(out, "single_gene_simulated_data.npy"), counts_array)
+    logging.info(
+        f"Saved single gene simulation data to {out}/single_gene_simulated_data.npy"
+    )
+
+    params = {
+        "pi": pi,
+        "num_samples": num_samples,
+        "num_simulations": num_simulations,
+        "seed": seed,
+        "length": length,
+        "mu": mu,
+        "bmr_pmf": bmr_pmf_arr,
+    }
+    with open(os.path.join(out, "single_gene_simulation_parameters.json"), "w") as f:
+        json.dump(params, f, indent=4)
+    logging.info(
+        f"Saved simulation parameters to {out}/single_gene_simulation_parameters.json"
+    )
+
+
+# ----------------------------------- PAIR OF GENES ---------------------------------- #
+
+
+# -------------------------------------- MATRIX -------------------------------------- #
+
+
+# ------------------------------------------------------------------------------------ #
+#                              SIMULATE EVALUATE FUNCTIONS                             #
+# ------------------------------------------------------------------------------------ #
+
+
+# ------------------------------------ SINGLE GENE ----------------------------------- #
+def evaluate_single_gene_simulation(
+    params,
+    data,
+    out,
+):
+    """
+    Evaluate the single gene simulation.
+
+    :param params_path (str): Path to the JSON file containing simulation parameters.
+    :param data_path (str): Path to the .npy file containing simulation data.
+    :param out (str): Output path for evaluation results.
+    """
+    logging.info("Evaluating DIALECT on simulated data for a single gene")
+    os.makedirs(out, exist_ok=True)
+
+    try:
+        with open(params, "r") as f:
+            params = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read parameters file: {params}")
+        raise e
+
+    pi = params.get("pi")
+    num_samples = params.get("num_samples")
+    bmr_pmf_arr = params.get("bmr_pmf")
+    bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
+    logging.info(f"Loaded parameters: {params}")
+
+    try:
+        data = np.load(data)
+    except Exception as e:
+        logging.error(f"Failed to read simulation data file: {data}")
+        raise e
+    logging.info(f"Loaded simulation data from {data}. Shape: {data.shape}")
+
+    est_pi_vals = []
+    for i, row in enumerate(data):
+        simulated_gene = Gene(
+            name=f"SimulatedGene_{i}",
+            samples=range(num_samples),
+            counts=row,
+            bmr_pmf=bmr_pmf,
+        )
+        simulated_gene.estimate_pi_with_em_from_scratch()
+        est_pi_vals.append(simulated_gene.pi)
+
+    est_pi_fout = os.path.join(out, "estimated_pi_values.npy")
+    np.save(est_pi_fout, np.array(est_pi_vals))
+    deviations = [abs(est - pi) for est in est_pi_vals]
+    results = {
+        "true_pi": pi,
+        "mean_estimated_pi": np.mean(est_pi_vals),
+        "std_estimated_pi": np.std(est_pi_vals),
+        "mean_deviation": np.mean(deviations),
+        "std_deviation": np.std(deviations),
+    }
+    results_path = os.path.join(out, "evaluation_results.json")
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+
+# ----------------------------------- PAIR OF GENES ---------------------------------- #
+
+
+# -------------------------------------- MATRIX -------------------------------------- #
 # def simulate_mutation_matrix(
 #     cnt_mtx_filename,
 #     bmr_pmfs_filename,
@@ -234,65 +391,3 @@ def simulate_pairwise_gene_somatic_mutations(
 #     mutation_matrix_df = pd.DataFrame(mutation_matrix, columns=gene_labels)
 
 #     return mutation_matrix_df, expected_results
-
-
-# ---------------------------------------------------------------------------- #
-#                      SIMULATION CREATION MAIN FUNCTIONS                      #
-# ---------------------------------------------------------------------------- #
-def create_single_gene_simulation(
-    pi, num_samples, num_simulations, bmr_pmfs, gene, out, seed
-):
-    """
-    Create a single gene simulation.
-
-    :param pi (float): Driver mutation rate (0 <= pi <= 1).
-    :param num_samples (int): Number of samples to simulate.
-    :param num_simulations (int): Number of simulations to run.
-    :param bmr (str): Path to the BMR file.
-    :param gene (str): Gene name.
-    :param out (str): Output path for the simulation results.
-    :param seed (int): Random seed for reproducibility.
-    """
-    logging.info(f"Creating single gene simulation for gene {gene}")
-    np.random.seed(seed)
-    bmr_dict = load_bmr_pmfs(bmr_pmfs)
-    os.makedirs(out, exist_ok=True)
-
-    logging.info(
-        f"Simulating {num_simulations} single gene somatic mutations with "
-        f"{num_samples} samples and driver mutation rate pi={pi}"
-    )
-    simulated_genes = []
-    for _ in range(num_simulations):
-        simulated_gene = simulate_single_gene_somatic_mutations(
-            bmr_dict[gene], pi, num_samples
-        )
-        simulated_genes.append(simulated_gene.counts)
-
-    counts_array = np.array(simulated_genes)
-    np.save(os.path.join(out, "single_gene_simulated_data.npy"), counts_array)
-    logging.info(
-        f"Saved single gene simulation data to {out}/single_gene_simulated_data.npy"
-    )
-
-    params = {
-        "pi": pi,
-        "num_samples": num_samples,
-        "num_simulations": num_simulations,
-        "seed": seed,
-        "bmr_pmfs": bmr_pmfs,
-        "gene": gene,
-    }
-    with open(os.path.join(out, "single_gene_simulation_parameters.json"), "w") as f:
-        json.dump(params, f, indent=4)
-    logging.info(
-        f"Saved simulation parameters to {out}/single_gene_simulation_parameters.json"
-    )
-
-
-# ---------------------------------------------------------------------------- #
-#                     SIMULATION EVALUATION MAIN FUNCTIONS                     #
-# ---------------------------------------------------------------------------- #
-def evaluate_single_gene_simulation(params, data, out):
-    logging.info("Evaluating DIALECT on simulated data for a single gene")
-    raise NotImplementedError

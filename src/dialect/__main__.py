@@ -60,36 +60,28 @@ def main():
         )
 
     elif args.command == "simulate":
-        if args.mode == "create":
-            logging.info("Creating simulated data")
-            if args.type == "single":
-                create_single_gene_simulation(
-                    pi=args.pi,
-                    num_samples=args.num_samples,
-                    num_simulations=args.num_simulations,
-                    bmr_pmfs=args.bmr,
-                    gene=args.gene,
-                    out=args.out,
-                    seed=args.seed,
-                )
-            else:  # args.type == "pair"
-                logging.info("Simulating data for a pair of genes")
-                raise NotImplementedError
-            # TODO: add method for matrix
-        else:  # args.mode == "evaluate"
-            logging.info("Evaluating methods on simulated data")
-            if args.type == "single":
-                evaluate_single_gene_simulation(
-                    params=args.params,
-                    data=args.data,
-                    out=args.out,
-                )
-            else:  # args.type == "pair"
-                logging.info(
-                    "Evaluating methods on simulated data for a pair of genes"
-                )
-                raise NotImplementedError
-            # TODO: add method for matrix
+        # TODO: separate into create and evaluate functions
+        # TODO: separate into single, pair, and matrix functions
+        if args.mode == "create" and args.type == "single":
+            create_single_gene_simulation(
+                pi=args.pi,
+                num_samples=args.num_samples,
+                num_simulations=args.num_simulations,
+                length=args.length,
+                mu=args.mu,
+                out=args.out,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "single":
+            evaluate_single_gene_simulation(
+                params=args.params,
+                data=args.data,
+                out=args.out,
+            )
+        # elif args.mode == "create" and args.type == "pair":
+        # elif args.mode == "evaluate" and args.type == "pair":
+        # elif args.mode == "create" and args.type == "matrix":
+        # elif args.mode == "evaluate" and args.type == "matrix":
 
     else:
         parser.print_help()
