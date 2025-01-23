@@ -10,6 +10,8 @@ from dialect.utils import (
     merge_pairwise_interaction_results,
     create_single_gene_simulation,
     evaluate_single_gene_simulation,
+    create_pair_gene_simulation,
+    evaluate_pair_gene_simulation,
 )
 
 
@@ -78,8 +80,27 @@ def main():
                 data=args.data,
                 out=args.out,
             )
-        # elif args.mode == "create" and args.type == "pair":
-        # elif args.mode == "evaluate" and args.type == "pair":
+        elif args.mode == "create" and args.type == "pair":
+            create_pair_gene_simulation(
+                tau_10=args.tau_10,
+                tau_01=args.tau_01,
+                tau_11=args.tau_11,
+                num_samples=args.num_samples,
+                num_simulations=args.num_simulations,
+                length_a=args.length_a,
+                mu_a=args.mu_a,
+                length_b=args.length_b,
+                mu_b=args.mu_b,
+                out=args.out,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "pair":
+            evaluate_pair_gene_simulation(
+                params=args.params,
+                data=args.data,
+                out=args.out,
+            )
+            pass
         # elif args.mode == "create" and args.type == "matrix":
         # elif args.mode == "evaluate" and args.type == "matrix":
 

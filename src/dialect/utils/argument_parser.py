@@ -143,6 +143,21 @@ def add_simulate_create_single_gene_parser(subparsers):
     single_gene_parser.add_argument("-o", "--out", type=str, required=True)
     single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
+def add_simulate_create_pair_gene_parser(subparsers):
+    pair_gene_parser = subparsers.add_parser(
+        "pair", help="Create pairwise gene simulations"
+    )
+    pair_gene_parser.add_argument("-t10", "--tau_10", required=True, type=float)
+    pair_gene_parser.add_argument("-t01", "--tau_01", required=True, type=float)
+    pair_gene_parser.add_argument("-t11", "--tau_11", required=True, type=float)
+    pair_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
+    pair_gene_parser.add_argument("-ns", "--num_simulations", type=int, default=2500)
+    pair_gene_parser.add_argument("-la", "--length_a", type=int, default=10000)
+    pair_gene_parser.add_argument("-lb", "--length_b", type=int, default=10000)
+    pair_gene_parser.add_argument("-ma", "--mu_a", type=float, default=1e-6)
+    pair_gene_parser.add_argument("-mb", "--mu_b", type=float, default=1e-6)
+    pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    pair_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 def add_simulate_create_parser(subparsers):
     """
@@ -157,7 +172,7 @@ def add_simulate_create_parser(subparsers):
         help="Available simulation types (single, pair)",
     )
     add_simulate_create_single_gene_parser(simulate_create_subparsers)
-    # add_simulate_create_pair_gene_parser(simulate_create_subparsers) # TODO
+    add_simulate_create_pair_gene_parser(simulate_create_subparsers)
     # add_simulate_create_matrix_gene_parser(simulate_create_subparsers) # TODO
 
 
@@ -173,6 +188,17 @@ def add_simulate_evaluate_single_gene_parser(subparsers):
     )
     single_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
+def add_simulate_evaluate_pair_gene_parser(subparsers):
+    pair_gene_parser = subparsers.add_parser(
+        "pair", help="Evaluate pair gene simulations"
+    )
+    pair_gene_parser.add_argument(
+        "-p", "--params", required=True, help="Path to the parameters file"
+    )
+    pair_gene_parser.add_argument(
+        "-d", "--data", required=True, help="Path to the data file"
+    )
+    pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
 def add_simulate_evaluate_parser(subparsers):
     simulate_evaluate_parser = subparsers.add_parser(
@@ -184,7 +210,7 @@ def add_simulate_evaluate_parser(subparsers):
         help="Available simulation types (single, pair)",
     )
     add_simulate_evaluate_single_gene_parser(simulate_evaluate_subparsers)
-    # add_simulate_evaluate_pair_gene_parser(simulate_evaluate_subparsers) # TODO
+    add_simulate_evaluate_pair_gene_parser(simulate_evaluate_subparsers)
     # add_simulate_evaluate_matrix_gene_parser(simulate_evaluate_subparsers) # TODO
 
 

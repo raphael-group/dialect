@@ -8,6 +8,8 @@ from .merge import merge_pairwise_interaction_results
 from .simulate import (
     create_single_gene_simulation,
     evaluate_single_gene_simulation,
+    create_pair_gene_simulation,
+    evaluate_pair_gene_simulation,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "merge_pairwise_interaction_results",
     "create_single_gene_simulation",
     "evaluate_single_gene_simulation",
+    "create_pair_gene_simulation",
+    "evaluate_pair_gene_simulation",
 ]
