@@ -10,6 +10,10 @@ from dialect.utils import (
     merge_pairwise_interaction_results,
     create_single_gene_simulation,
     evaluate_single_gene_simulation,
+    create_pair_gene_simulation,
+    evaluate_pair_gene_simulation,
+    create_matrix_simulation,
+    evaluate_matrix_simulation,
 )
 
 
@@ -60,36 +64,64 @@ def main():
         )
 
     elif args.command == "simulate":
-        if args.mode == "create":
-            logging.info("Creating simulated data")
-            if args.type == "single":
-                create_single_gene_simulation(
-                    pi=args.pi,
-                    num_samples=args.num_samples,
-                    num_simulations=args.num_simulations,
-                    bmr_pmfs=args.bmr,
-                    gene=args.gene,
-                    out=args.out,
-                    seed=args.seed,
-                )
-            else:  # args.type == "pair"
-                logging.info("Simulating data for a pair of genes")
-                raise NotImplementedError
-            # TODO: add method for matrix
-        else:  # args.mode == "evaluate"
-            logging.info("Evaluating methods on simulated data")
-            if args.type == "single":
-                evaluate_single_gene_simulation(
-                    params=args.params,
-                    data=args.data,
-                    out=args.out,
-                )
-            else:  # args.type == "pair"
-                logging.info(
-                    "Evaluating methods on simulated data for a pair of genes"
-                )
-                raise NotImplementedError
-            # TODO: add method for matrix
+        # TODO: separate into create and evaluate functions
+        # TODO: separate into single, pair, and matrix functions
+        if args.mode == "create" and args.type == "single":
+            create_single_gene_simulation(
+                pi=args.pi,
+                num_samples=args.num_samples,
+                num_simulations=args.num_simulations,
+                length=args.length,
+                mu=args.mu,
+                out=args.out,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "single":
+            evaluate_single_gene_simulation(
+                params=args.params,
+                data=args.data,
+                out=args.out,
+            )
+        elif args.mode == "create" and args.type == "pair":
+            create_pair_gene_simulation(
+                tau_10=args.tau_10,
+                tau_01=args.tau_01,
+                tau_11=args.tau_11,
+                num_samples=args.num_samples,
+                num_simulations=args.num_simulations,
+                length_a=args.length_a,
+                mu_a=args.mu_a,
+                length_b=args.length_b,
+                mu_b=args.mu_b,
+                out=args.out,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "pair":
+            evaluate_pair_gene_simulation(
+                params=args.params,
+                data=args.data,
+                out=args.out,
+            )
+            pass
+        elif args.mode == "create" and args.type == "matrix":
+            create_matrix_simulation(
+                cnt_mtx_filename=args.cnt_mtx,
+                driver_genes_filename=args.driver_genes,
+                decoy_genes_filename=args.decoy_genes,
+                bmr_pmfs_filename=args.bmr_pmfs,
+                out=args.out,
+                num_samples=args.num_samples,
+                num_me_pairs=args.num_me_pairs,
+                num_co_pairs=args.num_co_pairs,
+                decoy_gene_count=args.decoy_gene_count,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "matrix":
+            evaluate_matrix_simulation(
+                merged_results_file=args.results,
+                ground_truth_file=args.ground_truth,
+                out_png=os.path.join(args.out, "pr_curves.png"),
+            )
 
     else:
         parser.print_help()

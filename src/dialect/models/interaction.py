@@ -87,9 +87,7 @@ class Interaction:
         """
         gene_a_mutations = (self.gene_a.counts > 0).astype(int)
         gene_b_mutations = (self.gene_b.counts > 0).astype(int)
-        cm = confusion_matrix(
-            gene_a_mutations, gene_b_mutations, labels=[0, 1]
-        )
+        cm = confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[1, 0])
         return cm
 
     def get_set_of_cooccurring_samples(self):
