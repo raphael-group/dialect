@@ -10,6 +10,8 @@ from .simulate import (
     evaluate_single_gene_simulation,
     create_pair_gene_simulation,
     evaluate_pair_gene_simulation,
+    create_matrix_simulation,
+    evaluate_matrix_simulation,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "evaluate_single_gene_simulation",
     "create_pair_gene_simulation",
     "evaluate_pair_gene_simulation",
+    "create_matrix_simulation",
+    "evaluate_matrix_simulation",
 ]

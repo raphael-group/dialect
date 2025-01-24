@@ -12,6 +12,8 @@ from dialect.utils import (
     evaluate_single_gene_simulation,
     create_pair_gene_simulation,
     evaluate_pair_gene_simulation,
+    create_matrix_simulation,
+    evaluate_matrix_simulation,
 )
 
 
@@ -101,8 +103,25 @@ def main():
                 out=args.out,
             )
             pass
-        # elif args.mode == "create" and args.type == "matrix":
-        # elif args.mode == "evaluate" and args.type == "matrix":
+        elif args.mode == "create" and args.type == "matrix":
+            create_matrix_simulation(
+                cnt_mtx_filename=args.cnt_mtx,
+                driver_genes_filename=args.driver_genes,
+                decoy_genes_filename=args.decoy_genes,
+                bmr_pmfs_filename=args.bmr_pmfs,
+                out=args.out,
+                num_samples=args.num_samples,
+                num_me_pairs=args.num_me_pairs,
+                num_co_pairs=args.num_co_pairs,
+                decoy_gene_count=args.decoy_gene_count,
+                seed=args.seed,
+            )
+        elif args.mode == "evaluate" and args.type == "matrix":
+            evaluate_matrix_simulation(
+                merged_results_file=args.results,
+                ground_truth_file=args.ground_truth,
+                out_png=os.path.join(args.out, "pr_curves.png"),
+            )
 
     else:
         parser.print_help()

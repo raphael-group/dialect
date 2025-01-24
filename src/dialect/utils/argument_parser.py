@@ -159,6 +159,33 @@ def add_simulate_create_pair_gene_parser(subparsers):
     pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
     pair_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
+
+def add_simulate_create_matrix_gene_parser(subparsers):
+    matrix_gene_parser = subparsers.add_parser(
+        "matrix", help="Create matrix gene simulations"
+    )
+    matrix_gene_parser.add_argument(
+        "-c", "--cnt_mtx", required=True, help="Path to the count matrix file"
+    )
+    matrix_gene_parser.add_argument(
+        "-d", "--driver_genes", required=True, help="Path to the driver genes file"
+    )
+    matrix_gene_parser.add_argument(
+        "-de", "--decoy_genes", required=True, help="Path to the decoy genes file"
+    )
+    matrix_gene_parser.add_argument(
+        "-b", "--bmr_pmfs", required=True, help="Path to the BMR PMFs file"
+    )
+    matrix_gene_parser.add_argument(
+        "-o", "--out", required=True, help="Path to the output directory"
+    )
+    matrix_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
+    matrix_gene_parser.add_argument("-me", "--num_me_pairs", type=int, default=10)
+    matrix_gene_parser.add_argument("-co", "--num_co_pairs", type=int, default=10)
+    matrix_gene_parser.add_argument("-dc", "--decoy_gene_count", type=int, default=100)
+    matrix_gene_parser.add_argument("-s", "--seed", type=int, default=42)
+
+
 def add_simulate_create_parser(subparsers):
     """
     Adds the simulate subparser to the given subparsers.
@@ -173,7 +200,7 @@ def add_simulate_create_parser(subparsers):
     )
     add_simulate_create_single_gene_parser(simulate_create_subparsers)
     add_simulate_create_pair_gene_parser(simulate_create_subparsers)
-    # add_simulate_create_matrix_gene_parser(simulate_create_subparsers) # TODO
+    add_simulate_create_matrix_gene_parser(simulate_create_subparsers)
 
 
 def add_simulate_evaluate_single_gene_parser(subparsers):
@@ -200,6 +227,19 @@ def add_simulate_evaluate_pair_gene_parser(subparsers):
     )
     pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
+def add_simulate_evaluate_matrix_gene_parser(subparsers):
+    matrix_gene_parser = subparsers.add_parser(
+        "matrix", help="Evaluate pair gene simulations"
+    )
+    matrix_gene_parser.add_argument(
+        "-r", "--results", required=True, help="Path to the results file"
+    )
+    matrix_gene_parser.add_argument(
+        "-gt", "--ground_truth", required=True, help="Path to the ground truth file"
+    )
+    matrix_gene_parser.add_argument("-o", "--out", type=str, required=True)
+
+
 def add_simulate_evaluate_parser(subparsers):
     simulate_evaluate_parser = subparsers.add_parser(
         "evaluate", help="Evaluate simulation data"
@@ -211,7 +251,7 @@ def add_simulate_evaluate_parser(subparsers):
     )
     add_simulate_evaluate_single_gene_parser(simulate_evaluate_subparsers)
     add_simulate_evaluate_pair_gene_parser(simulate_evaluate_subparsers)
-    # add_simulate_evaluate_matrix_gene_parser(simulate_evaluate_subparsers) # TODO
+    add_simulate_evaluate_matrix_gene_parser(simulate_evaluate_subparsers)
 
 
 def add_simulate_parser(subparsers):
