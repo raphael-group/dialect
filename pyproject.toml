@@ -1,9 +1,8 @@
 [tool.ruff]
 line-length = 88
-
-[tool.ruff.lint]
 select = ["ALL"]
 ignore = ["D203", "D213"]
+exclude = ["external/"]
 
 [tool.ruff.lint.per-file-ignores]
 "docs/source/conf.py" = ["INP001", "D100", "A001"]
