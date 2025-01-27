@@ -102,25 +102,25 @@ def main():
                 data=args.data,
                 out=args.out,
             )
-            pass
         elif args.mode == "create" and args.type == "matrix":
             create_matrix_simulation(
-                cnt_mtx_filename=args.cnt_mtx,
-                driver_genes_filename=args.driver_genes,
-                decoy_genes_filename=args.decoy_genes,
-                bmr_pmfs_filename=args.bmr_pmfs,
-                out=args.out,
-                num_samples=args.num_samples,
+                cnt_mtx_fn=args.cnt_mtx,
+                bmr_pmfs_fn=args.bmr_pmfs,
+                driver_genes_fn=args.driver_genes,
+                dout=args.out,
+                num_likely_passengers=args.num_likely_passengers,
                 num_me_pairs=args.num_me_pairs,
                 num_co_pairs=args.num_co_pairs,
-                decoy_gene_count=args.decoy_gene_count,
+                num_samples=args.num_samples,
+                ixn_strength=args.ixn_strength,
                 seed=args.seed,
             )
         elif args.mode == "evaluate" and args.type == "matrix":
             evaluate_matrix_simulation(
-                merged_results_file=args.results,
-                ground_truth_file=args.ground_truth,
-                out_png=os.path.join(args.out, "pr_curves.png"),
+                results_fn=args.results,
+                simulation_info_fn=args.info,
+                dout=args.out,
+                ixn_type=args.ixn_type,
             )
 
     else:

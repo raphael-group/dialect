@@ -8,9 +8,9 @@ from scipy.stats import binom
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
+from dialect.utils.postprocessing import compute_epsilon_threshold
+from dialect.utils.plotting import plot_mtx_sim_pr_curve
 
-import matplotlib.pyplot as plt
-from sklearn.metrics import precision_recall_curve, average_precision_score
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -293,96 +293,62 @@ def create_pair_gene_simulation(
     with open(os.path.join(out, "pair_gene_simulation_parameters.json"), "w") as f:
         json.dump(params, f, indent=4)
 
+
 # -------------------------------------- MATRIX -------------------------------------- #
 def create_matrix_simulation(
-    cnt_mtx_filename,
-    driver_genes_filename,
-    decoy_genes_filename,
-    bmr_pmfs_filename,
-    out,
-    num_samples,
+    cnt_mtx_fn,
+    bmr_pmfs_fn,
+    driver_genes_fn,
+    dout,
+    num_likely_passengers,
     num_me_pairs,
     num_co_pairs,
-    decoy_gene_count,
+    num_samples,
+    ixn_strength,
     seed=42,
 ):
-    """
-    Creates a single simulated mutation matrix with the following steps:
-
-    1. Read files:
-       - cnt_mtx_filename: real data count matrix (samples x genes) or (genes x samples).
-         We'll assume columns=genes, rows=samples in this example.
-       - driver_genes_filename: list of known driver genes (text file, one gene per line).
-       - decoy_genes_filename: list of 'decoy' genes (sorted by highest mutation frequency).
-       - bmr_pmfs_filename: JSON or other file with a dict: { gene_name: [bmr_pmf_array], ... }
-
-    2. From the driver genes, pick the top 2*(num_me_pairs + num_co_pairs)
-       based on total mutation counts in the real count matrix.
-       Randomly shuffle them and assign the first 'num_me_pairs' pairs as ME,
-       and the next 'num_co_pairs' pairs as CO.
-
-    3. For each pair (A,B):
-       - If ME, sample tau_01, tau_10, set tau_11 ~ 0 or near 0
-       - If CO, sample tau_11 to be larger, etc.
-       - Simulate pairwise somatic counts using your code:
-         simulate_pairwise_gene_somatic_mutations(...)
-
-    4. Read 'decoy_gene_count' decoy genes from the decoy_genes_filename,
-       each simulated as a single gene with pi=0.
-
-    5. Combine everything into a final matrix (num_samples x total_genes).
-       Return (or save) the matrix as well as the “ground-truth” pairs.
-    """
-
     np.random.seed(seed)
-    os.makedirs(out, exist_ok=True)
-    driver_gene_symbols = pd.read_csv(
-        driver_genes_filename, sep="\t", index_col=0
-    ).index.tolist()
-    driver_genes = set(
-        [driver + "_M" for driver in driver_gene_symbols]
-        + [driver + "_N" for driver in driver_gene_symbols]
+    os.makedirs(dout, exist_ok=True)
+
+    cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_fn, bmr_pmfs_fn)
+
+    drivers_arr = pd.read_csv(driver_genes_fn, sep="\t", index_col=0).index
+    drivers_set = set(drivers_arr + "_M") | set(drivers_arr + "_N")
+
+    likely_passengers_df = cnt_df.drop(drivers_set, axis=1, errors="ignore")
+    likely_passengers = list(
+        likely_passengers_df.sum(axis=0)
+        .sort_values(ascending=False)
+        .head(num_likely_passengers)
+        .index
     )
-    with open(decoy_genes_filename, "r") as f:
-        decoy_genes = [line.strip() for line in f if line.strip()]
 
-    cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_filename, bmr_pmfs_filename)
+    drivers_df = cnt_df[[col for col in drivers_set if col in cnt_df.columns]]
+    drivers = list(
+        drivers_df.sum(axis=0)
+        .sort_values(ascending=False)
+        .head(2 * (num_me_pairs + num_co_pairs))
+        .index
+    )
+    np.random.shuffle(drivers)
 
-    driver_counts = []
-    for gene in driver_genes:
-        if gene in cnt_df.columns:
-            total_cnt = cnt_df[gene].sum()
-            driver_counts.append((gene, total_cnt))
-    driver_counts.sort(key=lambda x: x[1], reverse=True)
-
-    needed_drivers = 2 * (num_me_pairs + num_co_pairs)
-    top_drivers = [x[0] for x in driver_counts[:needed_drivers]]
-    np.random.shuffle(top_drivers)
-
-    me_driver_pairs = []
-    co_driver_pairs = []
-
-    idx = 0
-    for _ in range(num_me_pairs):
-        pair = (top_drivers[idx], top_drivers[idx + 1])
-        me_driver_pairs.append(pair)
-        idx += 2
-    for _ in range(num_co_pairs):
-        pair = (top_drivers[idx], top_drivers[idx + 1])
-        co_driver_pairs.append(pair)
-        idx += 2
+    me_pairs = [(drivers[i], drivers[i + 1]) for i in range(0, 2 * num_me_pairs, 2)]
+    co_pairs = [
+        (drivers[i], drivers[i + 1])
+        for i in range(2 * num_me_pairs, 2 * (num_me_pairs + num_co_pairs), 2)
+    ]
 
     simulated_counts = {}
 
     def arr_to_dict(pmf_array):
         return {i: pmf_array[i] for i in range(len(pmf_array))}
 
-    for gene_a, gene_b in me_driver_pairs:
+    for gene_a, gene_b in me_pairs:
         bmr_pmf_a = arr_to_dict(bmr_dict[gene_a])
         bmr_pmf_b = arr_to_dict(bmr_dict[gene_b])
 
-        tau_01 = np.random.uniform(0.1, 0.2)
-        tau_10 = np.random.uniform(0.1, 0.2)
+        tau_01 = ixn_strength
+        tau_10 = ixn_strength
         tau_11 = 0.0
 
         interaction = simulate_pairwise_gene_somatic_mutations(
@@ -396,11 +362,11 @@ def create_matrix_simulation(
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
 
-    for gene_a, gene_b in co_driver_pairs:
+    for gene_a, gene_b in co_pairs:
         bmr_pmf_a = arr_to_dict(bmr_dict[gene_a])
         bmr_pmf_b = arr_to_dict(bmr_dict[gene_b])
 
-        tau_11 = np.random.uniform(0.1, 0.2)
+        tau_11 = ixn_strength
         tau_01 = 0.0
         tau_10 = 0.0
 
@@ -415,20 +381,15 @@ def create_matrix_simulation(
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
 
-    chosen_decoys = decoy_genes[:decoy_gene_count]
-    for decoy_gene in chosen_decoys:
-        bmr_decoy_arr = bmr_dict[decoy_gene]
+    for likely_passenger in likely_passengers:
         simulated_gene = simulate_single_gene_somatic_mutations(
-            bmr_pmf_arr=bmr_decoy_arr,
+            bmr_pmf_arr=bmr_dict[likely_passenger],
             pi=0.0,
             nsamples=num_samples,
         )
-        simulated_counts[decoy_gene] = simulated_gene.counts
+        simulated_counts[likely_passenger] = simulated_gene.counts
 
-    me_genes = [g for pair in me_driver_pairs for g in pair]
-    co_genes = [g for pair in co_driver_pairs for g in pair]
-    used_driver_genes = me_genes + co_genes
-    all_genes_order = used_driver_genes + chosen_decoys
+    all_genes_order = drivers + likely_passengers
 
     final_array = []
     for g in all_genes_order:
@@ -440,23 +401,25 @@ def create_matrix_simulation(
         columns=all_genes_order,
         index=[f"S{i}" for i in range(num_samples)],
     )
-    matrix_out_fn = os.path.join(out, "simulated_matrix.csv")
+    matrix_out_fn = os.path.join(dout, "count_matrix.csv")
     sim_df.index.name = "sample"
     sim_df.to_csv(matrix_out_fn, index=True)
     logging.info(f"Saved simulated matrix to {matrix_out_fn}")
 
-    ground_truth = {
-        "ME_pairs": me_driver_pairs,
-        "CO_pairs": co_driver_pairs,
-        "all_genes_order": all_genes_order,
+    info = {
+        "ME Pairs": me_pairs,
+        "CO Pairs": co_pairs,
+        "Likely Passengers": likely_passengers,
         "num_samples": num_samples,
+        "ME tau_01, tau_10": ixn_strength,
+        "CO tau_11": ixn_strength,
     }
-    gt_out_fn = os.path.join(out, "ground_truth_interactions.json")
+    gt_out_fn = os.path.join(dout, "matrix_simulation_info.json")
     with open(gt_out_fn, "w") as f:
-        json.dump(ground_truth, f, indent=4)
+        json.dump(info, f, indent=4)
     logging.info(f"Saved ground truth interactions to {gt_out_fn}")
     logging.info("Matrix simulation completed.")
-    return sim_df, ground_truth
+
 
 # ------------------------------------------------------------------------------------ #
 #                              SIMULATE EVALUATE FUNCTIONS                             #
@@ -630,89 +593,86 @@ def evaluate_pair_gene_simulation(
 
 
 # -------------------------------------- MATRIX -------------------------------------- #
+def get_ground_truth_labels(df, simulation_info, ixn_type):
+    true_ixn_pairs = set()
+    key = f"{ixn_type} Pairs"  # "ME_pairs" or "CO_pairs"
+    for g1, g2 in simulation_info.get(key, []):
+        true_ixn_pairs.add((g1, g2))
+        true_ixn_pairs.add((g2, g1))
+
+    labels = []
+    for _, row in df.iterrows():
+        pair = (row["Gene A"], row["Gene B"])
+        labels.append(1 if pair in true_ixn_pairs else 0)
+
+    return np.array(labels)
+
+
+def get_method_scores(df, num_samples, ixn_type):
+    dialect_rho = df["Rho"].astype(float).values
+    tau_1X = df["Tau_1X"].astype(float).values
+    tau_X1 = df["Tau_X1"].astype(float).values
+    epsilon = compute_epsilon_threshold(num_samples)
+    mask_no_interaction = (tau_1X < epsilon) | (tau_X1 < epsilon)
+    dialect_rho[mask_no_interaction] = 0.0
+
+    dialect_rho = -dialect_rho if ixn_type == "ME" else dialect_rho
+
+    if ixn_type == "ME":
+        fishers_pval = df["Fisher's ME P-Val"].astype(float).values
+        discover_pval = df["Discover ME P-Val"].astype(float).values
+        megsa_s = df["MEGSA S-Score (LRT)"].astype(float).values
+        wesme_pval = df["WeSME P-Val"].astype(float).values
+
+        fishers_score = -np.log10(fishers_pval + 1e-300)
+        discover_score = -np.log10(discover_pval + 1e-300)
+        wesme_score = -np.log10(wesme_pval + 1e-300)
+
+        methods = {
+            "DIALECT": dialect_rho,
+            "Fisher's Exact Test": fishers_score,
+            "DISCOVER": discover_score,
+            "MEGSA": megsa_s,
+            "WeSME": wesme_score,
+        }
+
+    else:
+        fishers_pval = df["Fisher's CO P-Val"].astype(float).values
+        discover_pval = df["Discover CO P-Val"].astype(float).values
+        wesco_pval = df["WeSCO P-Val"].astype(float).values
+
+        fishers_score = -np.log10(fishers_pval + 1e-300)
+        discover_score = -np.log10(discover_pval + 1e-300)
+        wesco_score = -np.log10(wesco_pval + 1e-300)
+
+        methods = {
+            "DIALECT": dialect_rho,
+            "Fisher's Exact Test": fishers_score,
+            "DISCOVER": discover_score,
+            "WeSCO": wesco_score,
+        }
+
+    return methods
 
 
 def evaluate_matrix_simulation(
-    merged_results_file,
-    ground_truth_file,
-    out_png,
+    results_fn,
+    simulation_info_fn,
+    dout,
+    ixn_type,
 ):
-    """
-    Reads a merged results file containing pairwise interaction metrics,
-    as well as a ground-truth JSON listing which pairs are true ME vs. not.
-    Produces a Precision-Recall curve for each method, labeling true ME pairs
-    as positives and everything else as negatives.
-
-    :param merged_results_file: str, path to CSV with columns:
-        - GeneA, GeneB
-        - Rho (DIALECT)
-        - Fisher's ME P-Val
-        - DISCOVER ME P-Val
-        - MEGSA S-Score
-        - WeSME P-Val
-        - Tau_1X
-        - Tau_X1
-    :param ground_truth_file: str, path to JSON with keys like "ME_pairs" (list of pairs)
-                              and possibly "CO_pairs", etc.
-    :param out_png: str, path to output .png file containing the PR curves plot.
-    """
-
-    df = pd.read_csv(merged_results_file)
-    with open(ground_truth_file, "r") as f:
+    df = pd.read_csv(results_fn)
+    with open(simulation_info_fn, "r") as f:
         gt = json.load(f)
+    num_samples = gt.get("num_samples")
 
-    true_me_pairs = set()
-    for g1, g2 in gt.get("ME_pairs", []):
-        true_me_pairs.add((g1, g2))
-        true_me_pairs.add((g2, g1))
+    y_true = get_ground_truth_labels(df, gt, ixn_type)
+    methods = get_method_scores(df, num_samples, ixn_type)
+    fout = os.path.join(dout, f"{ixn_type}_pr_curve.png")
 
-    y_true = []
-    for i, row in df.iterrows():
-        pair = (row["Gene A"], row["Gene B"])
-        if pair in true_me_pairs:
-            y_true.append(1)
-        else:
-            y_true.append(0)
-    y_true = np.array(y_true)
-
-    dialect_rho = df["Rho"].values.astype(float)
-    dialect_rho = -dialect_rho
-    tau_1X = df["Tau_1X"].values.astype(float)
-    tau_X1 = df["Tau_X1"].values.astype(float)
-    mask_no_interaction = (tau_1X < 0.01) | (tau_X1 < 0.01)
-    dialect_rho[mask_no_interaction] = 0.0
-
-    fishers_pval = df["Fisher's CO P-Val"].values.astype(float)
-    fishers_score = -np.log10(fishers_pval + 1e-300)  # small offset to avoid log(0)
-
-    discover_pval = df["Discover ME P-Val"].values.astype(float)
-    discover_score = -np.log10(discover_pval + 1e-300)
-
-    megsa_s = df["MEGSA S-Score (LRT)"].values.astype(float)
-
-    wesme_pval = df["WeSME P-Val"].values.astype(float)
-    wesme_score = -np.log10(wesme_pval + 1e-300)
-
-    methods = {
-        "DIALECT": dialect_rho,
-        "Fisher's Exact Test": fishers_score,
-        "DISCOVER": discover_score,
-        "MEGSA": megsa_s,
-        "WeSME": wesme_score,
-    }
-
-    plt.figure(figsize=(7, 6))
-    for method_name, scores in methods.items():
-        precision, recall, thresholds = precision_recall_curve(y_true, scores)
-        ap = average_precision_score(y_true, scores)
-        plt.plot(recall, precision, label=f"{method_name} (AP={ap:.3f})")
-
-    plt.xlabel("Recall", fontsize=12)
-    plt.ylabel("Precision", fontsize=12)
-    plt.title("Precision-Recall for ME Identification", fontsize=14)
-    plt.legend(loc="best")
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=300)
-    plt.close()
-
-    print(f"Saved PR curve plot to {out_png}")
+    plot_mtx_sim_pr_curve(
+        methods,
+        y_true,
+        fout,
+        ixn_type,
+    )

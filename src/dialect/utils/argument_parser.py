@@ -168,21 +168,21 @@ def add_simulate_create_matrix_gene_parser(subparsers):
         "-c", "--cnt_mtx", required=True, help="Path to the count matrix file"
     )
     matrix_gene_parser.add_argument(
-        "-d", "--driver_genes", required=True, help="Path to the driver genes file"
-    )
-    matrix_gene_parser.add_argument(
-        "-de", "--decoy_genes", required=True, help="Path to the decoy genes file"
-    )
-    matrix_gene_parser.add_argument(
         "-b", "--bmr_pmfs", required=True, help="Path to the BMR PMFs file"
+    )
+    matrix_gene_parser.add_argument(
+        "-d", "--driver_genes", required=True, help="Path to the driver genes file"
     )
     matrix_gene_parser.add_argument(
         "-o", "--out", required=True, help="Path to the output directory"
     )
+    matrix_gene_parser.add_argument(
+        "-nlp", "--num_likely_passengers", type=int, default=100
+    )
+    matrix_gene_parser.add_argument("-nme", "--num_me_pairs", type=int, default=10)
+    matrix_gene_parser.add_argument("-nco", "--num_co_pairs", type=int, default=10)
     matrix_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
-    matrix_gene_parser.add_argument("-me", "--num_me_pairs", type=int, default=10)
-    matrix_gene_parser.add_argument("-co", "--num_co_pairs", type=int, default=10)
-    matrix_gene_parser.add_argument("-dc", "--decoy_gene_count", type=int, default=100)
+    matrix_gene_parser.add_argument("-ixn", "--ixn_strength", type=float, default=0.05)
     matrix_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 
@@ -235,8 +235,9 @@ def add_simulate_evaluate_matrix_gene_parser(subparsers):
         "-r", "--results", required=True, help="Path to the results file"
     )
     matrix_gene_parser.add_argument(
-        "-gt", "--ground_truth", required=True, help="Path to the ground truth file"
+        "-i", "--info", required=True, help="Path to the simulation info file"
     )
+    matrix_gene_parser.add_argument("-ixn", "--ixn_type", required=True)
     matrix_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
 
