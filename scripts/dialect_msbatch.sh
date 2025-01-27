@@ -63,7 +63,7 @@ for MAF_FILE in "${MAF_FILES[@]}"; do
         SLURM_OUT_FN=${SLURM_DIR}/${SUBTYPE_NAME}.out
 
         # Submit job with the top genes and steps parameters
-        sbatch -o "${SLURM_OUT_FN}" -e "${SLURM_OUT_FN}" "${SCRIPT_DIR}/ssbatch.sh" "${MAF_FILE}" "${TOP_GENES}" "${DOUT}" "${STEPS}"
+        sbatch -o "${SLURM_OUT_FN}" -e "${SLURM_OUT_FN}" "${SCRIPT_DIR}/dialect_ssbatch.sh" "${MAF_FILE}" "${TOP_GENES}" "${DOUT}" "${STEPS}"
         sleep 0.25 # Avoid overloading the scheduler
     else
         echo "Warning: No MAF files found in '$DATA_DIR'. Skipping."
