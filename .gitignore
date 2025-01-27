@@ -1,0 +1,32 @@
+# Documentation Artifacts
+docs/build/
+docs/.doctrees/
+docs/source/*.DS_Store
+
+# System and Editor Files
+*.DS_Store
+
+# Python Artifacts
+*.pyc
+*__pycache__/
+*.egg-info/
+
+# Logs
+*.log
+
+# Build Artifacts
+*.egg
+build/
+dist/
+
+# IDE and Editor Configurations
+.vscode/
+*.code-workspace  
+
+# Data, Methods, & Output
+data/
+output/
+figures/
+tables/
+external/CBaSE/auxiliary
+external/DISCOVER
