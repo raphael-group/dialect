@@ -501,7 +501,7 @@ def compute_p_values(p, genes, aux):
                     ):
                         sys.stderr.write(
                             "Setting p_m^pos --> 0 on gene {} (was {:e}).\n".format(
-                                gene["gene"], m_ppos
+                                gene["gene"], m_ppos,
                             ),
                         )
                         m_ppos = 0
@@ -512,7 +512,7 @@ def compute_p_values(p, genes, aux):
                         if simC == 0:
                             sys.stderr.write(
                                 "p_m^neg on gene {}: {:f} --> 1.\n".format(
-                                    gene["gene"], m_pneg
+                                    gene["gene"], m_pneg,
                                 ),
                             )
                         m_pneg = 1.0
@@ -547,7 +547,7 @@ def compute_p_values(p, genes, aux):
                     ):
                         sys.stderr.write(
                             "Setting p_k^pos --> 0 on gene {} (was {:e}).\n".format(
-                                gene["gene"], k_ppos
+                                gene["gene"], k_ppos,
                             ),
                         )
                         k_ppos = 0
@@ -558,7 +558,7 @@ def compute_p_values(p, genes, aux):
                         if simC == 0:
                             sys.stderr.write(
                                 "p_k^neg on gene {}: {:f} --> 1.\n".format(
-                                    gene["gene"], k_pneg
+                                    gene["gene"], k_pneg,
                                 ),
                             )
                         k_pneg = 1.0
@@ -893,7 +893,7 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
             cumprob = 0.0
             i = 0
             while i < len(phi_sim_hist) and phi_sim_hist[i][0] + 0.5 * bin_phi <= max(
-                0.0, gene["phi"]
+                0.0, gene["phi"],
             ):
                 cumprob += phi_sim_hist[i][1]
                 i += 1
