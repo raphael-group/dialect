@@ -35,11 +35,12 @@ def build_argument_parser():
 # ---------------------------------------------------------------------------- #
 def identify_decoy_genes(cnt_df, driver_genes, k, fout):
     logging.info("Identifying decoy genes")
-    gene_mutation_counts = cnt_df.sum(axis=0).sort_values(ascending=False)
-    top_k_genes = gene_mutation_counts.head(k).index
-    decoy_genes = [gene for gene in top_k_genes if gene not in driver_genes]
+    decoy_genes_df = cnt_df.drop(driver_genes, axis=1, errors="ignore")
+    top_decoy_genes = (
+        decoy_genes_df.sum(axis=0).sort_values(ascending=False).head(k).index
+    )
     with open(fout, "w") as f:
-        f.write("\n".join(decoy_genes))
+        f.write("\n".join(top_decoy_genes))
 
 
 if __name__ == "__main__":

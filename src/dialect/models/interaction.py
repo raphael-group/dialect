@@ -61,9 +61,7 @@ class Interaction:
 
         cm = self.compute_contingency_table()
         cm_info = (
-            f"\nContingency Table:\n"
-            f"[[{cm[0, 0]} {cm[0, 1]}]\n"
-            f" [{cm[1, 0]} {cm[1, 1]}]]"
+            f"\nContingency Table:\n[[{cm[1, 1]} {cm[1, 0]}]\n [{cm[0, 1]} {cm[0, 0]}]]"
         )
 
         return (
@@ -87,9 +85,7 @@ class Interaction:
         """
         gene_a_mutations = (self.gene_a.counts > 0).astype(int)
         gene_b_mutations = (self.gene_b.counts > 0).astype(int)
-        cm = confusion_matrix(
-            gene_a_mutations, gene_b_mutations, labels=[0, 1]
-        )
+        cm = confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[1, 0])
         return cm
 
     def get_set_of_cooccurring_samples(self):
@@ -122,8 +118,8 @@ class Interaction:
             f"Computing Fisher's exact test p-values for interaction {self.name}."
         )
         cross_tab = self.compute_contingency_table()
-        _, me_pval = fisher_exact(cross_tab, alternative="greater")
-        _, co_pval = fisher_exact(cross_tab, alternative="less")
+        _, me_pval = fisher_exact(cross_tab, alternative="less")
+        _, co_pval = fisher_exact(cross_tab, alternative="greater")
         logging.info(
             f"Computed Fisher's exact test p-values of ME: {me_pval} and CO: {co_pval} for interaction {self.name}."
         )

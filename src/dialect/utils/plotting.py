@@ -12,6 +12,7 @@ from upsetplot import from_contents, UpSet
 from matplotlib.patches import FancyBboxPatch, BoxStyle, Patch
 
 from dialect.utils.postprocessing import generate_top_ranking_tables
+from sklearn.metrics import precision_recall_curve, average_precision_score
 from plotnine import (
     ggplot,
     aes,
@@ -32,10 +33,10 @@ from plotnine import (
 # ---------------------------------------------------------------------------- #
 #                          SET DEFAULT PLOTTING STYLE                          #
 # ---------------------------------------------------------------------------- #
+rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
 rcParams["font.family"] = "sans-serif"
 rcParams["font.serif"] = ["Computer Modern"]
 rcParams["font.sans-serif"] = ["Computer Modern"]
-rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
 
 
 DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
@@ -44,6 +45,15 @@ DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
 EDGE_COLOR = "black"
 EPSILON_MUTATION_COUNT = 10  # minimum count of mutations
 PVALUE_THRESHOLD = 1
+
+def set_dynamic_font_sizes(figsize, base_label_size=24, base_tick_size=20):
+    scale_factor = (figsize[0] * figsize[1]) / (10 * 8)
+    label_size = base_label_size * scale_factor
+    tick_size = base_tick_size * scale_factor
+    rcParams["axes.labelsize"] = label_size
+    rcParams["xtick.labelsize"] = tick_size
+    rcParams["ytick.labelsize"] = tick_size
+
 
 COLOR_MAPPING = {
     "UCEC": "lightcoral",
@@ -572,3 +582,28 @@ def plot_cbase_driver_and_passenger_mutation_counts(
     plt.savefig(
         f"figures/cbase_obs_exp_plots/{subtype}_cbase_driver_vs_passenger_counts.png"
     )
+
+
+def plot_mtx_sim_pr_curve(
+    methods,
+    y_true,
+    fout,
+    ixn_type,
+):
+    figsize = (10, 8)
+    plt.figure(figsize=figsize)
+    set_dynamic_font_sizes(figsize=figsize)
+    for method_name, scores in methods.items():
+        precision, recall, _ = precision_recall_curve(y_true, scores)
+        ap = average_precision_score(y_true, scores)
+        plt.plot(recall, precision, label=f"{method_name} (AUC={ap:.3f})")
+
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.legend(loc="best")
+    plt.tight_layout()
+
+    plt.savefig(fout, dpi=300)
+    plt.close()
+
+    print(f"Saved {ixn_type} PR curve plot to {fout}")

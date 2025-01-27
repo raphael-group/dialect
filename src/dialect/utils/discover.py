@@ -36,7 +36,7 @@ def run_discover_for_interaction(events, interaction_type):
         raise ValueError("interaction_type must be 'me' or 'co'")
 
     alternative = "less" if interaction_type == "me" else "greater"
-    return pairwise_discover_test(events, alternative=alternative)
+    return pairwise_discover_test(events, alternative=alternative, fdr_method="BH")
 
 
 def extract_discover_results(interactions, me_results, co_results):
