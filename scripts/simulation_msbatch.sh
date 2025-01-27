@@ -46,7 +46,6 @@ for subtype in "${SUBTYPES[@]}"; do
                 "${copairs}" \
                 "${likely_pass}" \
                 "${ixn_strength}"
-            exit
 
             # (Optional) Sleep to avoid overwhelming scheduler
             sleep 0.25
