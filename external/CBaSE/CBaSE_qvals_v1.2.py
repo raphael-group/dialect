@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 # ***********************************************************************
 # * Cancer Bayesian Selection Estimation (CBaSE):            			*
 # * Original code accompanying Weghorn & Sunyaev, Nat. Genet. (2017). 	*
@@ -13,20 +11,14 @@
 # * Version:     1.2                                         			*
 # ***********************************************************************
 
-import argparse
-import cgi
-import cgitb
 import glob
-import itertools as it
 import math
-import subprocess
 import sys
 
 import mpmath as mp
 import numpy as np
 import scipy.special as sp
 import scipy.stats as st
-
 
 # ************************************ FUNCTION DEFINITIONS *************************************
 
@@ -51,7 +43,7 @@ def compute_p_values(p, genes, aux):
                 + (-s - a) * np.log(1 + L * b)
                 + sp.gammaln(s + a)
                 - sp.gammaln(s + 1)
-                - sp.gammaln(a)
+                - sp.gammaln(a),
             )
 
         def pofx_given_s(x, s, L, r, thr):
@@ -62,7 +54,7 @@ def compute_p_values(p, genes, aux):
                 + sp.gammaln(s + x + a)
                 - sp.gammaln(s + 1)
                 - sp.gammaln(x + 1)
-                - sp.gammaln(a)
+                - sp.gammaln(a),
             ) / pofs(s, L)
 
     elif modC == 2:
@@ -73,15 +65,14 @@ def compute_p_values(p, genes, aux):
                     ((s + a) / 2.0) * math.log(L * b)
                     + mp.log(mp.besselk(-s + a, 2 * np.sqrt(L * b)))
                     - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 )
-            else:
-                return 2.0 * math.exp(
-                    ((s + a) / 2.0) * math.log(L * b)
-                    + np.log(sp.kv(-s + a, 2 * math.sqrt(L * b)))
-                    - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
-                )
+            return 2.0 * math.exp(
+                ((s + a) / 2.0) * math.log(L * b)
+                + np.log(sp.kv(-s + a, 2 * math.sqrt(L * b)))
+                - sp.gammaln(s + 1)
+                - sp.gammaln(a),
+            )
 
         def pofx_given_s(x, s, L, r, thr):
             if thr:
@@ -92,37 +83,36 @@ def compute_p_values(p, genes, aux):
                     + (1 / 2.0 * (-s - x + a)) * np.log((L * (1 + r)) / b)
                     + a * np.log(b)
                     + mp.log(
-                        mp.besselk(s + x - a, 2 * math.sqrt(L * (1 + r) * b))
+                        mp.besselk(s + x - a, 2 * math.sqrt(L * (1 + r) * b)),
                     )
                     - sp.gammaln(s + 1)
                     - sp.gammaln(x + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 ) / pofs(s, L, thr)
-            else:
-                return np.exp(
-                    np.log(2)
-                    + (s + x) * np.log(L)
-                    + x * np.log(r)
-                    + (1 / 2.0 * (-s - x + a)) * np.log((L * (1 + r)) / b)
-                    + a * np.log(b)
-                    + np.log(sp.kv(s + x - a, 2 * math.sqrt(L * (1 + r) * b)))
-                    - sp.gammaln(s + 1)
-                    - sp.gammaln(x + 1)
-                    - sp.gammaln(a)
-                ) / pofs(s, L, thr)
+            return np.exp(
+                np.log(2)
+                + (s + x) * np.log(L)
+                + x * np.log(r)
+                + (1 / 2.0 * (-s - x + a)) * np.log((L * (1 + r)) / b)
+                + a * np.log(b)
+                + np.log(sp.kv(s + x - a, 2 * math.sqrt(L * (1 + r) * b)))
+                - sp.gammaln(s + 1)
+                - sp.gammaln(x + 1)
+                - sp.gammaln(a),
+            ) / pofs(s, L, thr)
 
     elif modC == 3:
         # *************** lambda ~ w * Exp + (1-w) * Gamma:
         def pofs(s, L):
             return np.exp(
-                np.log(w) + s * np.log(L) + np.log(t) + (-1 - s) * np.log(L + t)
+                np.log(w) + s * np.log(L) + np.log(t) + (-1 - s) * np.log(L + t),
             ) + np.exp(
                 np.log(1.0 - w)
                 + s * np.log(L * b)
                 + (-s - a) * np.log(1 + L * b)
                 + sp.gammaln(s + a)
                 - sp.gammaln(s + 1)
-                - sp.gammaln(a)
+                - sp.gammaln(a),
             )
 
         def pofx_given_s(x, s, L, r, thr):
@@ -135,7 +125,7 @@ def compute_p_values(p, genes, aux):
                     + (-1 - s - x) * np.log(L + L * r + t)
                     + sp.gammaln(1 + s + x)
                     - sp.gammaln(s + 1)
-                    - sp.gammaln(x + 1)
+                    - sp.gammaln(x + 1),
                 )
                 + np.exp(
                     np.log(1 - w)
@@ -145,7 +135,7 @@ def compute_p_values(p, genes, aux):
                     + sp.gammaln(s + x + a)
                     - sp.gammaln(s + 1)
                     - sp.gammaln(x + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 )
             ) / pofs(s, L)
 
@@ -161,17 +151,16 @@ def compute_p_values(p, genes, aux):
                     + ((s + a) / 2.0) * np.log(L * b)
                     + mp.log(mp.besselk(-s + a, 2 * math.sqrt(L * b)))
                     - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 )
-            else:
-                return (w * L**s * t * (L + t) ** (-1 - s)) + np.exp(
-                    np.log(1.0 - w)
-                    + np.log(2.0)
-                    + ((s + a) / 2.0) * np.log(L * b)
-                    + np.log(sp.kv(-s + a, 2 * math.sqrt(L * b)))
-                    - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
-                )
+            return (w * L**s * t * (L + t) ** (-1 - s)) + np.exp(
+                np.log(1.0 - w)
+                + np.log(2.0)
+                + ((s + a) / 2.0) * np.log(L * b)
+                + np.log(sp.kv(-s + a, 2 * math.sqrt(L * b)))
+                - sp.gammaln(s + 1)
+                - sp.gammaln(a),
+            )
 
         def pofx_given_s(x, s, L, r, thr):
             if thr:
@@ -184,7 +173,7 @@ def compute_p_values(p, genes, aux):
                         + (-1 - s - x) * np.log(L + L * r + t)
                         + sp.gammaln(1 + s + x)
                         - sp.gammaln(s + 1)
-                        - sp.gammaln(x + 1)
+                        - sp.gammaln(x + 1),
                     )
                     + mp.exp(
                         np.log(1.0 - w)
@@ -194,38 +183,37 @@ def compute_p_values(p, genes, aux):
                         + (0.5 * (-s - x + a)) * np.log((L * (1 + r)) / b)
                         + a * np.log(b)
                         + mp.log(
-                            mp.besselk(s + x - a, 2 * np.sqrt(L * (1 + r) * b))
+                            mp.besselk(s + x - a, 2 * np.sqrt(L * (1 + r) * b)),
                         )
                         - sp.gammaln(s + 1)
                         - sp.gammaln(x + 1)
-                        - sp.gammaln(a)
+                        - sp.gammaln(a),
                     )
                 ) / pofs(s, L, thr)
-            else:
-                return (
-                    np.exp(
-                        np.log(w)
-                        + (s + x) * np.log(L)
-                        + x * np.log(r)
-                        + np.log(t)
-                        + (-1 - s - x) * np.log(L + L * r + t)
-                        + sp.gammaln(1 + s + x)
-                        - sp.gammaln(s + 1)
-                        - sp.gammaln(x + 1)
-                    )
-                    + np.exp(
-                        np.log(1.0 - w)
-                        + np.log(2)
-                        + (s + x) * np.log(L)
-                        + x * np.log(r)
-                        + (0.5 * (-s - x + a)) * np.log((L * (1 + r)) / b)
-                        + a * np.log(b)
-                        + np.log(sp.kv(s + x - a, 2 * np.sqrt(L * (1 + r) * b)))
-                        - sp.gammaln(s + 1)
-                        - sp.gammaln(x + 1)
-                        - sp.gammaln(a)
-                    )
-                ) / pofs(s, L, thr)
+            return (
+                np.exp(
+                    np.log(w)
+                    + (s + x) * np.log(L)
+                    + x * np.log(r)
+                    + np.log(t)
+                    + (-1 - s - x) * np.log(L + L * r + t)
+                    + sp.gammaln(1 + s + x)
+                    - sp.gammaln(s + 1)
+                    - sp.gammaln(x + 1),
+                )
+                + np.exp(
+                    np.log(1.0 - w)
+                    + np.log(2)
+                    + (s + x) * np.log(L)
+                    + x * np.log(r)
+                    + (0.5 * (-s - x + a)) * np.log((L * (1 + r)) / b)
+                    + a * np.log(b)
+                    + np.log(sp.kv(s + x - a, 2 * np.sqrt(L * (1 + r) * b)))
+                    - sp.gammaln(s + 1)
+                    - sp.gammaln(x + 1)
+                    - sp.gammaln(a),
+                )
+            ) / pofs(s, L, thr)
 
     elif modC == 5:
         # *************** lambda ~ w * Gamma + (1-w) * Gamma (Gamma mixture model):
@@ -236,14 +224,14 @@ def compute_p_values(p, genes, aux):
                 + (-s - a) * np.log(1 + L * b)
                 + sp.gammaln(s + a)
                 - sp.gammaln(s + 1)
-                - sp.gammaln(a)
+                - sp.gammaln(a),
             ) + np.exp(
                 np.log(1.0 - w)
                 + s * np.log(L * d)
                 + (-s - g) * np.log(1 + L * d)
                 + sp.gammaln(s + g)
                 - sp.gammaln(s + 1)
-                - sp.gammaln(g)
+                - sp.gammaln(g),
             )
 
         def pofx_given_s(x, s, L, r, thr):
@@ -256,7 +244,7 @@ def compute_p_values(p, genes, aux):
                     + sp.gammaln(s + x + a)
                     - sp.gammaln(s + 1)
                     - sp.gammaln(x + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 )
                 + np.exp(
                     np.log(1 - w)
@@ -266,7 +254,7 @@ def compute_p_values(p, genes, aux):
                     + sp.gammaln(s + x + g)
                     - sp.gammaln(s + 1)
                     - sp.gammaln(x + 1)
-                    - sp.gammaln(g)
+                    - sp.gammaln(g),
                 )
             ) / pofs(s, L)
 
@@ -280,31 +268,30 @@ def compute_p_values(p, genes, aux):
                     + (-s - a) * np.log(1 + L * b)
                     + sp.gammaln(s + a)
                     - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
+                    - sp.gammaln(a),
                 ) + mp.exp(
                     np.log(1.0 - w)
                     + np.log(2.0)
                     + ((s + g) / 2.0) * np.log(L * d)
                     + mp.log(mp.besselk(-s + g, 2 * mp.sqrt(L * d)))
                     - sp.gammaln(s + 1)
-                    - sp.gammaln(g)
+                    - sp.gammaln(g),
                 )
-            else:
-                return np.exp(
-                    np.log(w)
-                    + s * np.log(L * b)
-                    + (-s - a) * np.log(1 + L * b)
-                    + sp.gammaln(s + a)
-                    - sp.gammaln(s + 1)
-                    - sp.gammaln(a)
-                ) + np.exp(
-                    np.log(1.0 - w)
-                    + np.log(2.0)
-                    + ((s + g) / 2.0) * np.log(L * d)
-                    + np.log(sp.kv(-s + g, 2 * np.sqrt(L * d)))
-                    - sp.gammaln(s + 1)
-                    - sp.gammaln(g)
-                )
+            return np.exp(
+                np.log(w)
+                + s * np.log(L * b)
+                + (-s - a) * np.log(1 + L * b)
+                + sp.gammaln(s + a)
+                - sp.gammaln(s + 1)
+                - sp.gammaln(a),
+            ) + np.exp(
+                np.log(1.0 - w)
+                + np.log(2.0)
+                + ((s + g) / 2.0) * np.log(L * d)
+                + np.log(sp.kv(-s + g, 2 * np.sqrt(L * d)))
+                - sp.gammaln(s + 1)
+                - sp.gammaln(g),
+            )
 
         def pofx_given_s(x, s, L, r, thr):
             if thr:
@@ -317,7 +304,7 @@ def compute_p_values(p, genes, aux):
                         + sp.gammaln(s + x + a)
                         - sp.gammaln(s + 1)
                         - sp.gammaln(x + 1)
-                        - sp.gammaln(a)
+                        - sp.gammaln(a),
                     )
                     + mp.exp(
                         np.log(1 - w)
@@ -327,38 +314,37 @@ def compute_p_values(p, genes, aux):
                         + (0.5 * (-s - x + g)) * np.log((L * (1 + r)) / d)
                         + g * np.log(d)
                         + mp.log(
-                            mp.besselk(s + x - g, 2 * np.sqrt(L * (1 + r) * d))
+                            mp.besselk(s + x - g, 2 * np.sqrt(L * (1 + r) * d)),
                         )
                         - sp.gammaln(s + 1)
                         - sp.gammaln(x + 1)
-                        - sp.gammaln(g)
+                        - sp.gammaln(g),
                     )
                 ) / pofs(s, L, thr)
-            else:
-                return (
-                    np.exp(
-                        np.log(w)
-                        + x * np.log(r)
-                        + (s + x) * np.log(L * b)
-                        + (-s - x - a) * np.log(1 + L * (1 + r) * b)
-                        + sp.gammaln(s + x + a)
-                        - sp.gammaln(s + 1)
-                        - sp.gammaln(x + 1)
-                        - sp.gammaln(a)
-                    )
-                    + np.exp(
-                        np.log(1 - w)
-                        + np.log(2)
-                        + (s + x) * np.log(L)
-                        + x * np.log(r)
-                        + (0.5 * (-s - x + g)) * np.log((L * (1 + r)) / d)
-                        + g * np.log(d)
-                        + np.log(sp.kv(s + x - g, 2 * np.sqrt(L * (1 + r) * d)))
-                        - sp.gammaln(s + 1)
-                        - sp.gammaln(x + 1)
-                        - sp.gammaln(g)
-                    )
-                ) / pofs(s, L, thr)
+            return (
+                np.exp(
+                    np.log(w)
+                    + x * np.log(r)
+                    + (s + x) * np.log(L * b)
+                    + (-s - x - a) * np.log(1 + L * (1 + r) * b)
+                    + sp.gammaln(s + x + a)
+                    - sp.gammaln(s + 1)
+                    - sp.gammaln(x + 1)
+                    - sp.gammaln(a),
+                )
+                + np.exp(
+                    np.log(1 - w)
+                    + np.log(2)
+                    + (s + x) * np.log(L)
+                    + x * np.log(r)
+                    + (0.5 * (-s - x + g)) * np.log((L * (1 + r)) / d)
+                    + g * np.log(d)
+                    + np.log(sp.kv(s + x - g, 2 * np.sqrt(L * (1 + r) * d)))
+                    - sp.gammaln(s + 1)
+                    - sp.gammaln(x + 1)
+                    - sp.gammaln(g),
+                )
+            ) / pofs(s, L, thr)
 
     pvals = []
     L = 1.0
@@ -374,7 +360,7 @@ def compute_p_values(p, genes, aux):
         mexp = gene["exp"][0]
         kexp = gene["exp"][1]
         lams = gene["lambda_s"]
-        s_max_per_sample = gene["s_max_per_sample"]
+        gene["s_max_per_sample"]
         ratm = mexp / sexp
         ratk = kexp / sexp
 
@@ -384,7 +370,7 @@ def compute_p_values(p, genes, aux):
             meant2 = 2  # ~= E[m] * 2
         else:
             meant2 = int(
-                ratm * sobs + 3.0 * math.sqrt(ratm * sobs)
+                ratm * sobs + 3.0 * math.sqrt(ratm * sobs),
             )  # ~= E[m] + 3*sigma_m
         for mtest in range(meant2):
             if math.isnan(pofx_given_s(mtest, sobs, L, ratm, 0)):
@@ -463,7 +449,7 @@ def compute_p_values(p, genes, aux):
             testk_array.append([k_pneg, k_ppos])
             sum_p += next_prob
 
-        for rep in range(runC):
+        for _rep in range(runC):
             if simC:
                 # 	Simulate expectation under null.
                 if sobs == 0:
@@ -514,8 +500,9 @@ def compute_p_values(p, genes, aux):
                         or math.isnan(m_ppos)
                     ):
                         sys.stderr.write(
-                            "Setting p_m^pos --> 0 on gene %s (was %e).\n"
-                            % (gene["gene"], m_ppos)
+                            "Setting p_m^pos --> 0 on gene {} (was {:e}).\n".format(
+                                gene["gene"], m_ppos
+                            ),
                         )
                         m_ppos = 0
                 if m_pneg > 1:
@@ -524,8 +511,9 @@ def compute_p_values(p, genes, aux):
                     elif math.isinf(m_pneg) or math.isnan(m_pneg):
                         if simC == 0:
                             sys.stderr.write(
-                                "p_m^neg on gene %s: %f --> 1.\n"
-                                % (gene["gene"], m_pneg)
+                                "p_m^neg on gene {}: {:f} --> 1.\n".format(
+                                    gene["gene"], m_pneg
+                                ),
                             )
                         m_pneg = 1.0
 
@@ -558,8 +546,9 @@ def compute_p_values(p, genes, aux):
                         or math.isnan(k_ppos)
                     ):
                         sys.stderr.write(
-                            "Setting p_k^pos --> 0 on gene %s (was %e).\n"
-                            % (gene["gene"], k_ppos)
+                            "Setting p_k^pos --> 0 on gene {} (was {:e}).\n".format(
+                                gene["gene"], k_ppos
+                            ),
                         )
                         k_ppos = 0
                 if k_pneg > 1:
@@ -568,8 +557,9 @@ def compute_p_values(p, genes, aux):
                     elif math.isinf(k_pneg) or math.isnan(k_pneg):
                         if simC == 0:
                             sys.stderr.write(
-                                "p_k^neg on gene %s: %f --> 1.\n"
-                                % (gene["gene"], k_pneg)
+                                "p_k^neg on gene {}: {:f} --> 1.\n".format(
+                                    gene["gene"], k_pneg
+                                ),
                             )
                         k_pneg = 1.0
 
@@ -610,13 +600,21 @@ def compute_p_values(p, genes, aux):
             if simC == 0:
                 i = 0
                 test_prob = pofx_given_s(
-                    i, sobs, L, ratm / N_samples, large_flag
+                    i,
+                    sobs,
+                    L,
+                    ratm / N_samples,
+                    large_flag,
                 )
                 while abs(test_prob) < THRESHOLD:
                     pofm_per_sample.append([i, test_prob])
                     i += 1
                     test_prob = pofx_given_s(
-                        i, sobs, L, ratm / N_samples, large_flag
+                        i,
+                        sobs,
+                        L,
+                        ratm / N_samples,
+                        large_flag,
                     )
                     if test_prob - pofm_per_sample[-1][1] < 0:
                         break
@@ -624,17 +622,29 @@ def compute_p_values(p, genes, aux):
                     pofm_per_sample.append([i, test_prob])
                     i += 1
                     test_prob = pofx_given_s(
-                        i, sobs, L, ratm / N_samples, large_flag
+                        i,
+                        sobs,
+                        L,
+                        ratm / N_samples,
+                        large_flag,
                     )
                 i = 0
                 test_prob = pofx_given_s(
-                    i, sobs, L, ratk / N_samples, large_flag
+                    i,
+                    sobs,
+                    L,
+                    ratk / N_samples,
+                    large_flag,
                 )
                 while abs(test_prob) < THRESHOLD:
                     pofk_per_sample.append([i, test_prob])
                     i += 1
                     test_prob = pofx_given_s(
-                        i, sobs, L, ratk / N_samples, large_flag
+                        i,
+                        sobs,
+                        L,
+                        ratk / N_samples,
+                        large_flag,
                     )
                     if test_prob - pofk_per_sample[-1][1] < 0:
                         break
@@ -642,7 +652,11 @@ def compute_p_values(p, genes, aux):
                     pofk_per_sample.append([i, test_prob])
                     i += 1
                     test_prob = pofx_given_s(
-                        i, sobs, L, ratk / N_samples, large_flag
+                        i,
+                        sobs,
+                        L,
+                        ratk / N_samples,
+                        large_flag,
                     )
 
             pm0 = pofx_given_s(0, sobs, L, ratm, 0)
@@ -688,7 +702,7 @@ def compute_p_values(p, genes, aux):
                     pofk,
                     pofm_per_sample,
                     pofk_per_sample,
-                ]
+                ],
             )
 
     sys.stderr.write("100% done.\n")
@@ -696,36 +710,36 @@ def compute_p_values(p, genes, aux):
     return pvals
 
 
-def export_pofxigivens_table(pvals_array, x_ind):
+def export_pofxigivens_table(pvals_array, x_ind) -> None:
     label = ["m", "k"][x_ind - 13]
-    fout = open("%s/pof%sigivens.txt" % (TEMP_DIR, label), "w")
+    fout = open(f"{TEMP_DIR}/pof{label}igivens.txt", "w")
     for gene in pvals_array:
-        fout.write("%s_%si\t" % (gene[0], label))
+        fout.write(f"{gene[0]}_{label}i\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > THRESHOLD:
                 fout.write("%i\t" % (gene[x_ind][i][0]))
         fout.write("\n")
-        fout.write("%s_pof%si\t" % (gene[0], label))
+        fout.write(f"{gene[0]}_pof{label}i\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > THRESHOLD:
-                fout.write("%.6e\t" % (gene[x_ind][i][1]))
+                fout.write(f"{gene[x_ind][i][1]:.6e}\t")
         fout.write("\n")
     fout.close()
 
 
-def export_pofxgivens_table(pvals_array, x_ind, outfile):
-    fout = open("%s/%s.txt" % (TEMP_DIR, outfile), "w")
+def export_pofxgivens_table(pvals_array, x_ind, outfile) -> None:
+    fout = open(f"{TEMP_DIR}/{outfile}.txt", "w")
     label = ["m", "k"][x_ind - 11]
     for gene in pvals_array:
-        fout.write("%s_%s\t" % (gene[0], label))
+        fout.write(f"{gene[0]}_{label}\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > 9e-7:
                 fout.write("%i\t" % (gene[x_ind][i][0]))
         fout.write("\n")
-        fout.write("%s_pof%s\t" % (gene[0], label))
+        fout.write(f"{gene[0]}_pof{label}\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > 9e-7:
-                fout.write("%.6f\t" % (gene[x_ind][i][1]))
+                fout.write(f"{gene[x_ind][i][1]:.6f}\t")
         fout.write("\n")
     fout.close()
 
@@ -781,15 +795,12 @@ def compute_phi_obs(pvals_array, ind1, ind2):
                 "p0k": gene[6],
                 "mks": [gene[7], gene[8], gene[9]],
                 "dnds": gene[10],
-            }
+            },
         )
     # 	Compute negative log of individual observed p-values for the missense and nonsense category.
     all_phi_m = []
     for gene in pvals_array:
-        if abs(gene[ind1]) < 1e-100:
-            cur_phi = 1e5
-        else:
-            cur_phi = -math.log(gene[ind1])
+        cur_phi = 100000.0 if abs(gene[ind1]) < 1e-100 else -math.log(gene[ind1])
         all_phi_m.append(
             {
                 "gene": gene[0],
@@ -798,14 +809,11 @@ def compute_phi_obs(pvals_array, ind1, ind2):
                 "p0k": gene[6],
                 "mks": [gene[7], gene[8], gene[9]],
                 "dnds": gene[10],
-            }
+            },
         )
     all_phi_k = []
     for gene in pvals_array:
-        if abs(gene[ind2]) < 1e-100:
-            cur_phi = 1e5
-        else:
-            cur_phi = -math.log(gene[ind2])
+        cur_phi = 100000.0 if abs(gene[ind2]) < 1e-100 else -math.log(gene[ind2])
         all_phi_k.append(
             {
                 "gene": gene[0],
@@ -814,7 +822,7 @@ def compute_phi_obs(pvals_array, ind1, ind2):
                 "p0k": gene[6],
                 "mks": [gene[7], gene[8], gene[9]],
                 "dnds": gene[10],
-            }
+            },
         )
     return all_phi, all_phi_m, all_phi_k
 
@@ -855,7 +863,7 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
         ]
         sys.stderr.write("Note: Not including these gene(s) in output:\n")
         for el in excl:
-            sys.stderr.write("%s\n" % el)
+            sys.stderr.write(f"{el}\n")
 
     # 	Compute the p-values of the observed phi values.
     phi_pvals_obs = []
@@ -868,39 +876,36 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
                     "phi": gene["phi"],
                     "mks": gene["mks"],
                     "dnds": gene["dnds"],
-                }
+                },
+            )
+        elif abs(gene["phi"]) < 1e-30:
+            use_phi = [gene["p0m"] * gene["p0k"], gene["p0m"], gene["p0k"]][noncat]
+            phi_pvals_obs.append(
+                {
+                    "gene": gene["gene"],
+                    "p_phi": 1.0,
+                    "phi": use_phi,
+                    "mks": gene["mks"],
+                    "dnds": gene["dnds"],
+                },
             )
         else:
-            if abs(gene["phi"]) < 1e-30:
-                use_phi = [gene["p0m"] * gene["p0k"], gene["p0m"], gene["p0k"]][
-                    noncat
-                ]
-                phi_pvals_obs.append(
-                    {
-                        "gene": gene["gene"],
-                        "p_phi": 1.0,
-                        "phi": use_phi,
-                        "mks": gene["mks"],
-                        "dnds": gene["dnds"],
-                    }
-                )
-            else:
-                cumprob = 0.0
-                i = 0
-                while i < len(phi_sim_hist) and phi_sim_hist[i][
-                    0
-                ] + 0.5 * bin_phi <= max(0.0, gene["phi"]):
-                    cumprob += phi_sim_hist[i][1]
-                    i += 1
-                phi_pvals_obs.append(
-                    {
-                        "gene": gene["gene"],
-                        "p_phi": 1.0 - cumprob,
-                        "phi": gene["phi"],
-                        "mks": gene["mks"],
-                        "dnds": gene["dnds"],
-                    }
-                )
+            cumprob = 0.0
+            i = 0
+            while i < len(phi_sim_hist) and phi_sim_hist[i][0] + 0.5 * bin_phi <= max(
+                0.0, gene["phi"]
+            ):
+                cumprob += phi_sim_hist[i][1]
+                i += 1
+            phi_pvals_obs.append(
+                {
+                    "gene": gene["gene"],
+                    "p_phi": 1.0 - cumprob,
+                    "phi": gene["phi"],
+                    "mks": gene["mks"],
+                    "dnds": gene["dnds"],
+                },
+            )
 
     # 	Compute the q-values of the observed phi with BH procedure.
     phi_qvals_obs = []
@@ -918,7 +923,7 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
                     "phi": gene["phi"],
                     "mks": gene["mks"],
                     "dnds": gene["dnds"],
-                }
+                },
             )
         else:
             q_phi_BH = gene["p_phi"] / (grank / len(phi_pvals_obs))
@@ -930,13 +935,13 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
                     "phi": gene["phi"],
                     "mks": gene["mks"],
                     "dnds": gene["dnds"],
-                }
+                },
             )
 
     if len(phi_qvals_obs) != len(gene_phi_real):
         sys.stderr.write(
             "Number of genes in output different from original: %i vs. %i.\n"
-            % (len(phi_qvals_obs), len(gene_phi_real))
+            % (len(phi_qvals_obs), len(gene_phi_real)),
         )
 
     phi_qvals_adj = []
@@ -951,7 +956,7 @@ def FDR_discrete(phi_sim_array, gene_phi_real, bin_phi, bin_p, noncat):
                 "phi": gene["phi"],
                 "mks": gene["mks"],
                 "dnds": gene["dnds"],
-            }
+            },
         )
 
     return phi_qvals_adj
@@ -965,7 +970,7 @@ def combine_qvalues(all_neg, all_pos):
         or len(all_neg[0]) != len(all_neg[2])
     ):
         sys.stderr.write(
-            "Warning: Number of genes not identical across q-value arrays, matching in output file compromised.\n"
+            "Warning: Number of genes not identical across q-value arrays, matching in output file compromised.\n",
         )
     large_qval_array = []
     for g in range(len(all_neg[0])):
@@ -992,7 +997,7 @@ def combine_qvalues(all_neg, all_pos):
                 "phi_k_pos": all_pos[2][g]["phi"],
                 "mks": all_neg[0][g]["mks"],
                 "dnds": all_neg[0][g]["dnds"],
-            }
+            },
         )
     return large_qval_array
 
@@ -1019,7 +1024,7 @@ THRESHOLD = float(sys.argv[3])  # 	threshold for categorical bmr pmf generation
 #
 # 	Collect parameter estimates from all fitted models in working directory.
 
-p_files = glob.glob("%s/param_estimates_*.txt" % TEMP_DIR)
+p_files = glob.glob(f"{TEMP_DIR}/param_estimates_*.txt")
 
 all_models = []
 for p_file in p_files:
@@ -1042,9 +1047,9 @@ for m in range(len(all_models)):
         cur_ind = m
 if cur_min < 1e20:
     sys.stderr.write(
-        "Best model fit: model %i.\n" % int(all_models[cur_ind][-1])
+        "Best model fit: model %i.\n" % int(all_models[cur_ind][-1]),
     )
-    fout = open("%s/used_params_and_model.txt" % TEMP_DIR, "w")
+    fout = open(f"{TEMP_DIR}/used_params_and_model.txt", "w")
     fout.write(
         "".join(
             [
@@ -1052,14 +1057,14 @@ if cur_min < 1e20:
                     [
                         "%e, "
                         for i in range(
-                            modC_map[int(all_models[cur_ind][-1]) - 1]
+                            modC_map[int(all_models[cur_ind][-1]) - 1],
                         )
-                    ]
+                    ],
                 ),
                 "%i\n",
-            ]
+            ],
         )
-        % tuple(all_models[cur_ind][:-2] + [int(all_models[cur_ind][-1])])
+        % tuple(all_models[cur_ind][:-2] + [int(all_models[cur_ind][-1])]),
     )
     fout.close()
 else:
@@ -1070,7 +1075,7 @@ else:
 # 	Compute q-values for all genes, using best fitting model.
 
 # 	Import parameters and index of chosen model.
-fin = open("%s/used_params_and_model.txt" % TEMP_DIR)
+fin = open(f"{TEMP_DIR}/used_params_and_model.txt")
 lines = fin.readlines()
 fin.close()
 field = lines[0].strip().split(", ")
@@ -1081,12 +1086,12 @@ params = [float(el) for el in field[:-1]]
 if len(params) != modC_map[mod_C - 1]:
     sys.stderr.write(
         "Number of inferred parameters does not match the chosen model: %i vs. %i.\n"
-        % (len(params), modC_map[mod_C - 1])
+        % (len(params), modC_map[mod_C - 1]),
     )
     sys.exit()
 
 # 	Import output from data_preparation, containing l_x and (m,k,s)_obs.
-fin = open("%s/output_data_preparation.txt" % TEMP_DIR)
+fin = open(f"{TEMP_DIR}/output_data_preparation.txt")
 lines = fin.readlines()
 fin.close()
 mks_type = []
@@ -1102,7 +1107,7 @@ for line in lines[1:]:
             "len": int(field[7]),
             "lambda_s": float(field[8]),
             "s_max_per_sample": int(field[9]),
-        }
+        },
     )
 mks_type = sorted(mks_type, key=lambda arg: arg["gene"])
 
@@ -1151,14 +1156,15 @@ q_pos_adj_k = sorted(
 
 # 	Combine and output gene-specific q-values.
 all_qvalues = combine_qvalues(
-    [q_neg_adj, q_neg_adj_m, q_neg_adj_k], [q_pos_adj, q_pos_adj_m, q_pos_adj_k]
+    [q_neg_adj, q_neg_adj_m, q_neg_adj_k],
+    [q_pos_adj, q_pos_adj_m, q_pos_adj_k],
 )
 
 # 	Output q-values in file.
-fout = open("%s/q_values.txt" % TEMP_DIR, "w")
-fout.write("%s\t%s\n" % (mod_choice[mod_C], params))
+fout = open(f"{TEMP_DIR}/q_values.txt", "w")
+fout.write(f"{mod_choice[mod_C]}\t{params}\n")
 fout.write(
-    "gene\tp_phi_m_neg\tq_phi_m_neg\tphi_m_neg\tp_phi_k_neg\tq_phi_k_neg\tphi_k_neg\tp_phi_neg\tq_phi_neg\tphi_neg\tp_phi_m_pos\tq_phi_m_pos\tphi_m_pos_or_p(m=0|s)\tp_phi_k_pos\tq_phi_k_pos\tphi_k_pos_or_p(k=0|s)\tp_phi_pos\tq_phi_pos\tphi_pos_or_p(m=0|s)*p(k=0|s)\tm_obs\tk_obs\ts_obs\tdm/ds\tdk/ds\td(m+k)/ds\n"
+    "gene\tp_phi_m_neg\tq_phi_m_neg\tphi_m_neg\tp_phi_k_neg\tq_phi_k_neg\tphi_k_neg\tp_phi_neg\tq_phi_neg\tphi_neg\tp_phi_m_pos\tq_phi_m_pos\tphi_m_pos_or_p(m=0|s)\tp_phi_k_pos\tq_phi_k_pos\tphi_k_pos_or_p(k=0|s)\tp_phi_pos\tq_phi_pos\tphi_pos_or_p(m=0|s)*p(k=0|s)\tm_obs\tk_obs\ts_obs\tdm/ds\tdk/ds\td(m+k)/ds\n",
 )
 for g in range(len(all_qvalues)):
     curg = all_qvalues[g]
@@ -1190,6 +1196,6 @@ for g in range(len(all_qvalues)):
             curg["dnds"][0],
             curg["dnds"][1],
             curg["dnds"][2],
-        )
+        ),
     )
 fout.close()
