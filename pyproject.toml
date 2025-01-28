@@ -4,7 +4,7 @@ exclude = ["external/"]
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D203", "D213"]
+ignore = ["D203", "D213", "FIX002"]
 
 [tool.ruff.lint.per-file-ignores]
 "docs/source/conf.py" = ["INP001", "D100", "A001"]
