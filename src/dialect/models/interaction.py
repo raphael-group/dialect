@@ -6,8 +6,9 @@ odds ratios), validate data, and estimate interaction parameters (e.g., tau valu
 using numerical optimization and Expectation-Maximization (EM) algorithms.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import NoReturn
 
 import numpy as np
 from scipy.optimize import minimize
@@ -522,25 +523,24 @@ class Interaction:
     # ---------------------------------------------------------------------------- #
     def estimate_tau_with_optimization_using_scipy(
         self,
-        tau_init: list = None,
+        tau_init: list | None = None,
         alpha: float = 1e-13,
     ) -> None:
-        # ? tau parameters fail verification due to optimization scheme since outside of bounds
-        # TODO: investigate and try different optimization scheme
+        # ? tau parameters fail verification due to optimization scheme due to bounds
+        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-78
         """Estimate the tau parameters using the SLSQP optimization scheme.
 
-        :param tau_init (list): Initial guesses for the tau parameters (default: [0.25, 0.25, 0.25, 0.25]).
-        :param alpha (float): Small value to avoid edge cases at 0 or 1 (default: 1e-13).
+        :param tau_init (list): Initializations for tau parameters.
+        :param alpha (float): Small value to avoid edge cases at 0 or 1.
         :return (tuple): The optimized values of (tau_00, tau_01, tau_10, tau_11).
         """
         if tau_init is None:
             tau_init = [0.25, 0.25, 0.25, 0.25]
-        logging.info(f"Estimating tau params for {self.name} using SLSQP.")
 
         self.verify_bmr_pmf_and_counts_exist()
 
-        def negative_log_likelihood(tau):
-            return -self.compute_log_likelihood(tau)
+        def negative_log_likelihood(taus: list) -> float:
+            return -self.compute_log_likelihood(taus)
 
         bounds = 4 * [(alpha, 1 - alpha)]
         constraints = {"type": "eq", "fun": lambda tau: sum(tau) - 1}
@@ -552,46 +552,51 @@ class Interaction:
             method="SLSQP",
         )
         if not result.success:
-            logging.warning(
-                f"Optimization failed for interaction {self.name}: {result.message}",
-            )
             msg = f"Optimization failed: {result.message}"
             raise ValueError(msg)
 
         self.tau_00, self.tau_01, self.tau_10, self.tau_11 = result.x
-        logging.info(
-            f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}",
-        )
 
     def estimate_tau_with_em_from_scratch(
         self,
-        max_iter=1000,
-        tol=1e-3,
-        tau_init=None,
+        max_iter: int = 1000,
+        tol: float = 1e-3,
+        tau_init: list | None = None,
     ) -> None:
-        r"""Estimate the tau parameters for interaction using the Expectation-Maximization (EM) algorithm.
+        r"""Estimate the tau parameters for interaction using EM algorithm.
 
-        This method iteratively updates the tau parameters, \\( \tau = (\tau_{00}, \tau_{01}, \tau_{10}, \tau_{11}) \\),
-        to maximize the likelihood of the observed mutation count data for two interacting genes.
+        This method iteratively updates the tau parameters,
+        \\( \tau = (\tau_{00}, \tau_{01}, \tau_{10}, \tau_{11}) \\),
+        to maximize the likelihood of the observed mutation count data for interaction.
 
         **Algorithm Steps**:
 
         1. **E-Step**:
            At iteration \\( t \\), given the estimated driver mutation probabilities
-           \\( \tau^{(t)} = (\tau_{00}^{(t)}, \tau_{01}^{(t)}, \tau_{10}^{(t)}, \tau_{11}^{(t)}) \\),
-           compute the responsibilities \\( z_{i,uv}^{(t)} \\) for each pair \\( (u,v) \\in \\{0,1\\}^2 \\)
-           and sample \\( i = 1, \\dots, N \\) as:
+           \\( \tau^{(t)} = (\tau_{00}^{(t)}, \tau_{01}^{(t)},
+                                \tau_{10}^{(t)}, \tau_{11}^{(t)}) \\),
+           compute the responsibilities \\( z_{i,uv}^{(t)} \\) for each pair
+           \\( (u,v) \\in \\{0,1\\}^2 \\) and sample \\( i = 1, \\dots, N \\) as:
 
            .. math::
 
-               z_{i,uv}^{(t)} = \\frac{\\tau_{uv}^{(t)} \\cdot \\mathbb{P}(P_i = c_i - u) \\cdot \\mathbb{P}(P_i' = c_i' - v)}
-               {\\sum_{(x,y) \\in \\{0,1\\}^2} \\left( \\tau_{xy}^{(t)} \\cdot \\mathbb{P}(P_i = c_i - x) \\cdot \\mathbb{P}(P_i' = c_i' - y) \\right)}
+               z_{i,uv}^{(t)} = \\frac{\\tau_{uv}^{(t)}
+                                            \\cdot \\mathbb{P}(P_i = c_i - u)
+                                            \\cdot \\mathbb{P}(P_i' = c_i' - v)}
+               {\\sum_{(x,y) \\in \\{0,1\\}^2} \\left(
+                        \\tau_{xy}^{(t)}
+                        \\cdot \\mathbb{P}(P_i = c_i - x)
+                        \\cdot \\mathbb{P}(P_i' = c_i' - y)
+                \\right)}
 
-           where \\( P_i \\) and \\( P_i' \\) represent passenger mutation probabilities for the two genes,
+           where \\( P_i \\) and \\( P_i' \\) are passenger mutation probabilities.
            and \\( c_i, c_i' \\) are the observed mutation counts.
 
         2. **M-Step**:
-           Given the responsibilities \\( \\bm{z}_i^{(t)} = (z_{i,00}^{(t)}, z_{i,01}^{(t)}, z_{i,10}^{(t)}, z_{i,11}^{(t)}) \\),
+           Given the responsibilities \\( \\bm{z}_i^{(t)} = (z_{i,00}^{(t)},
+                                                                z_{i,01}^{(t)},
+                                                                z_{i,10}^{(t)},
+                                                                z_{i,11}^{(t)}) \\),
            update the tau parameters at iteration \\( t+1 \\) as:
 
            .. math::
@@ -601,12 +606,12 @@ class Interaction:
            for each pair \\( (u,v) \\in \\{0,1\\}^2 \\).
 
         **Parameters**:
-        :param max_iter: (int) Maximum number of iterations for the EM algorithm (default: 1000).
-        :param tol: (float) Convergence threshold for log-likelihood improvement (default: 1e-6).
-        :param tau_init: (list of float) Initial guesses for the tau parameters (default: [0.25, 0.25, 0.25, 0.25]).
+        :param max_iter: (int) Maximum number of iterations for the EM algorithm.
+        :param tol: (float) Convergence threshold for log-likelihood improvement.
+        :param tau_init: (list of float) Initial guesses for the tau parameters.
 
         **Returns**:
-        :return: (tuple) The estimated values of \\( (\\tau_{00}, \\tau_{01}, \\tau_{10}, \\tau_{11}) \\).
+        :return: (tuple) The estimated values of tau parameters.
         """
         if tau_init is None:
             tau_init = [0.25, 0.25, 0.25, 0.25]
@@ -617,7 +622,7 @@ class Interaction:
         self.verify_bmr_pmf_and_counts_exist()
 
         tau_00, tau_01, tau_10, tau_11 = tau_init
-        for it in range(max_iter):
+        for _ in range(max_iter):
             # E-Step: Compute responsibilities
             total_probabilities = self.compute_total_probability(
                 tau_00,
@@ -642,7 +647,7 @@ class Interaction:
                 / total_probabilities
             )
 
-            # TODO: map out other reasons for nan values and standardize handling
+            # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-79
             # remove nans to avoid underflow issues in bmr estimates
             z_i_00_no_nan = np.nan_to_num(z_i_00, nan=2e-100)
             z_i_01_no_nan = np.nan_to_num(z_i_01, nan=2e-100)
@@ -677,15 +682,10 @@ class Interaction:
             tau_10,
             tau_11,
         )
-        logging.info(
-            f" EM algorithm converged after {it + 1} iterations.",
-        )
-        logging.info(
-            f"Estimated tau parameters for interaction {self.name}: tau_00={self.tau_00}, tau_01={self.tau_01}, tau_10={self.tau_10}, tau_11={self.tau_11}",
-        )
 
-    # TODO: (LOW PRIORITY): Implement EM w/ Pomegranate for Speed Improvement
-    def estimate_tau_with_em_using_pomegranate(self) -> NoReturn:
+    # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-76)
+    def estimate_tau_with_em_using_pomegranate(self) -> None:
+        """Estimate the tau parameters using the pomegranate library."""
         logging.info("Estimating tau parameters using pomegranate.")
         msg = "Method is not yet implemented."
         raise NotImplementedError(msg)
