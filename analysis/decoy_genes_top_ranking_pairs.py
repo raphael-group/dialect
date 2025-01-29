@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
+
 from dialect.utils.plotting import plot_decoy_gene_fractions
 from dialect.utils.postprocessing import generate_top_ranking_tables
 

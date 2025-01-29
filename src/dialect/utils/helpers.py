@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from itertools import combinations
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pathhlib import Path
 
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
