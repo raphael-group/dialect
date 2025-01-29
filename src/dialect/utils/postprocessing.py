@@ -1,10 +1,14 @@
-from math import sqrt
-from scipy.stats import norm
-from scipy.optimize import brentq
+"""TODO: Add docstring."""
 
-# ---------------------------------------------------------------------------- #
-#                                   CONSTANTS                                  #
-# ---------------------------------------------------------------------------- #
+from math import sqrt
+
+import pandas as pd
+from scipy.optimize import brentq
+from scipy.stats import norm
+
+# ------------------------------------------------------------------------------------ #
+#                                       CONSTANTS                                      #
+# ------------------------------------------------------------------------------------ #
 MIN_DRIVER_COUNT = 10
 PVALUE_THRESHOLD = 1.0
 
@@ -25,45 +29,45 @@ CO_COLUMN_MAP = {
 }
 
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def get_sort_column(method, is_me):
-    """
-    Returns the column name to sort on, depending on method and whether
-    we're doing ME or CO. Returns None if method doesn't apply to the
-    chosen meco (e.g. MEGSA for co-occurrence).
-    """
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def get_sort_column(method: str, is_me: bool) -> str:
+    """TODO: Add docstring."""
     if is_me:
-        return ME_COLUMN_MAP.get(method, None)
-    else:
-        return CO_COLUMN_MAP.get(method, None)
+        return ME_COLUMN_MAP.get(method)
+    return CO_COLUMN_MAP.get(method)
+
+def filter_by_dialect(
+    top_ranking_pairs: pd.DataFrame,
+    num_samples: int,
+    is_me: bool,
+) -> pd.DataFrame:
+    """TODO: Add docstring."""
+    epsilon = compute_epsilon_threshold(num_samples)
+    filtered_pairs = top_ranking_pairs[
+        (top_ranking_pairs["Tau_1X"] > epsilon)
+        & (top_ranking_pairs["Tau_X1"] > epsilon)
+    ]
+    return (
+        filtered_pairs[filtered_pairs["Rho"] < 0]
+        if is_me
+        else filtered_pairs[filtered_pairs["Rho"] > 0]
+    )
 
 
 def filter_by_method(
-    top_ranking_pairs,
-    method,
-    is_me,
-    num_samples,
-):
-    """
-    Applies method-specific filters to the top_ranking_pairs DataFrame,
-    depending on whether we're seeking ME or CO.
-    Returns the filtered DataFrame or None if not applicable.
-    """
+    top_ranking_pairs: pd.DataFrame,
+    method: str,
+    is_me: bool,
+    num_samples: int,
+) -> pd.DataFrame:
+    """TODO: Add docstring."""
     if method == "MEGSA" and not is_me:
         return None
 
     if method == "DIALECT":
-        epsilon = compute_epsilon_threshold(num_samples)
-        top_ranking_pairs = top_ranking_pairs[
-            (top_ranking_pairs["Tau_1X"] > epsilon)
-            & (top_ranking_pairs["Tau_X1"] > epsilon)
-        ]
-        if is_me:
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] < 0]
-        else:
-            top_ranking_pairs = top_ranking_pairs[top_ranking_pairs["Rho"] > 0]
+        top_ranking_pairs = filter_by_dialect(top_ranking_pairs, num_samples, is_me)
 
     elif method == "MEGSA":
         top_ranking_pairs = top_ranking_pairs[
@@ -103,9 +107,8 @@ def filter_by_method(
     return top_ranking_pairs
 
 
-def compute_epsilon_threshold(num_samples, alpha=0.001):
-    """
-    Compute the epsilon threshold for the one-sided normal approximation confidence interval.
+def compute_epsilon_threshold(num_samples: int, alpha: float = 0.001) -> float:
+    r"""Compute the epsilon threshold for the one-sided normal approximation CI.
 
     We solve the equation:
 
@@ -117,7 +120,7 @@ def compute_epsilon_threshold(num_samples, alpha=0.001):
     for \\(\\epsilon \\in [0, 1]\\), where:
     - \\(n\\) = ``num_samples``,
     - \\(\\alpha\\) is the one-sided significance level,
-    - \\(z_{(1 - \\alpha)}\\) is the critical value from the standard normal distribution
+    - \\(z_{(1 - \\alpha)}\\) is critical value from the standard normal distribution
       at the \\((1 - \\alpha)\\) quantile.
 
     **Parameters**:
@@ -126,70 +129,60 @@ def compute_epsilon_threshold(num_samples, alpha=0.001):
                     (default 0.001 for a 99.9% one-sided CI)
 
     **Returns**:
-      :return: (float) The marginal driver mutation rate threshold \\(\\epsilon\\) such that
+      :return: (float) The marginal driver mutation rate threshold \\(\\epsilon\\) s.t.
                the lower bound of the one-sided normal CI is exactly 0.
     """
     z = norm.ppf(1 - alpha)
 
-    def f(eps):
+    def f(eps: float) -> float:
         return eps - z * sqrt(eps * (1 - eps) / num_samples)
 
     return brentq(f, 1e-6, 1.0)
 
 
 def get_top_ranked_pairs_by_method(
-    results_df,
-    method,
-    is_me,
-    num_pairs,
-    num_samples,
-):
-    """
-    Given a results_df containing all methods' results, a method name,
-    and whether we are looking at ME or CO, returns the top num_pairs
-    after applying the appropriate filters/sorting.
-    Returns None if not applicable (e.g. MEGSA + CO).
-    """
+    results_df: pd.DataFrame,
+    method: str,
+    is_me: bool,
+    num_pairs: int,
+    num_samples: int,
+) -> pd.DataFrame:
+    """TODO: Add docstring."""
     sort_col = get_sort_column(method, is_me)
     if sort_col is None:
         return None
 
     if method == "DIALECT":
-        # sort rho ascending for ME and descending for CO
-        # negative rho values indicate mutual exclusivity
         ascending = is_me
     elif method == "MEGSA":
-        # MEGSA uses LRT scores, which you sort descending
         ascending = False
     else:
-        # all other methods have p-values that you sort ascending
         ascending = True
 
     top_ranking_pairs = results_df.sort_values(
-        by=sort_col, ascending=ascending
+        by=sort_col,
+        ascending=ascending,
     )
     top_ranking_pairs = filter_by_method(
-        top_ranking_pairs, method, is_me, num_samples
+        top_ranking_pairs,
+        method,
+        is_me,
+        num_samples,
     )
     if top_ranking_pairs is None or top_ranking_pairs.empty:
         return None
     top_ranking_pairs = top_ranking_pairs.head(num_pairs)
-    top_ranking_pairs = top_ranking_pairs[["Gene A", "Gene B", sort_col]]
-    return top_ranking_pairs
+    return top_ranking_pairs[["Gene A", "Gene B", sort_col]]
 
 
 def generate_top_ranking_tables(
-    results_df,
-    is_me,
-    num_pairs,
-    num_samples,
-):
-    """
-    Generates a dictionary of top-ranked dataframes for each method w/ ME or CO
-    return: dict { method_name : DataFrame or None }
-    """
+    results_df: pd.DataFrame,
+    is_me: bool,
+    num_pairs: int,
+    num_samples: int,
+) -> dict:
+    """TODO: Add docstring."""
     methods = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-
     tables = {}
     for method in methods:
         top_df = get_top_ranked_pairs_by_method(

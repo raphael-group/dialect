@@ -1,7 +1,4 @@
-"""Compute, analyze, and visualize log-likelihood curves for genes.
-
-Estimate based on count matrix and BMR PMFs to pinpoint number of optima.
-"""
+"""TODO: Add docstring."""
 
 # ------------------------------------------------------------------------------------ #
 #                                        IMPORTS                                       #
@@ -21,26 +18,18 @@ from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def _is_single_optimum_(log_likelihoods: list) -> bool:
-    """Check if the log-likelihood function has a single optimum (convex/concave).
-
-    :param log_likelihoods: (list of float) Log-likelihood values.
-    :return: (bool) True if there is a single optimum, False otherwise.
-    """
-    first_diff = np.diff(log_likelihoods)  # first derivative
-    sign_changes = np.diff(np.sign(first_diff))  # sign changes in first derivative
+def is_single_optimum(log_likelihoods: list) -> bool:
+    """TODO: Add docstring."""
+    first_diff = np.diff(log_likelihoods)
+    sign_changes = np.diff(np.sign(first_diff))
     return np.count_nonzero(sign_changes != 0) <= 1
 
 
-def _explore_log_likelihoods_for_single_gene_estimation_(
+def explore_log_likelihoods_for_single_gene_estimation(
     cnt_df: pd.DataFrame,
     bmr_dict: dict,
 ) -> None:
-    logging.info("Exploring log-likelihood curves for single-gene estimation.")
-    logging.info(
-        "Evaluating which of %d genes have non-convex log likelihood curves...",
-        len(cnt_df.columns),
-    )
+    """TODO: Add docstring."""
     for gene_name in cnt_df.columns:
         gene = Gene(
             name=gene_name,
@@ -52,19 +41,16 @@ def _explore_log_likelihoods_for_single_gene_estimation_(
         )
         pi_values = np.linspace(0, 0.99, 100)
         log_likelihoods = [gene.compute_log_likelihood(pi) for pi in pi_values]
-        if not _is_single_optimum_(log_likelihoods):
+        if not is_single_optimum(log_likelihoods):
             pass
 
-    logging.info(
-        "Exploration of log-likelihood curves for single-gene estimation complete.",
-    )
 
-
-def _visualize_log_likelihood_plot_for_gene_(
+def visualize_log_likelihood_plot_for_gene(
     cnt_df: pd.DataFrame,
     bmr_dict: dict,
     gene_name: str,
 ) -> None:
+    """TODO: Add docstring."""
     if gene_name not in cnt_df.columns or gene_name not in bmr_dict:
         msg = f"Gene {gene_name} not found in count matrix or BMR PMFs."
         raise ValueError(msg)
@@ -87,7 +73,8 @@ def _visualize_log_likelihood_plot_for_gene_(
 # ------------------------------------------------------------------------------------ #
 #                                     MAIN FUNCTION                                    #
 # ------------------------------------------------------------------------------------ #
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     cnt_mtx_path = input("Enter the path to the count matrix file: ").strip()
     bmr_pmfs_path = input("Enter the path to the BMR PMFs file: ").strip()
 
@@ -101,7 +88,7 @@ if __name__ == "__main__":
         .lower()
     )
     if check_convexity in ["yes", "y"]:
-        _explore_log_likelihoods_for_single_gene_estimation_(cnt_df, bmr_dict)
+        explore_log_likelihoods_for_single_gene_estimation(cnt_df, bmr_dict)
 
     while True:
         gene_name = input("Enter the name of the gene to visualize: ").strip()
@@ -113,4 +100,8 @@ if __name__ == "__main__":
             pass
         else:
             with contextlib.suppress(Exception):
-                _visualize_log_likelihood_plot_for_gene_(cnt_df, bmr_dict, gene_name)
+                visualize_log_likelihood_plot_for_gene(cnt_df, bmr_dict, gene_name)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,4 @@
-"""Create network plots for top ranking pairs across methods."""
+"""TODO: Add docstring."""
 
 import logging
 import os
@@ -13,7 +13,8 @@ from dialect.utils.plotting import draw_network_gridplot_across_methods
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def _build_argument_parser_() -> ArgumentParser:
+def build_argument_parser() -> ArgumentParser:
+    """TODO: Add docstring."""
     parser = ArgumentParser(description="Decoy Gene Analysis")
     parser.add_argument(
         "-n",
@@ -67,8 +68,9 @@ def _build_argument_parser_() -> ArgumentParser:
 # ------------------------------------------------------------------------------------ #
 #                                     MAIN FUNCTION                                    #
 # ------------------------------------------------------------------------------------ #
-if __name__ == "__main__":
-    parser = _build_argument_parser_()
+def main() -> None:
+    """TODO: Add docstring."""
+    parser = build_argument_parser()
     args = parser.parse_args()
 
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
@@ -81,7 +83,6 @@ if __name__ == "__main__":
         cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
         decoy_genes_fn = Path(args.decoy_genes_dir) / f"{subtype}_decoy_genes.txt"
         if not results_fn.exists() or not decoy_genes_fn.exists():
-            logging.info("Skipping %s since input files not found", subtype)
             continue
         results_df = pd.read_csv(results_fn)
         decoy_genes = set(
@@ -98,3 +99,7 @@ if __name__ == "__main__":
             args.me,
             args.out,
         )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,4 @@
-"""Export core functions and utilities for the DIALECT package."""
+"""TODO: Add docstring."""
 
 from .argument_parser import build_argument_parser
 from .compare import run_comparison_methods

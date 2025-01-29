@@ -1,8 +1,4 @@
-"""Analyze distribution driver mutation rate pi vs. driver marginals tau_10 + tau_11.
-
-Estimate for a user-specified gene the pi vs. the marginals (tau_10 + tau_11) obtained
-from interactions between this gene and the top 1k other genes ranked by mutation count.
-"""
+"""TODO: Add docstring."""
 
 # ------------------------------------------------------------------------------------ #
 #                                        IMPORTS                                       #
@@ -20,13 +16,13 @@ from dialect.utils.helpers import initialize_gene_objects, load_cnt_mtx_and_bmr_
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
 def estimate_pi_for_single_gene(gene: Gene) -> float:
-    """Estimate driver mutation rate pi for a single gene using EM."""
+    """TODO: Add docstring."""
     gene.estimate_pi_with_em_from_scratch()
     return gene.pi
 
 
 def initialize_interactions_with_gene(main_gene: str, top_genes: list) -> list:
-    """Initialize pairwise interactions between the main gene and the top genes."""
+    """TODO: Add docstring."""
     return [
         Interaction(main_gene, gene)
         for gene in top_genes
@@ -35,17 +31,13 @@ def initialize_interactions_with_gene(main_gene: str, top_genes: list) -> list:
 
 
 def estimate_taus_for_interactions(interactions: list) -> None:
-    """Estimate tau values for each pairwise interaction with EM."""
+    """TODO: Add docstring."""
     for interaction in interactions:
         interaction.estimate_tau_with_em_from_scratch()
 
 
 def get_file_path(file_description: str) -> str:
-    """Prompt the user for a file path and ensure the file exists.
-
-    :param file_description: (str) Description of the file for the user prompt.
-    :return: (str) Validated file path.
-    """
+    """TODO: Add docstring."""
     while True:
         file_path = Path(input(f"Enter the path to the {file_description}: ").strip())
         if file_path.exists():
@@ -55,7 +47,8 @@ def get_file_path(file_description: str) -> str:
 # ------------------------------------------------------------------------------------ #
 #                                     MAIN FUNCTION                                    #
 # ------------------------------------------------------------------------------------ #
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     cnt_mtx_path = get_file_path("count matrix file")
     bmr_pmfs_path = get_file_path("BMR PMFs file")
     cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_path, bmr_pmfs_path)
@@ -119,3 +112,6 @@ if __name__ == "__main__":
         )
         plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
         plt.close()
+
+if __name__ == "__main__":
+    main()

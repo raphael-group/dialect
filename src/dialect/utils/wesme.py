@@ -1,24 +1,35 @@
-import os
+"""TODO: Add docstring."""
+
 import sys
+from pathlib import Path
 
-# TODO: find a cleaner way to import wesme code from external
-current_dir = os.path.dirname(__file__)
-project_root = os.path.abspath(os.path.join(current_dir, "../../../"))
-external_dir = os.path.join(project_root, "external")
-sys.path.append(external_dir)
+import pandas as pd
 
-from WeSME.WeSME import *
+current_dir = Path(__file__).parent
+project_root = (current_dir / "../../../").resolve()
+external_dir = project_root / "external"
+sys.path.append(str(external_dir))
+
+from WeSME.WeSME import (
+    compute_pairwise_pvalues,
+    compute_sample_weights,
+    convert_cnt_mtx_to_mut_list,
+    run_weighted_sampling,
+)
 
 
-def run_wesme_analysis(cnt_df, out, interactions):
-    print("Running WeSME analysis...")
-    cnt_df = cnt_df.T  # transpose the count matrix
-    wesme_dout = os.path.join(out, "WeSME_output")
-    os.makedirs(wesme_dout, exist_ok=True)
+def run_wesme_analysis(
+    cnt_df: pd.DataFrame,
+    out: str,
+    interactions: list,
+) -> pd.DataFrame:
+    """TODO: Add docstring."""
+    cnt_df = cnt_df.T
+    wesme_dout = Path(out) / "WeSME_output"
+    wesme_dout.mkdir(parents=True, exist_ok=True)
     mut_fn = convert_cnt_mtx_to_mut_list(cnt_df, wesme_dout)
     compute_sample_weights(mut_fn, wesme_dout)
-    freqs_fn = os.path.join(wesme_dout, "sample_mut_freqs.txt")
-    run_weighted_sampling(mut_fn, freqs_fn, 100, wesme_dout, False)
+    freqs_fn = wesme_dout / "sample_mut_freqs.txt"
+    run_weighted_sampling(mut_fn, freqs_fn, 100, wesme_dout)
     gene_pairs = [(ixn.gene_a.name, ixn.gene_b.name) for ixn in interactions]
-    wesme_results_df = compute_pairwise_pvalues(mut_fn, wesme_dout, gene_pairs)
-    return wesme_results_df
+    return compute_pairwise_pvalues(mut_fn, wesme_dout, gene_pairs)

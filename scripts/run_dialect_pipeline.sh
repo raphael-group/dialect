@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Argument parser for directories, top genes, and steps
 usage() {
     echo "Usage: $0 -d <data_directory> -o <output_directory> -k <number_of_top_genes> -s <steps>"
     echo "Steps: A comma-separated list of steps to run: generate,identify,compare,merge"
@@ -32,13 +31,11 @@ while getopts ":d:o:k:s:" opt; do
     esac
 done
 
-# Ensure required arguments are provided
 if [ -z "$DATA_DIR" ] || [ -z "$DOUT" ] || [ -z "$TOP_GENES" ] || [ -z "$STEPS" ]; then
     echo "Error: Data directory, output directory, number of top genes, and steps must be specified."
     usage
 fi
 
-# Validate directories
 if [ ! -d "$DATA_DIR" ]; then
     echo "Error: Data directory '$DATA_DIR' does not exist."
     exit 1
@@ -49,10 +46,8 @@ if [ ! -d "$DOUT" ]; then
     mkdir -p "$DOUT"
 fi
 
-# Parse steps into an array
 IFS=',' read -r -a STEPS_ARRAY <<< "$STEPS"
 
-# Process each MAF file
 MAF_FILES=(${DATA_DIR}/*.maf)
 for MAF_FILE in "${MAF_FILES[@]}"; do
     if [ -f "$MAF_FILE" ]; then

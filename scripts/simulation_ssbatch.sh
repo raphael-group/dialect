@@ -25,7 +25,6 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Starting matrix simulation pipeline..."
 
-# 1) Simulate
 dialect simulate create matrix \
   -c "$COUNT_MATRIX" \
   -b "$BMR_PMFS" \
@@ -37,26 +36,22 @@ dialect simulate create matrix \
   -n "$NUM_SAMPLES" \
   -ixn "$IXN_STRENGTH"
 
-# 2) Identify
 dialect identify \
   -c "$OUTPUT_DIR/count_matrix.csv" \
   -b "$BMR_PMFS" \
   -o "$OUTPUT_DIR" &
 
-# 3) Compare
 dialect compare \
   -c "$OUTPUT_DIR/count_matrix.csv" \
   -o "$OUTPUT_DIR" &
 
 wait
 
-# 4) Merge
 dialect merge \
   -d "$OUTPUT_DIR/pairwise_interaction_results.csv" \
   -a "$OUTPUT_DIR/comparison_interaction_results.csv" \
   -o "$OUTPUT_DIR"
 
-# 5) Evaluate (ME and CO) in parallel
 dialect simulate evaluate matrix \
   -r "$OUTPUT_DIR/complete_pairwise_ixn_results.csv" \
   -i "$OUTPUT_DIR/matrix_simulation_info.json" \

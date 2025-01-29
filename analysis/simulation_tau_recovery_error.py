@@ -1,9 +1,4 @@
-"""Analyze tau recovery error in simulated interactions over multiple iterations.
-
-Aim is to evaluate the model's accuracy in estimating tau parameters. User provides
-count matrix, BMR PMFs, gene names, and tau parameters to generate simulations
-and compute the recovery error and misestimation rates.
-"""
+"""TODO: Add docstring."""
 
 # ------------------------------------------------------------------------------------ #
 #                                        IMPORTS                                       #
@@ -20,34 +15,23 @@ from dialect.utils.simulate import simulate_interaction_pair
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def _calculate_tau_recovery_error_(
+def calculate_tau_recovery_error(
     true_taus: list,
     estimated_taus: list,
 ) -> float:
-    """Calculate and return the tau recovery error.
-
-    :param true_taus (tuple): True tau values used in simulation.
-    :param estimated_taus (tuple): Tau values estimated by the model.
-    :return (float): Mean absolute error between true and estimated tau values.
-    """
+    """TODO: Add docstring."""
     true_taus = np.array(true_taus)
     estimated_taus = np.array(estimated_taus)
     error = np.abs(true_taus - estimated_taus)
     return error.mean()
 
 
-def _count_false_positives_(
+def count_false_positives(
     true_taus: list,
     estimated_taus: list,
     threshold: float = 1e-6,
 ) -> int:
-    """Count the number of false positives where tau values are misestimated as non-zero.
-
-    :param true_taus (tuple): True tau values used in simulation.
-    :param estimated_taus (tuple): Tau values estimated by the model.
-    :param threshold (float): Threshold below which values are considered zero.
-    :return (int): Count of false positives.
-    """
+    """TODO: Add docstring."""
     true_zeros = np.array(true_taus) < threshold
     false_positives = np.logical_and(true_zeros, np.array(estimated_taus) >= threshold)
     return false_positives.sum()
@@ -56,9 +40,8 @@ def _count_false_positives_(
 # ------------------------------------------------------------------------------------ #
 #                                     MAIN FUNCTION                                    #
 # ------------------------------------------------------------------------------------ #
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
+def main() -> None:
+    """TODO: Add docstring."""
     cnt_mtx_path = input("Enter the path to the count matrix file: ").strip()
     bmr_pmfs_path = input("Enter the path to the BMR PMFs file: ").strip()
 
@@ -113,7 +96,6 @@ if __name__ == "__main__":
             try:
                 interaction.estimate_tau_with_em_from_scratch()
             except (ValueError, RuntimeError) as e:
-                logging.warning("Simulation %d failed: %s", i + 1, e)
                 continue
 
             estimated_taus = (
@@ -124,11 +106,11 @@ if __name__ == "__main__":
             )
 
             true_taus = (tau_00, tau_01, tau_10, tau_11)
-            total_recovery_error += _calculate_tau_recovery_error_(
+            total_recovery_error += calculate_tau_recovery_error(
                 true_taus,
                 estimated_taus,
             )
-            total_false_positives += _count_false_positives_(
+            total_false_positives += count_false_positives(
                 true_taus,
                 estimated_taus,
                 threshold,
@@ -138,3 +120,6 @@ if __name__ == "__main__":
         average_false_positive_rate = total_false_positives / (
             iterations * len(true_taus)
         )
+
+if __name__ == "__main__":
+    main()

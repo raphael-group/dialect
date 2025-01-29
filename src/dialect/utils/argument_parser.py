@@ -1,20 +1,25 @@
-from argparse import ArgumentParser, ArgumentTypeError
+"""TODO: Add docstring."""
 
-# TODO: unify shared arguments across subparsers (output, seed, etc.) and create argument groups
+from argparse import ArgumentParser, ArgumentTypeError, _SubParsersAction
 
 
-def add_generate_parser(subparsers):
-    """
-    Adds the generate subparser to the given subparsers.
-    """
+def add_generate_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     generate_parser = subparsers.add_parser(
-        "generate", help="Generate BMR and count matrix"
+        "generate",
+        help="Generate BMR and count matrix",
     )
     generate_parser.add_argument(
-        "-m", "--maf", required=True, help="Path to the input MAF file"
+        "-m",
+        "--maf",
+        required=True,
+        help="Path to the input MAF file",
     )
     generate_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output directory"
+        "-o",
+        "--out",
+        required=True,
+        help="Path to the output directory",
     )
     generate_parser.add_argument(
         "-r",
@@ -31,28 +36,36 @@ def add_generate_parser(subparsers):
     )
 
 
-def add_identify_parser(subparsers):
-    """
-    Adds the identify subparser to the given subparsers.
-    """
+def add_identify_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     identify_parser = subparsers.add_parser(
-        "identify", help="Run DIALECT to identify interactions"
+        "identify",
+        help="Run DIALECT to identify interactions",
     )
     identify_parser.add_argument(
-        "-c", "--cnt", required=True, help="Path to the input count matrix file"
+        "-c",
+        "--cnt",
+        required=True,
+        help="Path to the input count matrix file",
     )
     identify_parser.add_argument(
-        "-b", "--bmr", required=True, help="Path to the BMR file"
+        "-b",
+        "--bmr",
+        required=True,
+        help="Path to the BMR file",
     )
     identify_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output directory"
+        "-o",
+        "--out",
+        required=True,
+        help="Path to the output directory",
     )
     identify_parser.add_argument(
         "-k",
         "--top_k",
         default=100,
         type=int,
-        help="Number of genes to consider (default: 100 genes with highest mutation count)",
+        help="Number of genes to consider (default: 100 genes w/ highest count)",
     )
     identify_parser.add_argument(
         "-cb",
@@ -62,12 +75,11 @@ def add_identify_parser(subparsers):
     )
 
 
-def add_compare_parser(subparsers):
-    """
-    Adds the compare subparser to the given subparsers.
-    """
+def add_compare_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     compare_parser = subparsers.add_parser(
-        "compare", help="Run alternative methods"
+        "compare",
+        help="Run alternative methods",
     )
     compare_parser.add_argument(
         "-c",
@@ -76,14 +88,17 @@ def add_compare_parser(subparsers):
         help="Path to the input count matrix file",
     )
     compare_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output directory"
+        "-o",
+        "--out",
+        required=True,
+        help="Path to the output directory",
     )
     compare_parser.add_argument(
         "-k",
         "--top_k",
         default=100,
         type=int,
-        help="Number of genes to consider (default: 100 genes with highest mutation count)",
+        help="Number of genes to consider (default: 100 genes w/ highest count)",
     )
     compare_parser.add_argument(
         "-g",
@@ -93,12 +108,11 @@ def add_compare_parser(subparsers):
     )
 
 
-def add_merge_parser(subparsers):
-    """
-    Adds the merge subparser to the given subparsers.
-    """
+def add_merge_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     merge_parser = subparsers.add_parser(
-        "merge", help="Merge DIALECT and alternative method results"
+        "merge",
+        help="Merge DIALECT and alternative method results",
     )
     merge_parser.add_argument(
         "-d",
@@ -113,13 +127,18 @@ def add_merge_parser(subparsers):
         help="Path to the comparison interaction results",
     )
     merge_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output directory"
+        "-o",
+        "--out",
+        required=True,
+        help="Path to the output directory",
     )
 
 
-def add_simulate_create_single_gene_parser(subparsers):
+def add_simulate_create_single_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     single_gene_parser = subparsers.add_parser(
-        "single", help="Create single gene simulations"
+        "single",
+        help="Create single gene simulations",
     )
     single_gene_parser.add_argument(
         "-pi",
@@ -133,19 +152,27 @@ def add_simulate_create_single_gene_parser(subparsers):
         help="Pi value (must be between 0 and 1)",
     )
     single_gene_parser.add_argument(
-        "-n", "--num_samples", type=int, default=1000
+        "-n",
+        "--num_samples",
+        type=int,
+        default=1000,
     )
     single_gene_parser.add_argument(
-        "-ns", "--num_simulations", type=int, default=2500
+        "-ns",
+        "--num_simulations",
+        type=int,
+        default=2500,
     )
     single_gene_parser.add_argument("-l", "--length", type=int, default=10000)
     single_gene_parser.add_argument("-m", "--mu", type=float, default=1e-6)
     single_gene_parser.add_argument("-o", "--out", type=str, required=True)
     single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
-def add_simulate_create_pair_gene_parser(subparsers):
+def add_simulate_create_pair_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     pair_gene_parser = subparsers.add_parser(
-        "pair", help="Create pairwise gene simulations"
+        "pair",
+        help="Create pairwise gene simulations",
     )
     pair_gene_parser.add_argument("-t10", "--tau_10", required=True, type=float)
     pair_gene_parser.add_argument("-t01", "--tau_01", required=True, type=float)
@@ -160,24 +187,41 @@ def add_simulate_create_pair_gene_parser(subparsers):
     pair_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 
-def add_simulate_create_matrix_gene_parser(subparsers):
+def add_simulate_create_matrix_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     matrix_gene_parser = subparsers.add_parser(
-        "matrix", help="Create matrix gene simulations"
+        "matrix",
+        help="Create matrix gene simulations",
     )
     matrix_gene_parser.add_argument(
-        "-c", "--cnt_mtx", required=True, help="Path to the count matrix file"
+        "-c",
+        "--cnt_mtx",
+        required=True,
+        help="Path to the count matrix file",
     )
     matrix_gene_parser.add_argument(
-        "-b", "--bmr_pmfs", required=True, help="Path to the BMR PMFs file"
+        "-b",
+        "--bmr_pmfs",
+        required=True,
+        help="Path to the BMR PMFs file",
     )
     matrix_gene_parser.add_argument(
-        "-d", "--driver_genes", required=True, help="Path to the driver genes file"
+        "-d",
+        "--driver_genes",
+        required=True,
+        help="Path to the driver genes file",
     )
     matrix_gene_parser.add_argument(
-        "-o", "--out", required=True, help="Path to the output directory"
+        "-o",
+        "--out",
+        required=True,
+        help="Path to the output directory",
     )
     matrix_gene_parser.add_argument(
-        "-nlp", "--num_likely_passengers", type=int, default=100
+        "-nlp",
+        "--num_likely_passengers",
+        type=int,
+        default=100,
     )
     matrix_gene_parser.add_argument("-nme", "--num_me_pairs", type=int, default=10)
     matrix_gene_parser.add_argument("-nco", "--num_co_pairs", type=int, default=10)
@@ -186,12 +230,11 @@ def add_simulate_create_matrix_gene_parser(subparsers):
     matrix_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 
-def add_simulate_create_parser(subparsers):
-    """
-    Adds the simulate subparser to the given subparsers.
-    """
+def add_simulate_create_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     simulate_create_parser = subparsers.add_parser(
-        "create", help="Create simulation data"
+        "create",
+        help="Create simulation data",
     )
     simulate_create_subparsers = simulate_create_parser.add_subparsers(
         dest="type",
@@ -203,47 +246,73 @@ def add_simulate_create_parser(subparsers):
     add_simulate_create_matrix_gene_parser(simulate_create_subparsers)
 
 
-def add_simulate_evaluate_single_gene_parser(subparsers):
+def add_simulate_evaluate_single_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     single_gene_parser = subparsers.add_parser(
-        "single", help="Evaluate single gene simulations"
+        "single",
+        help="Evaluate single gene simulations",
     )
     single_gene_parser.add_argument(
-        "-p", "--params", required=True, help="Path to the parameters file"
+        "-p",
+        "--params",
+        required=True,
+        help="Path to the parameters file",
     )
     single_gene_parser.add_argument(
-        "-d", "--data", required=True, help="Path to the data file"
+        "-d",
+        "--data",
+        required=True,
+        help="Path to the data file",
     )
     single_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
-def add_simulate_evaluate_pair_gene_parser(subparsers):
+def add_simulate_evaluate_pair_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     pair_gene_parser = subparsers.add_parser(
-        "pair", help="Evaluate pair gene simulations"
+        "pair",
+        help="Evaluate pair gene simulations",
     )
     pair_gene_parser.add_argument(
-        "-p", "--params", required=True, help="Path to the parameters file"
+        "-p",
+        "--params",
+        required=True,
+        help="Path to the parameters file",
     )
     pair_gene_parser.add_argument(
-        "-d", "--data", required=True, help="Path to the data file"
+        "-d",
+        "--data",
+        required=True,
+        help="Path to the data file",
     )
     pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
-def add_simulate_evaluate_matrix_gene_parser(subparsers):
+def add_simulate_evaluate_matrix_gene_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     matrix_gene_parser = subparsers.add_parser(
-        "matrix", help="Evaluate pair gene simulations"
+        "matrix",
+        help="Evaluate pair gene simulations",
     )
     matrix_gene_parser.add_argument(
-        "-r", "--results", required=True, help="Path to the results file"
+        "-r",
+        "--results",
+        required=True,
+        help="Path to the results file",
     )
     matrix_gene_parser.add_argument(
-        "-i", "--info", required=True, help="Path to the simulation info file"
+        "-i",
+        "--info",
+        required=True,
+        help="Path to the simulation info file",
     )
     matrix_gene_parser.add_argument("-ixn", "--ixn_type", required=True)
     matrix_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
 
-def add_simulate_evaluate_parser(subparsers):
+def add_simulate_evaluate_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     simulate_evaluate_parser = subparsers.add_parser(
-        "evaluate", help="Evaluate simulation data"
+        "evaluate",
+        help="Evaluate simulation data",
     )
     simulate_evaluate_subparsers = simulate_evaluate_parser.add_subparsers(
         dest="type",
@@ -255,12 +324,11 @@ def add_simulate_evaluate_parser(subparsers):
     add_simulate_evaluate_matrix_gene_parser(simulate_evaluate_subparsers)
 
 
-def add_simulate_parser(subparsers):
-    """
-    Adds the simulate subparser to the given subparsers.
-    """
+def add_simulate_parser(subparsers: _SubParsersAction) -> None:
+    """TODO: Add docstring."""
     simulate_parser = subparsers.add_parser(
-        "simulate", help="Run simulations for evaluation and benchmarking"
+        "simulate",
+        help="Run simulations for evaluation and benchmarking",
     )
     simulate_subparsers = simulate_parser.add_subparsers(
         dest="mode",
@@ -272,10 +340,8 @@ def add_simulate_parser(subparsers):
     add_simulate_evaluate_parser(simulate_subparsers)
 
 
-def build_argument_parser():
-    """
-    Creates and returns the argument parser for the command line interface.
-    """
+def build_argument_parser() -> ArgumentParser:
+    """TODO: Add docstring."""
     parser = ArgumentParser(description="DIALECT")
     parser.add_argument(
         "-v",

@@ -1,14 +1,6 @@
-"""Represent an interaction between two genes for mutation analysis.
-
-The `Interaction` class models the interaction between two genes and provides
-methods to compute statistical metrics (e.g., Fisher's p-values, likelihoods,
-odds ratios), validate data, and estimate interaction parameters (e.g., tau values)
-using numerical optimization and Expectation-Maximization (EM) algorithms.
-"""
+"""TODO: Add docstring."""
 
 from __future__ import annotations
-
-import logging
 
 import numpy as np
 from scipy.optimize import minimize
@@ -19,34 +11,29 @@ from dialect.models.gene import Gene
 
 
 class Interaction:
-    """Represent an interaction and provide tools for mutation analysis."""
+    """TODO: Add docstring."""
 
     def __init__(self, gene_a: Gene, gene_b: Gene) -> None:
-        """Initialize an Interaction object to represent the interaction pair of genes.
-
-        :param gene_a (Gene): The first gene in the interaction.
-        :param gene_b (Gene): The second gene in the interaction.
-        """
+        """TODO: Add docstring."""
         if not isinstance(gene_a, Gene) or not isinstance(gene_b, Gene):
             msg = "Both inputs must be instances of the Gene class."
             raise TypeError(msg)
 
         self.gene_a = gene_a
         self.gene_b = gene_b
-        self.name = f"{gene_a.name}:{gene_b.name}"  # Interaction name
-        self.tau_00 = None  # P(D = 0, D' = 0) for genes A and B
-        self.tau_01 = None  # P(D = 0, D' = 1) for genes A and B
-        self.tau_10 = None  # P(D = 1, D' = 0) for genes A and B
-        self.tau_11 = None  # P(D = 1, D' = 1) for genes A and B
+        self.name = f"{gene_a.name}:{gene_b.name}"
+        self.tau_00 = None
+        self.tau_01 = None
+        self.tau_10 = None
+        self.tau_11 = None
 
-        # Metrics from alternative methods
         self.discover_me_qval = None
         self.discover_co_qval = None
         self.fishers_me_qval = None
         self.fishers_co_qval = None
 
     def __str__(self) -> str:
-        """Return a string representation of the Interaction object."""
+        """TODO: Add docstring."""
         taus_info = (
             f"tau_00={self.tau_00:.3e}, tau_01={self.tau_01:.3e}, "
             f"tau_10={self.tau_10:.3e}, tau_11={self.tau_11:.3e}"
@@ -74,24 +61,17 @@ class Interaction:
             f"Contingency Table:{cm_info}"
         )
 
-    # ---------------------------------------------------------------------------- #
-    #                                UTILITY METHODS                               #
-    # ---------------------------------------------------------------------------- #
-
+    # -------------------------------------------------------------------------------- #
+    #                                  UTILITY METHODS                                 #
+    # -------------------------------------------------------------------------------- #
     def compute_contingency_table(self) -> np.ndarray:
-        """Compute the contingency table (confusion matrix) for binarized counts.
-
-        :return: A 2x2 numpy array representing the contingency table.
-        """
+        """TODO: Add docstring."""
         gene_a_mutations = (self.gene_a.counts > 0).astype(int)
         gene_b_mutations = (self.gene_b.counts > 0).astype(int)
         return confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[1, 0])
 
     def get_set_of_cooccurring_samples(self) -> list:
-        """Get the list of samples in which both genes have at least one mutation.
-
-        :return: (list) List of sample indices where both genes have >= 1 mutation.
-        """
+        """TODO: Add docstring."""
         sample_names = self.gene_a.samples
         cooccurring_samples = [
             sample_names[i]
@@ -101,41 +81,18 @@ class Interaction:
         return sorted(cooccurring_samples)
 
     def compute_fisher_pvalues(self) -> tuple(float, float):
-        """Compute Fisher's exact test p-values for ME and CO.
-
-        The contingency table is derived using the `compute_contingency_table` method.
-        - Mutual Exclusivity: Tests whether the two genes are ME (alternative="less").
-        - Co-Occurrence: Tests whether the two genes co-occur (alternative="greater").
-
-        :return: (tuple) A tuple containing (me_pval, co_pval):
-            - me_pval: Fisher's p-value for mutual exclusivity.
-            - co_pval: Fisher's p-value for co-occurrence.
-        """
-        logging.info(
-            "Computing Fisher's exact test p-values for interaction %s.",
-            self.name,
-        )
+        """TODO: Add docstring."""
         cross_tab = self.compute_contingency_table()
         _, me_pval = fisher_exact(cross_tab, alternative="less")
         _, co_pval = fisher_exact(cross_tab, alternative="greater")
-        logging.info(
-            "Computed Fisher's p-values of ME: %.3e and CO: %.3e for interaction %s.",
-            me_pval,
-            co_pval,
-            self.name,
-        )
 
         return me_pval, co_pval
 
-    # ---------------------------------------------------------------------------- #
-    #                           DATA VALIDATION & LOGGING                          #
-    # ---------------------------------------------------------------------------- #
-
+    # -------------------------------------------------------------------------------- #
+    #                            DATA VALIDATION AND LOGGING                           #
+    # -------------------------------------------------------------------------------- #
     def verify_bmr_pmf_and_counts_exist(self) -> None:
-        """Verify that BMR PMFs and counts exist for both genes in the interaction pair.
-
-        :raises ValueError: If BMR PMFs or counts are not defined.
-        """
+        """TODO: Add docstring."""
         if self.gene_a.bmr_pmf is None or self.gene_b.bmr_pmf is None:
             msg = "BMR PMFs are not defined for one or both genes."
             raise ValueError(msg)
@@ -145,60 +102,38 @@ class Interaction:
             raise ValueError(msg)
 
     def verify_taus_are_valid(self, taus: list, tol: float = 1e-2) -> None:
-        """Verify that tau parameters are valid (0 <= tau_i <= 1 and sum(tau) == 1).
-
-        :param taus: (list of float) Tau parameters to validate.
-        :param tol: (float) Tolerance for the sum of tau parameters (default: 1e-1).
-        :raises ValueError: If any or all tau parameters are invalid.
-        """
+        """TODO: Add docstring."""
         if not all(0 <= t <= 1 for t in taus) or not np.isclose(
             sum(taus),
             1,
             atol=tol,
         ):
-            logging.info("Invalid tau parameters: %s", taus)
             msg = "Invalid tau parameters. Ensure 0 <= tau_i <= 1 and sum(tau) == 1."
             raise ValueError(
                 msg,
             )
         tau_11 = taus[-1]
         if tau_11 == 1:
-            logging.warning(
-                "Tau_11 is 1 for interaction %s. This is an edge case.",
-                self.name,
-            )
             msg = "Tau_11 cannot be 1. This leads to log(0) in log-likelihood."
             raise ValueError(
                 msg,
             )
 
     def verify_pi_values(self, pi_a: float, pi_b: float) -> None:
-        """Verify that driver probabilities are defined for both genes.
-
-        :param pi_a: (float or None) Driver probability for gene A.
-        :param pi_b: (float or None) Driver probability for gene B.
-        :return: None if either pi value is not defined.
-        :raises ValueError: If both pi values are missing.
-        """
+        """TODO: Add docstring."""
         if pi_a is None or pi_b is None:
-            logging.warning(
-                "Driver probabilities are not defined for genes in interaction %s.",
-                self.name,
-            )
             msg = "Driver probabilities are not defined for both genes."
             raise ValueError(
                 msg,
             )
 
-    # ---------------------------------------------------------------------------- #
-    #                        Likelihood & Metric Evaluation                        #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                         LIKELIHOOD AND METRIC EVALUATION                         #
+    # -------------------------------------------------------------------------------- #
     def compute_joint_probability(self, tau: float, u: int, v: int) -> np.ndarray:
-        """Compute joint probability for tau_uv given counts."""
-
+        """TODO: Add docstring."""
         # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            # if c is greater than the max count in pmf
             if c > max(pmf.keys()):
                 return min_val
             return pmf.get(c, 0)
@@ -219,8 +154,7 @@ class Interaction:
         tau_10: float,
         tau_11: float,
     ) -> np.ndarray:
-        """Compute the total probability for the joint distribution of counts."""
-
+        """TODO: Add docstring."""
         # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
@@ -335,22 +269,15 @@ class Interaction:
         **Returns**:
         :return: (float) The computed l.r.t. statistic (\\( \\lambda_{LR} \\)).
         """
-        logging.info(
-            "Computing likelihood ratio for interaction %s.",
-            self.name,
-        )
-
         tau_00, tau_01, tau_10, tau_11 = taus
         driver_a_marginal = tau_10 + tau_11
         driver_b_marginal = tau_01 + tau_11
 
         tau_null = (
-            (1 - driver_a_marginal) * (1 - driver_b_marginal),  #  both genes passengers
-            (1 - driver_a_marginal)
-            * driver_b_marginal,  # gene a passenger, gene b driver
-            driver_a_marginal
-            * (1 - driver_b_marginal),  # gene a driver, gene b passenger
-            driver_a_marginal * driver_b_marginal,  # both genes drivers
+            (1 - driver_a_marginal) * (1 - driver_b_marginal),
+            (1 - driver_a_marginal) * driver_b_marginal,
+            driver_a_marginal * (1 - driver_b_marginal),
+            driver_a_marginal * driver_b_marginal,
         )
         return -2 * (
             self.compute_log_likelihood(tau_null)
@@ -374,35 +301,13 @@ class Interaction:
         **Raises**:
         :raises ValueError: If \\( \\tau \\) parameters are invalid.
         """
-        logging.info(
-            "Computing log odds ratio for interaction %s.",
-            self.name,
-        )
-
         self.verify_taus_are_valid(taus)
         tau_00, tau_01, tau_10, tau_11 = taus
 
         if tau_01 * tau_10 == 0 or tau_00 * tau_11 == 0:
-            logging.warning(
-                "Zero encountered in odds ratio computation for interaction %s. "
-                "tau_01=%.3e, tau_10=%.3e, tau_00=%.3e, tau_11=%.3e. "
-                "Returning None for log odds ratio.",
-                self.name,
-                tau_01,
-                tau_10,
-                tau_00,
-                tau_11,
-            )
-            return None  # Return None when numerator or denominator is zero
+            return None
 
-        log_odds_ratio = np.log((tau_01 * tau_10) / (tau_00 * tau_11))
-        logging.info(
-            "Computed log odds ratio for interaction %s: %.3e",
-            self.name,
-            log_odds_ratio,
-        )
-
-        return log_odds_ratio
+        return np.log((tau_01 * tau_10) / (tau_00 * tau_11))
 
     def compute_wald_statistic(self, taus: list) -> float:
         r"""Compute the Wald statistic for the interaction.
@@ -427,15 +332,9 @@ class Interaction:
         **Returns**:
         :return: (float or None) The computed Wald statistic, or None.
         """
-        logging.info("Computing Wald statistic for interaction %s.", self.name)
-
         self.verify_taus_are_valid(taus)
         log_odds_ratio = self.compute_log_odds_ratio(taus)
         if log_odds_ratio is None:
-            logging.warning(
-                "Log odds ratio is None for interaction %s.",
-                self.name,
-            )
             return None
 
         try:
@@ -446,19 +345,9 @@ class Interaction:
                 + (1 / self.tau_11),
             )
         except ZeroDivisionError:
-            logging.exception(
-                "Division by zero encountered when computing S.E. for %s.",
-                self.name,
-            )
             return None
 
-        wald_statistic = log_odds_ratio / std_err
-        logging.info(
-            "Computed Wald statistic for interaction %s: %.3e",
-            self.name,
-            wald_statistic,
-        )
-        return wald_statistic
+        return log_odds_ratio / std_err
 
     def compute_rho(self, taus: list) -> float:
         r"""Compute the interaction measure \\( \rho \\) for the given \\( \tau \\).
@@ -484,11 +373,6 @@ class Interaction:
         **Returns**:
         :return: (float or None) The computed value of \\( \\rho \\), or None.
         """
-        logging.info(
-            "Computing rho for interaction %s.",
-            self.name,
-        )
-
         self.verify_taus_are_valid(taus)
 
         tau_0x = self.tau_00 + self.tau_01
@@ -497,43 +381,22 @@ class Interaction:
         tau_x1 = self.tau_01 + self.tau_11
 
         if any(t == 0 for t in [tau_0x, tau_1x, tau_x0, tau_x1]):
-            logging.warning(
-                "Division by zero encountered in rho computation for interaction %s. "
-                "Marginals: tau_0*=%s, tau_1*=%s, tau_*0=%s, tau_*1=%s.",
-                self.name,
-                tau_0x,
-                tau_1x,
-                tau_x0,
-                tau_x1,
-            )
             return None
 
-        rho = (self.tau_11 * self.tau_00 - self.tau_01 * self.tau_10) / (
+        return (self.tau_11 * self.tau_00 - self.tau_01 * self.tau_10) / (
             np.sqrt(tau_0x * tau_1x * tau_x0 * tau_x1)
         )
-        logging.info(
-            "Computed rho for interaction %s: %.3e",
-            self.name,
-            rho,
-        )
-        return rho
 
-    # ---------------------------------------------------------------------------- #
-    #                         Parameter Estimation Methods                         #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                           PARAMETER ESTIMATION METHODS                           #
+    # -------------------------------------------------------------------------------- #
     def estimate_tau_with_optimization_using_scipy(
         self,
         tau_init: list | None = None,
         alpha: float = 1e-13,
     ) -> None:
-        # ? tau parameters fail verification due to optimization scheme due to bounds
+        """TODO: Add docstring."""
         # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-78
-        """Estimate the tau parameters using the SLSQP optimization scheme.
-
-        :param tau_init (list): Initializations for tau parameters.
-        :param alpha (float): Small value to avoid edge cases at 0 or 1.
-        :return (tuple): The optimized values of (tau_00, tau_01, tau_10, tau_11).
-        """
         if tau_init is None:
             tau_init = [0.25, 0.25, 0.25, 0.25]
 
@@ -615,21 +478,17 @@ class Interaction:
         """
         if tau_init is None:
             tau_init = [0.25, 0.25, 0.25, 0.25]
-        logging.info(
-            "Estimating tau parameters using EM algorithm from scratch.",
-        )
 
         self.verify_bmr_pmf_and_counts_exist()
 
         tau_00, tau_01, tau_10, tau_11 = tau_init
         for _ in range(max_iter):
-            # E-Step: Compute responsibilities
             total_probabilities = self.compute_total_probability(
                 tau_00,
                 tau_01,
                 tau_10,
                 tau_11,
-            )  # denominator in E-Step equation
+            )
             z_i_00 = (
                 self.compute_joint_probability(tau_00, 0, 0)
                 / total_probabilities
@@ -648,18 +507,15 @@ class Interaction:
             )
 
             # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-79
-            # remove nans to avoid underflow issues in bmr estimates
             z_i_00_no_nan = np.nan_to_num(z_i_00, nan=2e-100)
             z_i_01_no_nan = np.nan_to_num(z_i_01, nan=2e-100)
             z_i_10_no_nan = np.nan_to_num(z_i_10, nan=2e-100)
             z_i_11_no_nan = np.nan_to_num(z_i_11, nan=2e-100)
-            # M-Step: Update tau parameters
             curr_tau_00 = np.mean(z_i_00_no_nan)
             curr_tau_01 = np.mean(z_i_01_no_nan)
             curr_tau_10 = np.mean(z_i_10_no_nan)
             curr_tau_11 = np.mean(z_i_11_no_nan)
 
-            # Check for convergence
             prev_log_likelihood = self.compute_log_likelihood(
                 (tau_00, tau_01, tau_10, tau_11),
             )
@@ -685,7 +541,6 @@ class Interaction:
 
     # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-76)
     def estimate_tau_with_em_using_pomegranate(self) -> None:
-        """Estimate the tau parameters using the pomegranate library."""
-        logging.info("Estimating tau parameters using pomegranate.")
+        """TODO: Add docstring."""
         msg = "Method is not yet implemented."
         raise NotImplementedError(msg)

@@ -1,52 +1,66 @@
-import os
-import numpy as np
-import pandas as pd
-import networkx as nx
-import seaborn as sns
-import matplotlib.pyplot as plt
+"""TODO: Add docstring."""
+
+from __future__ import annotations
 
 from itertools import product
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from matplotlib import rcParams
 from matplotlib.lines import Line2D
-from upsetplot import from_contents, UpSet
-from matplotlib.patches import FancyBboxPatch, BoxStyle, Patch
-
-from dialect.utils.postprocessing import generate_top_ranking_tables
-from sklearn.metrics import precision_recall_curve, average_precision_score
+from matplotlib.patches import BoxStyle, FancyBboxPatch, Patch
 from plotnine import (
-    ggplot,
     aes,
+    element_text,
     geom_boxplot,
     geom_point,
+    ggplot,
+    guide_legend,
+    guides,
+    labs,
+    position_jitter,
+    scale_color_manual,
+    scale_shape_manual,
     theme,
     theme_tufte,
-    element_text,
-    labs,
-    scale_shape_manual,
-    scale_color_manual,
-    guides,
-    guide_legend,
-    position_jitter,
     ylim,
 )
+from sklearn.metrics import average_precision_score, precision_recall_curve
+from upsetplot import UpSet, from_contents
 
-# ---------------------------------------------------------------------------- #
-#                          SET DEFAULT PLOTTING STYLE                          #
-# ---------------------------------------------------------------------------- #
-rcParams["text.usetex"] = True  # Optional for LaTeX-like rendering
+from dialect.utils.postprocessing import generate_top_ranking_tables
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
+# ------------------------------------------------------------------------------------ #
+#                              SET DEFAULT PLOTTING STYLE                              #
+# ------------------------------------------------------------------------------------ #
+rcParams["text.usetex"] = True
 rcParams["font.family"] = "sans-serif"
 rcParams["font.serif"] = ["Computer Modern"]
 rcParams["font.sans-serif"] = ["Computer Modern"]
 
 
-DEFAULT_GENE_COLOR = "#D3D3D3"  # Lighter light gray for generic genes
-DECOY_GENE_COLOR = "#FFB3B3"  # Pastel red for decoy genes
-DRIVER_GENE_COLOR = "#A3C1DA"  # Blue-gray for driver genes
+DEFAULT_GENE_COLOR = "#D3D3D3"
+DECOY_GENE_COLOR = "#FFB3B3"
+DRIVER_GENE_COLOR = "#A3C1DA"
 EDGE_COLOR = "black"
-EPSILON_MUTATION_COUNT = 10  # minimum count of mutations
+EPSILON_MUTATION_COUNT = 10
 PVALUE_THRESHOLD = 1
 
-def set_dynamic_font_sizes(figsize, base_label_size=24, base_tick_size=20):
+
+def set_dynamic_font_sizes(
+    figsize: tuple,
+    base_label_size: int = 24,
+    base_tick_size: int = 20,
+) -> None:
+    """TODO: Add docstring."""
     scale_factor = (figsize[0] * figsize[1]) / (10 * 8)
     label_size = base_label_size * scale_factor
     tick_size = base_tick_size * scale_factor
@@ -74,10 +88,8 @@ XLIM_MAPPING = {
 }
 
 
-def apply_tufte_style(ax):
-    """
-    Hides top/right spines, moves left/bottom outward, larger tick labels.
-    """
+def apply_tufte_style(ax: Axes) -> None:
+    """TODO: Add docstring."""
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_position(("outward", 6))
@@ -85,20 +97,27 @@ def apply_tufte_style(ax):
     ax.tick_params(axis="both", which="major", labelsize=20)
 
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
-    nx.draw_networkx_edges(G, pos, ax=ax, edge_color=EDGE_COLOR, width=2)
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def draw_network_plot(
+    ax: Axes,
+    graph: nx.Graph,
+    pos: dict,
+    labels: dict | None = None,
+    node_colors: list | None = None,
+) -> None:
+    """TODO: Add docstring."""
+    nx.draw_networkx_edges(graph, pos, ax=ax, edge_color=EDGE_COLOR, width=2)
 
     if node_colors is None:
-        node_colors = [DEFAULT_GENE_COLOR] * len(G.nodes)
+        node_colors = [DEFAULT_GENE_COLOR] * len(graph.nodes)
 
-    for node, (x, y), color in zip(G.nodes, pos.values(), node_colors):
+    for node, (x, y), color in zip(graph.nodes, pos.values(), node_colors):
         label = labels[node] if labels else str(node)
         bbox = FancyBboxPatch(
             (x - 0.08, y),
-            0.16,  # width
+            0.16,
             0,
             boxstyle=BoxStyle.Round(pad=0.08),
             edgecolor=EDGE_COLOR,
@@ -113,17 +132,19 @@ def draw_network_plot(ax, G, pos, labels=None, node_colors=None):
             horizontalalignment="center",
             verticalalignment="center",
             fontsize=9,
-            bbox=dict(facecolor="none", edgecolor="none"),
+            bbox={"facecolor": "none", "edgecolor": "none"},
         )
     ax.set_aspect("equal")
     ax.axis("off")
 
 
-def plot_subtype_histogram(ax, subtype, data_series, avg_across_others):
-    """
-    Plots a histogram of mutation counts (x-axis) for 'subtype' on log-scale Y.
-    Draws a red dashed vertical line at 'avg_across_others', if within x-lim.
-    """
+def plot_subtype_histogram(
+    ax: Axes,
+    subtype: str,
+    data_series: pd.Series,
+    avg_across_others: float,
+) -> None:
+    """TODO: Add docstring."""
     color = COLOR_MAPPING[subtype]
     xlim = XLIM_MAPPING[subtype]
 
@@ -131,7 +152,6 @@ def plot_subtype_histogram(ax, subtype, data_series, avg_across_others):
         data_series,
         bins=20,
         range=(0, xlim),
-        # ylim
         color=color,
         alpha=0.8,
         edgecolor="black",
@@ -154,21 +174,21 @@ def plot_subtype_histogram(ax, subtype, data_series, avg_across_others):
     ax.set_title(subtype, fontsize=28, pad=5)
 
 
-# ---------------------------------------------------------------------------- #
-#                                MAIN FUNCTIONS                                #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                    MAIN FUNCTIONS                                    #
+# ------------------------------------------------------------------------------------ #
 def plot_decoy_gene_fractions(
-    data_filepath,
-    num_pairs,
-    is_me,
-    out_dir,
-):
+    data_filepath: str,
+    num_pairs: int,
+    is_me: bool,
+    out_dir: str,
+) -> None:
+    """TODO: Add docstring."""
+    data_df = pd.read_csv(data_filepath)
+    if not is_me:
+        data_df = data_df[data_df["Method"] != "MEGSA"]
 
-    df = pd.read_csv(data_filepath)
-    if not is_me:  # remove MEGSA from plot for CO analysis
-        df = df[df["Method"] != "MEGSA"]
-
-    subtypes = df["Subtype"].unique()
+    subtypes = data_df["Subtype"].unique()
     colors = [
         "green",
         "blue",
@@ -179,7 +199,7 @@ def plot_decoy_gene_fractions(
         "black",
         "brown",
     ]
-    shapes = ["o", "s", "^", "D"]  # Circle, square, triangle, diamond
+    shapes = ["o", "s", "^", "D"]
 
     color_shape_combinations = list(product(colors, shapes))
     color_shape_mapping = {
@@ -195,7 +215,7 @@ def plot_decoy_gene_fractions(
 
     plot = (
         ggplot(
-            df,
+            data_df,
             aes(x="Method", y="Fraction", color="Subtype", shape="Subtype"),
         )
         + geom_boxplot(
@@ -210,10 +230,10 @@ def plot_decoy_gene_fractions(
             alpha=0.75,
             show_legend=True,
         )
-        + scale_color_manual(values=color_mapping)  # Custom color mapping
-        + scale_shape_manual(values=shape_mapping)  # Custom shape mapping
+        + scale_color_manual(values=color_mapping)
+        + scale_shape_manual(values=shape_mapping)
         + labs(
-            title=f"Proportion of Top-Ranked {ixn_type} Pairs with Decoy Genes by Method",
+            title=f"Proportion of Top-Ranked {ixn_type} Pairs w/ Likely Passengers",
             x="Method",
             y=f"Proportion of Top {num_pairs} {ixn_type} Pairs with Decoy Genes",
             color="Subtype",
@@ -237,26 +257,25 @@ def plot_decoy_gene_fractions(
         + ylim(0, 1)
     )
 
-    # Step 4: Save Plot
-    os.makedirs(out_dir, exist_ok=True)
+    dout = Path(out_dir)
+    dout.mkdir(parents=True, exist_ok=True)
     plot.save(
-        f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg", dpi=300
-    )
-    print(
-        f"Plot saved to {out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg"
+        f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg",
+        dpi=300,
     )
 
 
 def draw_network_gridplot_across_methods(
-    num_edges,
-    subtype,
-    driver_genes,
-    decoy_genes,
-    results_df,
-    num_samples,
-    is_me,
-    dout,
-):
+    num_edges: int,
+    subtype: str,
+    driver_genes: set,
+    decoy_genes: set,
+    results_df: pd.DataFrame,
+    num_samples: int,
+    is_me: bool,
+    dout: str,
+) -> None:
+    """TODO: Add docstring."""
     fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     suptitle = (
         f"Top 10 Ranked ME Pairs in {subtype}"
@@ -276,12 +295,12 @@ def draw_network_gridplot_across_methods(
         edges = (
             []
             if top_ranking_pairs is None
-            else top_ranking_pairs[["Gene A", "Gene B"]].values
+            else top_ranking_pairs[["Gene A", "Gene B"]].to_numpy()
         )
-        G = nx.Graph()
-        G.add_edges_from(edges)
+        graph = nx.Graph()
+        graph.add_edges_from(edges)
 
-        if G.number_of_edges() == 0:
+        if graph.number_of_edges() == 0:
             ax.text(
                 0.5,
                 0.5,
@@ -296,7 +315,7 @@ def draw_network_gridplot_across_methods(
             continue
 
         node_colors = []
-        for node in G.nodes:
+        for node in graph.nodes:
             if node in decoy_genes:
                 node_colors.append(DECOY_GENE_COLOR)
             elif node in driver_genes:
@@ -304,13 +323,14 @@ def draw_network_gridplot_across_methods(
             else:
                 node_colors.append(DEFAULT_GENE_COLOR)
 
-        if G.number_of_nodes() == 2:
-            pos = nx.spring_layout(G, seed=42)
+        min_edges = 2
+        if graph.number_of_nodes() == min_edges:
+            pos = nx.spring_layout(graph, seed=42)
         else:
-            pos = nx.circular_layout(G)
+            pos = nx.circular_layout(graph)
 
-        labels = {node: node for node in G.nodes}
-        draw_network_plot(ax, G, pos, labels, node_colors)
+        labels = {node: node for node in graph.nodes}
+        draw_network_plot(ax, graph, pos, labels, node_colors)
 
     plt.subplots_adjust(hspace=6, wspace=2)
     legend_ax = axes[1, 2]
@@ -367,15 +387,16 @@ def draw_network_gridplot_across_methods(
 
 
 def plot_sample_mutation_count_subtype_histograms(
-    subtype_sample_mut_counts,
-    avg_mut_cnt,
-    fout,
-):
+    subtype_sample_mut_counts: dict,
+    avg_mut_cnt: float,
+    fout: str,
+) -> None:
+    """TODO: Add docstring."""
     fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 20))
     axes = axes.flatten()
 
     for i, (subtype, data_series) in enumerate(
-        subtype_sample_mut_counts.items()
+        subtype_sample_mut_counts.items(),
     ):
         ax = axes[i]
         plot_subtype_histogram(ax, subtype, data_series, avg_mut_cnt)
@@ -402,10 +423,12 @@ def plot_sample_mutation_count_subtype_histograms(
 
     legend_handles = [
         Patch(
-            facecolor="lightcoral", edgecolor="black", label="Mut Cnt: 0–30k"
+            facecolor="lightcoral",
+            edgecolor="black",
+            label="Mut Cnt: 0-30k",
         ),
-        Patch(facecolor="moccasin", edgecolor="black", label="Mut Cnt: 0–10k"),
-        Patch(facecolor="khaki", edgecolor="black", label="Mut Cnt: 0–2k"),
+        Patch(facecolor="moccasin", edgecolor="black", label="Mut Cnt: 0-0k"),
+        Patch(facecolor="khaki", edgecolor="black", label="Mut Cnt: 0-2k"),
         Line2D(
             [0],
             [0],
@@ -424,7 +447,8 @@ def plot_sample_mutation_count_subtype_histograms(
         frameon=False,
     )
 
-    os.makedirs(os.path.dirname(fout), exist_ok=True)
+    dout = Path(fout).parent
+    dout.mkdir(parents=True, exist_ok=True)
     fig.savefig(
         fout,
         format="svg",
@@ -432,36 +456,38 @@ def plot_sample_mutation_count_subtype_histograms(
         transparent=True,
     )
     plt.close(fig)
-    print(f"3×2 histogram figure saved as SVG to: {fout}")
 
 
-def plot_cbase_driver_decoy_gene_fractions(subtype_decoy_gene_fractions, fout):
-    df = pd.DataFrame(
+def plot_cbase_driver_decoy_gene_fractions(
+    subtype_decoy_gene_fractions: dict,
+    fout: str,
+) -> None:
+    """TODO: Add docstring."""
+    data_df = pd.DataFrame(
         list(subtype_decoy_gene_fractions.items()),
         columns=["Subtype", "Decoy Fraction"],
     )
 
-    df["Decoy Fraction"] = df["Decoy Fraction"].replace(0, 0.001)
-    df.sort_values("Decoy Fraction", ascending=False, inplace=True)
+    data_df["Decoy Fraction"] = data_df["Decoy Fraction"].replace(0, 0.001)
+    data_df = data_df.sort_values("Decoy Fraction", ascending=False)
 
     sns.set_context("talk", rc={"axes.linewidth": 0.8, "grid.linewidth": 0.5})
 
     plt.figure(figsize=(6, 10))
     ax = sns.barplot(
-        data=df,
+        data=data_df,
         y="Subtype",
         x="Decoy Fraction",
         palette="Greys_r",
         edgecolor="black",
         hue="Subtype",
         legend=False,
-        # edges="black",
     )
     apply_tufte_style(ax)
     ax.set_xlim(0, 1)
     ax.set_yticks([])
     ax.set_ylabel("")
-    for container, label in zip(ax.containers, df["Subtype"]):
+    for container, label in zip(ax.containers, data_df["Subtype"]):
         ax.bar_label(
             container,
             labels=[label] * len(container),
@@ -482,13 +508,16 @@ def plot_cbase_driver_decoy_gene_fractions(subtype_decoy_gene_fractions, fout):
 
 
 def plot_cbase_top_decoy_genes_upset(
-    subtype_to_high_ranked_decoys,
-    high_ranked_decoy_freqs,
-    top_n,
-    fout,
-):
+    subtype_to_high_ranked_decoys: dict,
+    high_ranked_decoy_freqs: dict,
+    top_n: int,
+    fout: str,
+) -> None:
+    """TODO: Add docstring."""
     top_genes = sorted(
-        high_ranked_decoy_freqs, key=high_ranked_decoy_freqs.get, reverse=True
+        high_ranked_decoy_freqs,
+        key=high_ranked_decoy_freqs.get,
+        reverse=True,
     )[:top_n]
     contents = {}
     for gene in top_genes:
@@ -499,9 +528,9 @@ def plot_cbase_top_decoy_genes_upset(
         ]
         contents[gene] = set(subtypes_with_gene)
 
-    df = from_contents(contents)
+    data_df = from_contents(contents)
 
-    upset = UpSet(df, totals_plot_elements=0, element_size=40)
+    upset = UpSet(data_df, totals_plot_elements=0, element_size=40)
     plt.figure(figsize=(16, 8))
     subplots = upset.plot()
     subplots["intersections"].set_ylabel("Number of Subtypes")
@@ -511,11 +540,12 @@ def plot_cbase_top_decoy_genes_upset(
 
 
 def plot_cbase_driver_and_passenger_mutation_counts(
-    decoys,
-    drivers,
-    res_df,
-    subtype,
-):
+    decoys: set,
+    drivers: set,
+    res_df: pd.DataFrame,
+    subtype: str,
+) -> None:
+    """TODO: Add docstring."""
     decoy_df = res_df[res_df["Gene Name"].isin(decoys)]
     top5_decoys = decoy_df.nlargest(5, "Observed Mutations")
     driver_df = res_df[res_df["Gene Name"].isin(drivers)]
@@ -548,25 +578,29 @@ def plot_cbase_driver_and_passenger_mutation_counts(
     for label, gene in zip(ax.get_xticklabels(), top10["Gene Name"]):
         if gene in drivers:
             label.set_bbox(
-                dict(
-                    facecolor="#9999FF",
-                    alpha=0.35,
-                    edgecolor="none",
-                    boxstyle="round,pad=0.3",
-                )
+                {
+                    "facecolor": "#9999FF",
+                    "alpha": 0.35,
+                    "edgecolor": "none",
+                    "boxstyle": "round,pad=0.3",
+                },
             )
         else:
             label.set_bbox(
-                dict(
-                    facecolor="#FF9999",
-                    alpha=0.35,
-                    edgecolor="none",
-                    boxstyle="round,pad=0.3",
-                )
+                {
+                    "facecolor": "#FF9999",
+                    "alpha": 0.35,
+                    "edgecolor": "none",
+                    "boxstyle": "round,pad=0.3",
+                },
             )
     driver_patch = plt.Rectangle((0, 0), 1, 1, facecolor="#9999FF", alpha=0.35)
     passenger_patch = plt.Rectangle(
-        (0, 0), 1, 1, facecolor="#FF9999", alpha=0.35
+        (0, 0),
+        1,
+        1,
+        facecolor="#FF9999",
+        alpha=0.35,
     )
     handles, labels = ax.get_legend_handles_labels()
     handles += [driver_patch, passenger_patch]
@@ -580,16 +614,16 @@ def plot_cbase_driver_and_passenger_mutation_counts(
     )
     plt.tight_layout()
     plt.savefig(
-        f"figures/cbase_obs_exp_plots/{subtype}_cbase_driver_vs_passenger_counts.png"
+        f"figures/cbase_obs_exp_plots/{subtype}_cbase_driver_vs_passenger_counts.png",
     )
 
 
 def plot_mtx_sim_pr_curve(
-    methods,
-    y_true,
-    fout,
-    ixn_type,
-):
+    methods: dict,
+    y_true: np.ndarray,
+    fout: str,
+) -> None:
+    """TODO: Add docstring."""
     figsize = (10, 8)
     plt.figure(figsize=figsize)
     set_dynamic_font_sizes(figsize=figsize)
@@ -605,5 +639,3 @@ def plot_mtx_sim_pr_curve(
 
     plt.savefig(fout, dpi=300)
     plt.close()
-
-    print(f"Saved {ixn_type} PR curve plot to {fout}")

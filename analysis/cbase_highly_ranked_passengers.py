@@ -1,4 +1,4 @@
-"""Analyze highly ranked passengers in cbase data."""
+"""TODO: Add docstring."""
 
 import os
 from pathlib import Path
@@ -15,8 +15,8 @@ SINGLE_GENE_RESULTS_DIR = "single_gene_results"
 DECOY_GENES_DIR = "data/decoy_genes"
 DRIVER_FN = "data/references/OncoKB_Cancer_Gene_List.tsv"
 
-
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     driver_df = pd.read_csv(DRIVER_FN, sep="\t", index_col=0)
     drivers = set(driver_df.index + "_M") | set(driver_df.index + "_N")
 
@@ -66,3 +66,6 @@ if __name__ == "__main__":
         top_n=6,
         fout="figures/cbase_upset_plot_top_likely_passengers.svg",
     )
+
+if __name__ == "__main__":
+    main()

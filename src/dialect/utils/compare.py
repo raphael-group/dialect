@@ -1,32 +1,29 @@
-import pandas as pd
-import logging
+"""TODO: Add docstring."""
 
+import pandas as pd
+
+from dialect.models.gene import Gene
+from dialect.utils.discover import run_discover_analysis
+from dialect.utils.fishers import run_fishers_exact_analysis
 from dialect.utils.helpers import (
     check_file_exists,
-    initialize_gene_objects,
     initialize_interaction_objects,
 )
-from dialect.utils.fishers import run_fishers_exact_analysis
-from dialect.utils.discover import run_discover_analysis
 from dialect.utils.megsa import run_megsa_analysis
 from dialect.utils.wesme import run_wesme_analysis
-from dialect.models.gene import Gene
 
 
-# ---------------------------------------------------------------------------- #
-#                               HELPER FUNCTIONS                               #
-# ---------------------------------------------------------------------------- #
-def results_to_dataframe(results, me_pcol, co_pcol, me_qcol, co_qcol):
-    """
-    Converts a results dictionary into a pandas DataFrame.
-
-    Args:
-        results (dict): A dictionary where keys are "gene_a:gene_b" strings
-                        and values are dictionaries with "me_qval" and "co_qval".
-
-    Returns:
-        pd.DataFrame: A DataFrame with columns 'gene_a', 'gene_b', 'me_qval', and 'co_qval'.
-    """
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
+def results_to_dataframe(
+    results: dict,
+    me_pcol: str,
+    co_pcol: str,
+    me_qcol: str,
+    co_qcol: str,
+) -> pd.DataFrame:
+    """TODO: Add docstring."""
     return pd.DataFrame(
         [
             {
@@ -38,42 +35,40 @@ def results_to_dataframe(results, me_pcol, co_pcol, me_qcol, co_qcol):
                 co_qcol: vals["co_qval"],
             }
             for key, vals in results.items()
-        ]
+        ],
     )
 
 
-# ---------------------------------------------------------------------------- #
-#                                 MAIN FUNCTION                                #
-# ---------------------------------------------------------------------------- #
+# ------------------------------------------------------------------------------------ #
+#                                     MAIN FUNCTION                                    #
+# ------------------------------------------------------------------------------------ #
 def run_comparison_methods(
-    cnt_mtx,
-    out,
-    k,
-    gene_level,
-):
-    logging.info("Running comparison methods")
+    cnt_mtx: str,
+    out: str,
+    k: int,
+    gene_level: str,
+) -> None:
+    """TODO: Add docstring."""
     check_file_exists(cnt_mtx)
     cnt_df = pd.read_csv(cnt_mtx, index_col=0)
 
     if k <= 0:
-        raise ValueError("k must be a positive integer")
+        msg = "k must be a positive integer"
+        raise ValueError(msg)
 
-    # TODO: integrate this logic into helper function
     genes = []
     for gene_name in cnt_df.columns:
-        counts = cnt_df[gene_name].values
+        counts = cnt_df[gene_name].to_numpy()
         genes.append(
             Gene(
                 name=gene_name,
                 samples=cnt_df.index,
                 counts=counts,
                 bmr_pmf=None,
-            )
+            ),
         )
     top_genes, interactions = initialize_interaction_objects(k, genes)
 
-    logging.info("Running Fisher's exact test...")
-    # TODO: modify run_fisher_exact_analysis to directly return a dataframe
     fisher_results = run_fishers_exact_analysis(interactions)
     fisher_df = results_to_dataframe(
         fisher_results,
@@ -83,8 +78,6 @@ def run_comparison_methods(
         "Fisher's CO Q-Val",
     )
 
-    logging.info("Running DISCOVER...")
-    # TODO: modify run_discover_analysis to directly return a dataframe
     discover_results = run_discover_analysis(cnt_df, top_genes, interactions)
     discover_df = results_to_dataframe(
         discover_results,
@@ -94,20 +87,25 @@ def run_comparison_methods(
         "Discover CO Q-Val",
     )
 
-    logging.info("Running MEGSA...")
     megsa_df = run_megsa_analysis(cnt_df, interactions)
 
-    logging.info("Running WeSME/WeSCO...")
     wesme_df = run_wesme_analysis(cnt_df, out, interactions)
 
-    merged_df = pd.merge(
-        fisher_df, discover_df, on=["Gene A", "Gene B"], how="inner"
+    merged_df = fisher_df.merge(
+        discover_df,
+        on=["Gene A", "Gene B"],
+        how="inner",
     )
-    merged_df = pd.merge(
-        merged_df, megsa_df, on=["Gene A", "Gene B"], how="inner"
+    merged_df = merged_df.merge(
+        megsa_df,
+        on=["Gene A", "Gene B"],
+        how="inner",
     )
-    merged_df = pd.merge(
-        merged_df, wesme_df, on=["Gene A", "Gene B"], how="inner"
+    merged_df = merged_df.merge(
+        merged_df,
+        wesme_df,
+        on=["Gene A", "Gene B"],
+        how="inner",
     )
     comparison_interaction_fout = f"{out}/comparison_interaction_results.csv"
     if gene_level:
@@ -115,5 +113,3 @@ def run_comparison_methods(
             f"{out}/gene_level_comparison_interaction_results.csv"
         )
     merged_df.to_csv(comparison_interaction_fout, index=False)
-    logging.info(f"Comparison results saved to {comparison_interaction_fout}")
-    logging.info("Finished running comparison methods")

@@ -1,4 +1,4 @@
-"""Generate a LaTeX table summarizing TCGA subtypes, samples, and mutations."""
+"""TODO: Add docstring."""
 
 import argparse
 import logging
@@ -10,12 +10,7 @@ import pandas as pd
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    """Build and return the argument parser for the script.
-
-    Returns:
-        argparse.ArgumentParser: The argument parser for the script.
-
-    """
+    """TODO: Add docstring."""
     parser = argparse.ArgumentParser(description="Generate TCGA subtype LaTeX table.")
     parser.add_argument(
         "-r",
@@ -53,17 +48,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def create_latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
-    """Create a LaTeX table from a DataFrame.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing the data for the table.
-        caption (str): Caption for the LaTeX table.
-        label (str): Label for the LaTeX table.
-
-    Returns:
-        str: LaTeX formatted table as a string.
-
-    """
+    """TODO: Add docstring."""
     lines = []
     lines.append(r"\begin{table}[htbp]")
     lines.append(r"\centering")
@@ -102,14 +87,10 @@ def create_latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
     return "\n".join(lines)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     parser = build_argument_parser()
     args = parser.parse_args()
-    if not Path(args.study_abbrev_fn).exists():
-        logging.error("File not found: %s", args.study_abbrev_fn)
-    if not Path(args.pancancer_counts_fn).exists():
-        logging.error("File not found: %s", args.pancancer_counts_fn)
-        sys.exit(1)
     abbrev_df = pd.read_csv(args.study_abbrev_fn)
     pancancer_df = pd.read_csv(args.pancancer_counts_fn)
     pancancer_df["Number of Samples"] = pancancer_df["Number of Samples"].astype(int)
@@ -124,10 +105,6 @@ if __name__ == "__main__":
             continue
         cnt_mtx_fn = stype_path / "count_matrix.csv"
         if not cnt_mtx_fn.exists():
-            logging.warning(
-                "No count_matrix.csv found for subtype %s. Skipping.",
-                stype,
-            )
             continue
         cnt_df = pd.read_csv(cnt_mtx_fn)
         num_mut_samples = cnt_df.shape[0]
@@ -168,4 +145,7 @@ if __name__ == "__main__":
     with fout.open("w") as f:
         f.write(latex_str)
 
-    logging.info("Wrote LaTeX table to %s", fout)
+
+
+if __name__ == "__main__":
+    main()

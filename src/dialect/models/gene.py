@@ -1,37 +1,30 @@
-"""Define Gene class for mutation modeling and analysis.
-
-This module defines the `Gene` class, which includes methods for validating data,
-computing likelihoods, and estimating mutation parameters (e.g., pi) using statistical
-techniques like optimization and EM algorithms.
-"""
+"""TODO: Add docstring."""
 
 import itertools
-import logging
 
 import numpy as np
 from scipy.optimize import minimize
 
 
 class Gene:
-    """Represent a gene and provide tools for mutation analysis."""
+    """TODO: Add docstring."""
 
     def __init__(self, name: str, samples: list, counts: list, bmr_pmf: list) -> None:
-        """Initialize a Gene object."""
+        """TODO: Add docstring."""
         self.name = name
         self.samples = samples
         self.counts = counts
         self.bmr_pmf = bmr_pmf
         self.pi = None
 
-        # Metrics from alternative methods
         self.cbase_phi = None
         self.cbase_p = None
 
     def __str__(self) -> str:
-        """Return a string representation of the Gene object."""
+        """TODO: Add docstring."""
         bmr_preview = ", ".join(
             f"{k}: {v:.3e}" for k, v in itertools.islice(self.bmr_pmf.items(), 3)
-        )  # Format the first three key-value pairs in bmr_pmf
+        )
         pi_info = f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
         total_mutations = np.sum(self.counts)
         return (
@@ -41,26 +34,20 @@ class Gene:
             f"{pi_info}"
         )
 
-    # ---------------------------------------------------------------------------- #
-    #                               UTILITY FUNCTIONS                              #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                                 UTILITY FUNCTIONS                                #
+    # -------------------------------------------------------------------------------- #
     def calculate_expected_mutations(self) -> float:
-        """Calculate the expected number of mutations for the gene based on its BMR PMF.
-
-        :return: (float) The expected number of mutations.
-        """
+        """TODO: Add docstring."""
         total_samples = len(self.counts)
         expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
         return expected_mutations * total_samples
 
-    # ---------------------------------------------------------------------------- #
-    #                          DATA VALIDATION AND LOGGING                         #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                            DATA VALIDATION AND LOGGING                           #
+    # -------------------------------------------------------------------------------- #
     def verify_bmr_pmf_and_counts_exist(self) -> None:
-        """Verify that the BMR PMF and counts are defined for this gene.
-
-        :raises ValueError: If `bmr_pmf` or `counts` is not defined.
-        """
+        """TODO: Add docstring."""
         if self.bmr_pmf is None:
             msg = "BMR PMF is not defined for this gene."
             raise ValueError(msg)
@@ -69,46 +56,26 @@ class Gene:
             raise ValueError(msg)
 
     def verify_bmr_pmf_contains_all_count_keys(self) -> None:
-        """Check if all count keys in `counts` exist in `bmr_pmf`.
-
-        Logs a warning if any counts are missing in `bmr_pmf` and skips those samples.
-        Issue occurs when BMR PMF does not include all counts in distribution.
-        """
+        """TODO: Add docstring."""
         missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
         if missing_bmr_pmf_counts:
-            logging.warning(
-                "Counts %s are not in bmr_pmf for gene %s. "
-                "Please ensure bmr_pmf includes all relevant counts.",
-                missing_bmr_pmf_counts,
-                self.name,
-            )
             msg = "BMR PMF does not contain all counts in distribution."
             raise ValueError(msg)
 
     def verify_pi_is_valid(self, pi: float) -> None:
-        """Validate that the estimated pi value is defined and within range [0, 1].
-
-        Logs additional information for boundary or invalid values.
-
-        :raises ValueError: If `pi` is not defined or out of bounds.
-        :return: `np.inf` if `pi` is 1, `-np.inf` if `pi` is 0.
-        """
+        """TODO: Add docstring."""
         if pi is None or not 0 <= pi <= 1:
             msg = f"Invalid pi value: {pi}. Pi must be in the range [0, 1]."
             raise ValueError(
                 msg,
             )
         if pi == 1:
-            logging.info(
-                "Pi for gene %s is 1, which will result in log(0).",
-                self.name,
-            )
             msg = "Estimated pi is 1. Please ensure pi is less than 1."
             raise ValueError(msg)
 
-    # ---------------------------------------------------------------------------- #
-    #                        Likelihood & Metric Evaluation                        #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                         LIKELIHOOD AND METRIC EVALUATION                         #
+    # -------------------------------------------------------------------------------- #
     def compute_log_likelihood(self, pi: float) -> float:
         r"""Compute the log-likelihood for gene given the estimated \\( \\pi \\).
 
@@ -134,6 +101,7 @@ class Gene:
         **Raises**:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
+
         # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
@@ -175,8 +143,6 @@ class Gene:
         **Returns**:
         :return: (float) The likelihood ratio test statistic (\\( \\lambda_{LR} \\)).
         """
-        logging.info("Computing likelihood ratio for gene %s.", self.name)
-
         self.verify_pi_is_valid(pi)
 
         return -2 * (self.compute_log_likelihood(0) - self.compute_log_likelihood(pi))
@@ -193,61 +159,37 @@ class Gene:
         **Returns**:
         :return: (float) The log odds ratio.
         """
-        logging.info("Computing log odds ratio for gene %s.", self.name)
-
         self.verify_pi_is_valid(pi)
 
         return np.log(self.pi / (1 - pi))
 
-    # ---------------------------------------------------------------------------- #
-    #                         Parameter Estimation Methods                         #
-    # ---------------------------------------------------------------------------- #
+    # -------------------------------------------------------------------------------- #
+    #                           PARAMETER ESTIMATION METHODS                           #
+    # -------------------------------------------------------------------------------- #
     def estimate_pi_with_optimiziation_using_scipy(self, pi_init: float = 0.5) -> None:
-        """Estimate pi parameter value using the SLSQP optimization scheme.
-
-        SLSQP is used because it supports bounds (0 < pi < 1), which are required
-        to handle constraints and ensure valid log-likelihood computations.
-
-        :param pi_init (float): Initial guess for the pi parameter (default: 0.5).
-        :return (float): The optimized value of pi.
-        """
+        """TODO: Add docstring."""
 
         def negative_log_likelihood(pi: float) -> float:
             return -self.compute_log_likelihood(pi)
 
-        logging.info(
-            "Estimating pi for gene %s using SLSQP optimization.",
-            self.name,
-        )
-
         self.verify_bmr_pmf_and_counts_exist()
 
-        alpha = 1e-13  # Small value to avoid edge cases at 0 or 1
+        alpha = 1e-13
         bounds = [
             (alpha, 1 - alpha),
-        ]  # Restrict pi to (0, 1) to avoid log issues
+        ]
         result = minimize(
             negative_log_likelihood,
-            x0=[pi_init],  # Initial guess for pi
+            x0=[pi_init],
             bounds=bounds,
             method="SLSQP",
         )
 
         if not result.success:
-            logging.warning(
-                "Optimization failed for gene %s: %s",
-                self.name,
-                result.message,
-            )
             msg = f"Optimization failed: {result.message}"
             raise ValueError(msg)
 
         self.pi = result.x[0]
-        logging.info(
-            "Estimated pi for gene %s: %s",
-            self.name,
-            self.pi,
-        )
 
     def estimate_pi_with_em_from_scratch(
         self,
@@ -284,48 +226,33 @@ class Gene:
         **Returns**:
         :return: (float) The estimated value of \\( \\pi \\).
         """
-        logging.info(
-            "Estimating pi for gene %s using the EM algorithm.",
-            self.name,
-        )
-
         self.verify_bmr_pmf_and_counts_exist()
 
         nonzero_probability_counts = [
             c for c in self.counts if c in self.bmr_pmf and self.bmr_pmf[c] > 0
-        ]  # exclude counts with zero probability to avoid log(0) issues
+        ]
 
         pi = pi_init
-        for it in range(max_iter):
+        for _it in range(max_iter):
             z_i = [
                 (pi * self.bmr_pmf.get(c - 1, 0))
                 / (pi * self.bmr_pmf.get(c - 1, 0) + (1 - pi) * self.bmr_pmf.get(c, 0))
                 for c in nonzero_probability_counts
-            ]  # E-step
+            ]
 
-            curr_pi = np.mean(z_i)  # M-step
+            curr_pi = np.mean(z_i)
 
-            # Check convergence
             prev_log_likelihood = self.compute_log_likelihood(pi)
             curr_log_likelihood = self.compute_log_likelihood(curr_pi)
             if abs(curr_log_likelihood - prev_log_likelihood) < tol:
-                logging.info("EM algorithm converged after %d iterations.", it)
                 break
 
             pi = curr_pi
 
         self.pi = pi
-        logging.info("Estimated pi for gene %s: %.4f", self.name, self.pi)
 
     # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-76)
     def estimate_pi_with_em_using_pomegranate(self) -> None:
-        """Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
-
-        Uses the Pomegranate library for the EM algorithm.
-        """
-        logging.info(
-            "Estimating pi for gene %s using the EM algorithm.",
-            self.name,
-        )
+        """TODO: Add docstring."""
         msg = "EM algorithm not implemented yet."
         raise NotImplementedError(msg)

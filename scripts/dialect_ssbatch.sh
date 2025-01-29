@@ -8,27 +8,22 @@
 source /n/fs/ragr-research/users/ashuaibi/anaconda3/etc/profile.d/conda.sh
 conda activate dialect
 
-# Get arguments
-MAF_FILE=${1}  # MAF file path
-K=${2}         # Number of top genes
-DOUT=${3}      # Output directory
-STEPS=${4}     # Steps to execute
+MAF_FILE=${1}
+K=${2}
+DOUT=${3}
+STEPS=${4}
 
-# Derived variables
-SUBTYPE_NAME=$(basename "${MAF_FILE}" .maf) # Extract subtype name from MAF file
-OUTPUT_DIR=${DOUT}/${SUBTYPE_NAME}          # Set output directory
+SUBTYPE_NAME=$(basename "${MAF_FILE}" .maf)
+OUTPUT_DIR=${DOUT}/${SUBTYPE_NAME}
 
-# Prepare environment
 mkdir -p "${OUTPUT_DIR}"
 
-# Install DISCOVER
 ORIGINAL_DIR=$(pwd)
 DISCOVER_DIR=${ORIGINAL_DIR}/external/DISCOVER
 cd "${DISCOVER_DIR}"
-python setup.py install --user  # Use --user to install DISCOVER in user space
+python setup.py install --user
 cd "${ORIGINAL_DIR}"
 
-# Run DIAlEcT steps based on specified steps
 IFS=',' read -r -a STEPS_ARRAY <<< "$STEPS"
 
 for STEP in "${STEPS_ARRAY[@]}"; do

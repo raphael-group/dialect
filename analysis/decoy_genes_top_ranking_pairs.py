@@ -1,4 +1,4 @@
-"""Perform analysis on decoy genes and generate top ranking pairs."""
+"""TODO: Add docstring."""
 
 import logging
 import os
@@ -11,13 +11,13 @@ from dialect.utils.plotting import plot_decoy_gene_fractions
 from dialect.utils.postprocessing import generate_top_ranking_tables
 
 EPSILON_MUTATION_COUNT = 10
-PVALUE_THRESHOLD = 1  # Treshold for other methods
+PVALUE_THRESHOLD = 1
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
 def build_argument_parser() -> ArgumentParser:
-    """Build and return the argument parser for the decoy gene analysis script."""
+    """TODO: Add docstring."""
     parser = ArgumentParser(description="Decoy Gene Analysis")
     parser.add_argument(
         "-n",
@@ -65,7 +65,7 @@ def compute_prop_pairs_with_at_least_one_decoy(
     decoy_genes: set,
     top_ranking_pairs: pd.DataFrame,
 ) -> float:
-    """Compute the proportion of pairs with at least one decoy gene."""
+    """TODO: Add docstring."""
     pairs_with_at_least_one_decoy_gene = (
         top_ranking_pairs["Gene A"].isin(decoy_genes)
         | top_ranking_pairs["Gene B"].isin(decoy_genes)
@@ -78,7 +78,7 @@ def compute_prop_unique_decoy_genes_in_top_pairs(
     decoy_genes: set,
     top_ranking_pairs: pd.DataFrame,
 ) -> float:
-    """Compute the proportion of unique decoys in top pairs."""
+    """TODO: Add docstring."""
     total_unique_genes = set(
         top_ranking_pairs["Gene A"].tolist() + top_ranking_pairs["Gene B"].tolist(),
     )
@@ -90,7 +90,7 @@ def compute_prop_decoy_genes_in_top_pairs(
     decoy_genes: set,
     top_ranking_pairs: pd.DataFrame,
 ) -> float:
-    """Compute the proportion all decoys in top pairs."""
+    """TODO: Add docstring."""
     all_genes_list = (
         top_ranking_pairs["Gene A"].tolist() + top_ranking_pairs["Gene B"].tolist()
     )
@@ -109,7 +109,7 @@ def compute_decoy_gene_fraction_across_methods(
     ixn_type: str,
     comp_scheme: int = 3,
 ):
-    """Compute the fraction of decoy genes in the top ranking pairs for each method."""
+    """TODO: Add docstring."""
     if ixn_res_df.empty:
         msg = "Input DataFrame is empty"
         raise ValueError(msg)
@@ -150,15 +150,14 @@ def compute_decoy_gene_fractions_across_subtypes(
     num_pairs: int,
     ixn_type: str,
 ) -> dict:
-    """Compute the fraction of decoy genes in the top ranking pairs for each subtype."""
+    """TODO: Add docstring."""
     subtypes = os.listdir(results_dir)
     subtype_decoy_gene_fractions = {}
     for subtype in subtypes:
         results_fn = Path(results_dir) / subtype / "complete_pairwise_ixn_results.csv"
-        cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
+        cnt_mtx_fn = Path(results_dir) / subtype / "count_matrix.csv"
         decoy_genes_fn = Path(decoy_genes_dir) / f"{subtype}_decoy_genes.txt"
         if not results_fn.exists() or not decoy_genes_fn.exists():
-            logging.info("Skipping %s since input files not found", subtype)
             continue
         ixn_res_df = pd.read_csv(results_fn)
         decoy_genes = set(
@@ -179,7 +178,7 @@ def compute_decoy_gene_fractions_across_subtypes(
 
 
 def save_output(subtype_decoy_gene_fractions: dict, fout: str) -> None:
-    """Save the output to a CSV file."""
+    """TODO: Add docstring."""
     gene_fraction_data = [
         {"Subtype": subtype, "Method": method, "Fraction": fraction}
         for subtype, fractions in subtype_decoy_gene_fractions.items()
@@ -189,7 +188,8 @@ def save_output(subtype_decoy_gene_fractions: dict, fout: str) -> None:
     results_df.to_csv(fout, index=False)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     parser = build_argument_parser()
     args = parser.parse_args()
 
@@ -208,3 +208,7 @@ if __name__ == "__main__":
         args.me,
         args.out,
     )
+
+
+if __name__ == "__main__":
+    main()

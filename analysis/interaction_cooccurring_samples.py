@@ -1,9 +1,8 @@
-"""Analyze co-occurring samples between two genes."""
+"""TODO: Add docstring."""
 
 # ------------------------------------------------------------------------------------ #
 #                                        IMPORTS                                       #
 # ------------------------------------------------------------------------------------ #
-import contextlib
 import logging
 
 from dialect.models.gene import Gene
@@ -15,8 +14,8 @@ from dialect.utils.identify import load_cnt_mtx_and_bmr_pmfs
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def _get_cooccurring_samples_(gene_a: Gene, gene_b: Gene) -> set:
-    """Get the set of co-occurring samples for two genes."""
+def get_cooccurring_samples(gene_a: Gene, gene_b: Gene) -> set:
+    """TODO: Add docstring."""
     interaction = Interaction(gene_a, gene_b)
     return interaction.get_set_of_cooccurring_samples()
 
@@ -24,7 +23,8 @@ def _get_cooccurring_samples_(gene_a: Gene, gene_b: Gene) -> set:
 # ------------------------------------------------------------------------------------ #
 #                                     MAIN FUNCTION                                    #
 # ------------------------------------------------------------------------------------ #
-if __name__ == "__main__":
+def main() -> None:
+    """TODO: Add docstring."""
     logging.basicConfig(level=logging.INFO)
 
     cnt_mtx_path = input("Enter the path to the count matrix file: ").strip()
@@ -48,6 +48,8 @@ if __name__ == "__main__":
 
         gene_a = gene_objects[gene_a_name]
         gene_b = gene_objects[gene_b_name]
+        cooccurring_samples = get_cooccurring_samples(gene_a, gene_b)
 
-        with contextlib.suppress(Exception):
-            cooccurring_samples = _get_cooccurring_samples_(gene_a, gene_b)
+
+if __name__ == "__main__":
+    main()

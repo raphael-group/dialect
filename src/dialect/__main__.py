@@ -1,6 +1,5 @@
-"""Entry point for the DIALECT command-line interface."""
+"""TODO: Add docstring."""
 
-import logging
 from argparse import Namespace
 from pathlib import Path
 
@@ -84,9 +83,6 @@ def main() -> None:
     parser = build_argument_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
-
-    logging.info("Running DIALECT Command Line Interface")
-    logging.verbose(f"Arguments: {args}")
 
     if args.command == "generate":
         dout = Path(args.out)

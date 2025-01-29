@@ -1,4 +1,4 @@
-"""Create tex tables for top ranking pairs across methods."""
+"""TODO: Add docstring."""
 
 import logging
 import os
@@ -17,8 +17,8 @@ MANTISSA_MAX_THRESHOLD = 10
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def _build_argument_parser_() -> ArgumentParser:
-    """We do NOT modify this parser, as requested."""
+def build_argument_parser() -> ArgumentParser:
+    """TODO: Add docstring."""
     parser = ArgumentParser(
         description="Generate LaTeX tables for top pairs across methods.",
     )
@@ -72,14 +72,7 @@ def _build_argument_parser_() -> ArgumentParser:
 
 
 def format_float(value: float) -> str:
-    """Format float value for LaTeX table.
-
-    - If |value| >= 0.01, display with up to 2 decimals (no trailing zeros).
-    - If |value| < 0.01 (and not zero), use base-10 notation: e.g. 3x10^{-3}.
-    - Preserve a '-' sign if the original value is negative.
-    - Ensures the mantissa stays in the range [1, 10) and uses two significant digits
-      to avoid outputs like '1e+01x10^{-4}'.
-    """
+    """TODO: Add docstring."""
     sign = "-" if value < 0 else ""
     abs_val = abs(value)
 
@@ -101,7 +94,7 @@ def format_float(value: float) -> str:
     return f"{sign}{mantissa_str}x10^{{{exponent}}}"
 
 
-def _escape_gene_name_(gene_name: str) -> str:
+def escape_gene_name(gene_name: str) -> str:
     r"""Convert '_M' -> '\_M' and '_N' -> '\_N' so LaTeX can render underscores."""
     return gene_name.replace("_M", r"\_M").replace("_N", r"\_N")
 
@@ -112,7 +105,7 @@ def _build_subtable_latex_(
     metric_labels: dict,
     ixn_type: str,
 ) -> str:
-    """Build a LaTeX table for the given set of methods in a single row of columns."""
+    """TODO: Add docstring."""
     num_methods = len(methods_list)
     col_spec = "||".join(["cc"] * num_methods)
 
@@ -153,7 +146,7 @@ def _build_subtable_latex_(
 # ------------------------------------------------------------------------------------ #
 #                                    MAIN FUNCTIONS                                    #
 # ------------------------------------------------------------------------------------ #
-def _create_final_table_(
+def create_final_table(
     subtype: str,
     top_pairs_by_method: dict,
     num_pairs: int,
@@ -209,8 +202,9 @@ def _create_final_table_(
     return "\n".join(lines)
 
 
-if __name__ == "__main__":
-    parser = _build_argument_parser_()
+def main() -> None:
+    """TODO: Add docstring."""
+    parser = build_argument_parser()
     args = parser.parse_args()
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
@@ -222,7 +216,6 @@ if __name__ == "__main__":
         )
         cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
         if not results_fn.exists() or not cnt_mtx_fn.exists():
-            logging.info("Skipping %s: file not found.", subtype)
             continue
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
@@ -235,14 +228,13 @@ if __name__ == "__main__":
         top_pairs_by_method = {}
         for method_name, method_df in top_tables.items():
             if method_df is None or method_df.empty:
-                logging.info("No top pairs for method: %s", method_name)
                 top_pairs_by_method[method_name] = []
                 continue
             pairs_list = []
             metric_col_name = method_df.columns[-1]
             for _, row in method_df.iterrows():
-                gene_a = _escape_gene_name_(str(row["Gene A"]))
-                gene_b = _escape_gene_name_(str(row["Gene B"]))
+                gene_a = escape_gene_name(str(row["Gene A"]))
+                gene_b = escape_gene_name(str(row["Gene B"]))
                 metric_val = row[metric_col_name]
                 val_str = format_float(metric_val) if metric_val is not None else "N/A"
                 interaction_str = f"{gene_a}:{gene_b}"
@@ -253,7 +245,7 @@ if __name__ == "__main__":
             else:
                 top_pairs_by_method[method_name] = pairs_list
 
-        latex_str = _create_final_table_(
+        latex_str = create_final_table(
             subtype,
             top_pairs_by_method,
             args.num_pairs,
@@ -266,4 +258,6 @@ if __name__ == "__main__":
         with fout.open("w") as f:
             f.write(latex_str)
 
-        logging.info("Wrote LaTeX table for %s to %s", subtype, fout)
+
+if __name__ == "__main__":
+    main()

@@ -1,26 +1,28 @@
+"""TODO: Add docstring."""
+
 import logging
+from typing import Any
 
 VERBOSE_LEVEL = 15
 logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
 
 
-def verbose(self, message, *args, **kwargs):
-    """Log a message with the custom VERBOSE level."""
+def verbose(
+    self: logging.Logger,
+    message: str,
+    *args: str,
+    **kwargs: dict[str, Any],
+) -> None:
+    """TODO: Add docstring."""
     if self.isEnabledFor(VERBOSE_LEVEL):
         self._log(VERBOSE_LEVEL, message, args, **kwargs)
 
 
-# Attach the verbose method to logging.Logger
 logging.Logger.verbose = verbose
 
 
-def configure_logging(verbose=False):
-    """
-    Configures logging with optional verbose mode.
-
-    :param verbose: Enable verbose logging if True, default is False.
-    """
-    # Reset logging configuration
+def configure_logging(verbose: bool = False) -> None:
+    """TODO: Add docstring."""
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
 
@@ -34,8 +36,7 @@ def configure_logging(verbose=False):
 
     root_logger.addHandler(console_handler)
 
-    # Ensure verbose method is accessible globally
-    def module_verbose(message, *args, **kwargs):
+    def module_verbose(message: str, *args: str, **kwargs: dict[str, Any]) -> None:
         if verbose:
             root_logger._log(VERBOSE_LEVEL, message, args, **kwargs)
 
