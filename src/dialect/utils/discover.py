@@ -1,7 +1,8 @@
 """TODO: Add docstring."""
 
 import pandas as pd
-from discover import DiscoverMatrix, PairwiseDiscoverResult, pairwise_discover_test
+from discover import DiscoverMatrix, pairwise_discover_test
+from discover.pairwise import PairwiseDiscoverResult
 
 
 def create_mutation_matrix_from_cnt_df(
