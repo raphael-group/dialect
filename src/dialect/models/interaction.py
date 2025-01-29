@@ -132,7 +132,9 @@ class Interaction:
     # -------------------------------------------------------------------------------- #
     def compute_joint_probability(self, tau: float, u: int, v: int) -> np.ndarray:
         """TODO: Add docstring."""
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
@@ -155,7 +157,9 @@ class Interaction:
         tau_11: float,
     ) -> np.ndarray:
         """TODO: Add docstring."""
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
@@ -215,13 +219,15 @@ class Interaction:
             or if `tau` is invalid.
         """
 
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
             return pmf.get(c)
 
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get_with_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
@@ -396,7 +402,8 @@ class Interaction:
         alpha: float = 1e-13,
     ) -> None:
         """TODO: Add docstring."""
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-78
+        # TODO @ashuaibi7: resolve issues with this method
+        # https://linear.app/princeton-phd-research/issue/DEV-78
         if tau_init is None:
             tau_init = [0.25, 0.25, 0.25, 0.25]
 
@@ -506,7 +513,8 @@ class Interaction:
                 / total_probabilities
             )
 
-            # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-79
+            # TODO @ashuaibi7: standardize handling of nan values
+            # https://linear.app/princeton-phd-research/issue/DEV-79
             z_i_00_no_nan = np.nan_to_num(z_i_00, nan=2e-100)
             z_i_01_no_nan = np.nan_to_num(z_i_01, nan=2e-100)
             z_i_10_no_nan = np.nan_to_num(z_i_10, nan=2e-100)
@@ -539,7 +547,8 @@ class Interaction:
             tau_11,
         )
 
-    # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-76)
+    # TODO @ashuaibi7: implement em w/ pomegranate
+    # https://linear.app/princeton-phd-research/issue/DEV-76
     def estimate_tau_with_em_using_pomegranate(self) -> None:
         """TODO: Add docstring."""
         msg = "Method is not yet implemented."

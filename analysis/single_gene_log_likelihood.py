@@ -5,12 +5,10 @@
 # ------------------------------------------------------------------------------------ #
 
 import contextlib
-import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 from dialect.models.gene import Gene
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 

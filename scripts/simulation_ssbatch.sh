@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -N 1                   # Number of nodes
 #SBATCH --ntasks-per-node=4    # CPUs per node
-#SBATCH -t 24:00:00            # Walltime
+#SBATCH -t 96:00:00            # Walltime
 #SBATCH --mem=32GB             # Memory
 #SBATCH --job-name=matrix_sim  # Job name
 

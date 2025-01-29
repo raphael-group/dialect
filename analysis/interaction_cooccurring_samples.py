@@ -25,8 +25,6 @@ def get_cooccurring_samples(gene_a: Gene, gene_b: Gene) -> set:
 # ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    logging.basicConfig(level=logging.INFO)
-
     cnt_mtx_path = input("Enter the path to the count matrix file: ").strip()
     bmr_pmfs_path = input("Enter the path to the BMR PMFs file: ").strip()
 
@@ -49,6 +47,12 @@ def main() -> None:
         gene_a = gene_objects[gene_a_name]
         gene_b = gene_objects[gene_b_name]
         cooccurring_samples = get_cooccurring_samples(gene_a, gene_b)
+        logging.info(
+            "Gene A: %s\nGene B: %s\nCo-occurring samples: %s",
+            gene_a_name,
+            gene_b_name,
+            cooccurring_samples,
+        )
 
 
 if __name__ == "__main__":

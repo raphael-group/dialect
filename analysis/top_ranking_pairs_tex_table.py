@@ -1,13 +1,11 @@
 """TODO: Add docstring."""
 
-import logging
 import os
 from argparse import ArgumentParser
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 from dialect.utils.postprocessing import generate_top_ranking_tables
 
 FLOAT_LOW_THRESHOLD = 0.01

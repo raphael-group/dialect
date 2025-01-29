@@ -3,10 +3,10 @@
 # ------------------------------------------------------------------------------------ #
 #                                        IMPORTS                                       #
 # ------------------------------------------------------------------------------------ #
+
 import logging
 
 import numpy as np
-
 from dialect.utils.helpers import initialize_gene_objects
 from dialect.utils.identify import load_cnt_mtx_and_bmr_pmfs
 from dialect.utils.simulate import simulate_interaction_pair
@@ -83,7 +83,7 @@ def main() -> None:
         total_recovery_error = 0.0
         total_false_positives = 0
 
-        for i in range(iterations):
+        for _ in range(iterations):
             interaction = simulate_interaction_pair(
                 gene_a.bmr_pmf,
                 gene_b.bmr_pmf,
@@ -95,7 +95,7 @@ def main() -> None:
 
             try:
                 interaction.estimate_tau_with_em_from_scratch()
-            except (ValueError, RuntimeError) as e:
+            except (ValueError, RuntimeError):
                 continue
 
             estimated_taus = (
@@ -119,6 +119,11 @@ def main() -> None:
         average_recovery_error = total_recovery_error / iterations
         average_false_positive_rate = total_false_positives / (
             iterations * len(true_taus)
+        )
+        logging.info(
+            "Average recover error: %f\nAverage false positive rate: %f",
+            average_recovery_error,
+            average_false_positive_rate,
         )
 
 if __name__ == "__main__":

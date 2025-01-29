@@ -17,7 +17,7 @@ Decoy gene lists are created using the `scripts/identify_decoy_genes.py` script:
    - A file for each subtype (e.g., `LUAD_decoy_genes.txt`).
 
 ## **Usage**
-Decoy gene lists help identify passenger genes with high mutation frequencies for further analysis. They are used in the result evaluation pipeline to determine how often DIALECT alongside other methods identify ME/CO pairs that are comprised of decoy genes. Such pairs are unlikely to be true dependencies and this is used to qualify the top ranking pairs identified across methods. 
+Decoy gene lists help identify passenger genes with high mutation frequencies for further analysis. They are used in the result evaluation pipeline to determine how often DIALECT alongside other methods identify ME/CO pairs that are comprised of decoy genes. Such pairs are unlikely to be true dependencies and this is used to qualify the top ranking pairs identified across methods.
 
 ### Example Command:
 ```bash

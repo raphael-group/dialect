@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 import pandas as pd
-
 from dialect.utils.plotting import plot_sample_mutation_count_subtype_histograms
 
 HIGH_AVG_MUT_FREQ_SUBTYPES = [

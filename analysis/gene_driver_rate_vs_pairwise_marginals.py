@@ -6,7 +6,6 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 from dialect.utils.helpers import initialize_gene_objects, load_cnt_mtx_and_bmr_pmfs

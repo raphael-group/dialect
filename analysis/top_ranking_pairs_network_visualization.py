@@ -1,12 +1,10 @@
 """TODO: Add docstring."""
 
-import logging
 import os
 from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
-
 from dialect.utils.plotting import draw_network_gridplot_across_methods
 
 

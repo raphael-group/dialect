@@ -21,7 +21,7 @@ dist/
 
 # IDE and Editor Configurations
 .vscode/
-*.code-workspace  
+*.code-workspace
 
 # Data, Methods, & Output
 data/

@@ -1,12 +1,10 @@
 """TODO: Add docstring."""
 
-import logging
 import os
 from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
-
 from dialect.utils.plotting import plot_decoy_gene_fractions
 from dialect.utils.postprocessing import generate_top_ranking_tables
 
@@ -107,9 +105,10 @@ def compute_decoy_gene_fraction_across_methods(
     num_samples: int,
     num_pairs: int,
     ixn_type: str,
-    comp_scheme: int = 3,
-):
+) -> dict:
     """TODO: Add docstring."""
+    comp_scheme = 3
+    comp_schemes = [0, 1, 2]
     if ixn_res_df.empty:
         msg = "Input DataFrame is empty"
         raise ValueError(msg)
@@ -124,12 +123,12 @@ def compute_decoy_gene_fraction_across_methods(
     for method, top_ranking_pairs in top_tables.items():
         if top_ranking_pairs is None or top_ranking_pairs.empty:
             decoy_gene_proportion = 0
-        elif comp_scheme == 1:
+        elif comp_scheme == comp_schemes[0]:
             decoy_gene_proportion = compute_prop_pairs_with_at_least_one_decoy(
                 decoy_genes,
                 top_ranking_pairs,
             )
-        elif comp_scheme == 2:
+        elif comp_scheme == comp_schemes[1]:
             decoy_gene_proportion = compute_prop_unique_decoy_genes_in_top_pairs(
                 decoy_genes,
                 top_ranking_pairs,

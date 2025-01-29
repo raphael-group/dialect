@@ -102,13 +102,15 @@ class Gene:
         :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
         """
 
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
             return pmf.get(c)
 
-        # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-77
+        # TODO @ashuaibi7: move function to helper module
+        # https://linear.app/princeton-phd-research/issue/DEV-77
         def safe_get_with_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
@@ -251,7 +253,8 @@ class Gene:
 
         self.pi = pi
 
-    # TODO @ashuaibi7: https://linear.app/princeton-phd-research/issue/DEV-76)
+    # TODO @ashuaibi7: implement em w/ pomegranate
+    # https://linear.app/princeton-phd-research/issue/DEV-76
     def estimate_pi_with_em_using_pomegranate(self) -> None:
         """TODO: Add docstring."""
         msg = "EM algorithm not implemented yet."
