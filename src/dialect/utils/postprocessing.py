@@ -192,6 +192,9 @@ def generate_top_ranking_tables(
             num_pairs=num_pairs,
             num_samples=num_samples,
         )
+        top_df = (
+            pd.DataFrame(columns=["Gene A", "Gene B"]) if top_df is None else top_df
+        )
         tables[method] = top_df
 
     return tables
