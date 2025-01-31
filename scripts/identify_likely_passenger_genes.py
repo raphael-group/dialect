@@ -44,7 +44,7 @@ def build_argument_parser() -> ArgumentParser:
 # ------------------------------------------------------------------------------------ #
 #                                    MAIN FUNCTIONS                                    #
 # ------------------------------------------------------------------------------------ #
-def identify_decoy_genes(
+def identify_likely_passenger_genes(
     cnt_df: pd.DataFrame,
     driver_genes: list,
     k: int,
@@ -67,8 +67,8 @@ if __name__ == "__main__":
     driver_genes = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
     dout = Path(args.out)
     dout.mkdir(parents=True, exist_ok=True)
-    fout = dout / f"{args.subtype}_decoy_genes.txt"
-    identify_decoy_genes(
+    fout = dout / f"{args.subtype}.txt"
+    identify_likely_passenger_genes(
         cnt_df=cnt_df,
         driver_genes=driver_genes,
         k=args.top_k,

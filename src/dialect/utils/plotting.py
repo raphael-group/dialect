@@ -185,166 +185,144 @@ def draw_simulation_precision_recall_curve(
 
 
 # ------------------------------------------------------------------------------------ #
-#                                  CBASE BMR ANALYSIS                                  #
+#                                    CBASE ANALYSIS                                    #
 # ------------------------------------------------------------------------------------ #
-def plot_cbase_driver_decoy_gene_fractions(
-    subtype_decoy_gene_fractions: dict,
-    fout: str,
+def draw_cbase_likely_passenger_proportion_barplot(
+    subtype_to_likely_passenger_proportion: dict,
+    out_fn: str,
+    num_genes: int,
+    figsize: tuple = (4, 6),
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
-    data_df = pd.DataFrame(
-        list(subtype_decoy_gene_fractions.items()),
-        columns=["Subtype", "Decoy Fraction"],
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+
+    plt.figure(figsize=figsize)
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=False, right=False)
+
+    sorted_subtype_to_proportion = sorted(
+        subtype_to_likely_passenger_proportion.items(),
+        key=lambda item: item[1],
     )
-
-    data_df["Decoy Fraction"] = data_df["Decoy Fraction"].replace(0, 0.001)
-    data_df = data_df.sort_values("Decoy Fraction", ascending=False)
-
-    sns.set_context("talk", rc={"axes.linewidth": 0.8, "grid.linewidth": 0.5})
-
-    plt.figure(figsize=(6, 10))
-    ax = sns.barplot(
-        data=data_df,
-        y="Subtype",
-        x="Decoy Fraction",
-        palette="Greys_r",
+    subtypes, proportions = zip(*sorted_subtype_to_proportion)
+    plt.barh(
+        subtypes,
+        proportions,
+        color="black",
         edgecolor="black",
-        hue="Subtype",
-        legend=False,
+        alpha=0.75,
     )
-    apply_tufte_style(ax)
-    ax.set_xlim(0, 1)
-    ax.set_yticks([])
-    ax.set_ylabel("")
-    for container, label in zip(ax.containers, data_df["Subtype"]):
-        ax.bar_label(
-            container,
-            labels=[label] * len(container),
-            fontsize=14,
-            label_type="edge",
-            padding=3,
-        )
+    plt.xlim(0, 1)
+    plt.xlabel(
+        f"Proportion of Likely Passengers\nin Top {num_genes} Genes",
+        fontsize=font_scale * 10,
+    )
+    plt.ylabel("Subtype", fontsize=font_scale * 10)
 
-    plt.title(
-        "Fraction of Likely Passenger Genes in Top 50",
-        fontsize=20,
-        pad=10,
-    )
-    plt.xlabel("Likely Passenger Fraction", fontsize=18)
     plt.tight_layout()
-
-    plt.savefig(fout, transparent=True)
-
-
-def plot_cbase_top_decoy_genes_upset(
-    subtype_to_high_ranked_decoys: dict,
-    high_ranked_decoy_freqs: dict,
-    top_n: int,
-    fout: str,
-) -> None:
-    """TODO: Add docstring."""
-    top_genes = sorted(
-        high_ranked_decoy_freqs,
-        key=high_ranked_decoy_freqs.get,
-        reverse=True,
-    )[:top_n]
-    contents = {}
-    for gene in top_genes:
-        subtypes_with_gene = [
-            subtype
-            for subtype, decoys in subtype_to_high_ranked_decoys.items()
-            if gene in decoys
-        ]
-        contents[gene] = set(subtypes_with_gene)
-
-    data_df = from_contents(contents)
-
-    upset = UpSet(data_df, totals_plot_elements=0, element_size=40)
-    plt.figure(figsize=(16, 8))
-    subplots = upset.plot()
-    subplots["intersections"].set_ylabel("Number of Subtypes")
-    subplots["matrix"].set_ylabel("Likely Passengers")
-    plt.savefig(fout, transparent=True)
+    plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
     plt.close()
 
 
-def plot_cbase_driver_and_passenger_mutation_counts(
-    decoys: set,
-    drivers: set,
-    res_df: pd.DataFrame,
-    subtype: str,
+def draw_cbase_top_likely_passenger_upset(
+    subtype_to_likely_passenger_gene_overlap: dict,
+    out_fn: str,
+    min_mutation_count: int = 4,
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
-    decoy_df = res_df[res_df["Gene Name"].isin(decoys)]
-    top5_decoys = decoy_df.nlargest(5, "Observed Mutations")
-    driver_df = res_df[res_df["Gene Name"].isin(drivers)]
-    top5_drivers = driver_df.nlargest(5, "Observed Mutations")
-    top10 = pd.concat([top5_decoys, top5_drivers], ignore_index=True)
-    top10 = top10.sort_values("Observed Mutations", ascending=False)
-    fig, ax = plt.subplots(figsize=(8, 6))
-    apply_tufte_style(ax)
-    x = np.arange(len(top10))
+    gene_to_subtypes = {}
+    for subtype, genes in subtype_to_likely_passenger_gene_overlap.items():
+        for gene in genes:
+            if gene not in gene_to_subtypes:
+                gene_to_subtypes[gene] = set()
+            gene_to_subtypes[gene].add(subtype)
+    high_freq_gene_to_subtypes = {
+        gene: subtypes
+        for gene, subtypes in gene_to_subtypes.items()
+        if len(subtypes) >= min_mutation_count
+    }
+
+    data_df = from_contents(high_freq_gene_to_subtypes)
+    upset = UpSet(data_df, totals_plot_elements=0, element_size=font_scale * 20)
+
+    subplots = upset.plot()
+    subplots["intersections"].set_ylabel("Number of Subtypes", fontsize=font_scale * 10)
+    subplots["matrix"].set_ylabel("Likely Passengers", fontsize=font_scale * 10)
+
+    plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
+# ------------------------------------------------------------------------------------ #
+#                            GENE OBSERVED EXPECTED ANALYSIS                           #
+# ------------------------------------------------------------------------------------ #
+def draw_gene_expected_and_observed_mutations_barplot(
+    results_df: pd.DataFrame,
+    likely_passenger_genes: set,
+    putative_driver_genes: set,
+    out_fn: str,
+    num_genes: int = 5,
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    top_likely_passenger_df = results_df[
+        results_df["Gene Name"].isin(likely_passenger_genes)
+    ].nlargest(num_genes, "Observed Mutations")
+    top_putative_driver_df = results_df[
+        results_df["Gene Name"].isin(putative_driver_genes)
+    ].nlargest(num_genes, "Observed Mutations")
+    all_genes_df = pd.concat(
+        [top_likely_passenger_df, top_putative_driver_df],
+    ).sort_values("Observed Mutations", ascending=False)
+
+    gene_labels = [
+        f"{gene} *" if gene in putative_driver_genes else gene
+        for gene in all_genes_df["Gene Name"]
+    ]
+
+    figwidth = num_genes
+    fig, ax = plt.subplots(figsize=(figwidth, font_scale * 3))
+    x = np.arange(len(all_genes_df))
     bar_width = 0.4
+
     ax.bar(
         x - bar_width / 2,
-        top10["Observed Mutations"],
+        all_genes_df["Observed Mutations"],
         width=bar_width,
         color="black",
         label="Observed",
     )
     ax.bar(
         x + bar_width / 2,
-        top10["Expected Mutations"],
+        all_genes_df["Expected Mutations"],
         width=bar_width,
-        color="slategray",
+        color="gray",
         label="Expected",
     )
-    ax.set_xlabel("Gene", fontsize=14)
-    ax.set_ylabel("Mutation Count", fontsize=14)
+
     ax.set_xticks(x)
-    ax.tick_params(axis="x", labelsize=12)
-    ax.set_xticklabels(top10["Gene Name"], rotation=25, ha="right")
-    for label, gene in zip(ax.get_xticklabels(), top10["Gene Name"]):
-        if gene in drivers:
-            label.set_bbox(
-                {
-                    "facecolor": "#9999FF",
-                    "alpha": 0.35,
-                    "edgecolor": "none",
-                    "boxstyle": "round,pad=0.3",
-                },
-            )
-        else:
-            label.set_bbox(
-                {
-                    "facecolor": "#FF9999",
-                    "alpha": 0.35,
-                    "edgecolor": "none",
-                    "boxstyle": "round,pad=0.3",
-                },
-            )
-    driver_patch = plt.Rectangle((0, 0), 1, 1, facecolor="#9999FF", alpha=0.35)
-    passenger_patch = plt.Rectangle(
-        (0, 0),
-        1,
-        1,
-        facecolor="#FF9999",
-        alpha=0.35,
+    ax.set_xticklabels(
+        gene_labels,
+        rotation=30,
+        ha="right",
+        fontsize=font_scale * 8,
+        color="black",
     )
-    handles, labels = ax.get_legend_handles_labels()
-    handles += [driver_patch, passenger_patch]
-    labels += ["Putative Driver", "Likely Passenger"]
-    ax.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.25),
-        ncol=2,
-    )
+    ax.set_xlabel("Gene", fontsize=font_scale * 10)
+    ax.set_ylabel("Mutation Count", fontsize=font_scale * 10)
+    ax.legend(fontsize=font_scale * 8)
+
     plt.tight_layout()
-    plt.savefig(
-        f"figures/cbase_obs_exp_plots/{subtype}_cbase_driver_vs_passenger_counts.png",
-    )
+    plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close()
 
 
 # ------------------------------------------------------------------------------------ #
@@ -471,8 +449,6 @@ def plot_subtype_histogram(
             label="Avg. Sample Mutation Count Across Other Subtypes",
         )
 
-    apply_tufte_style(ax)
-
     ax.set_xlim(0, xlim)
     ax.set_title(subtype, fontsize=28, pad=5)
 
@@ -580,12 +556,3 @@ XLIM_MAPPING = {
     "LUAD": 2000,
     "LUSC": 2000,
 }
-
-
-def apply_tufte_style(ax: Axes) -> None:
-    """TODO: Add docstring."""
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_position(("outward", 6))
-    ax.spines["bottom"].set_position(("outward", 6))
-    ax.tick_params(axis="both", which="major", labelsize=20)
