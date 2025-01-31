@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from dialect.utils.postprocessing import generate_top_ranking_tables
 from dialect.utils.plotting import draw_single_interaction_network
+from dialect.utils.postprocessing import generate_top_ranking_tables
 
 
 # ------------------------------------------------------------------------------------ #

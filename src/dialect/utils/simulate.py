@@ -10,7 +10,7 @@ from scipy.stats import binom
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
-from dialect.utils.plotting import plot_mtx_sim_pr_curve
+from dialect.utils.plotting import draw_simulation_precision_recall_curve
 from dialect.utils.postprocessing import compute_epsilon_threshold
 
 
@@ -551,7 +551,7 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
 
         methods = {
             "DIALECT": dialect_rho,
-            "Fisher's Exact Test": fishers_score,
+            "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
             "MEGSA": megsa_s,
             "WeSME": wesme_score,
@@ -568,7 +568,7 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
 
         methods = {
             "DIALECT": dialect_rho,
-            "Fisher's Exact Test": fishers_score,
+            "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
             "WeSCO": wesco_score,
         }
@@ -592,9 +592,9 @@ def evaluate_matrix_simulation(
 
     y_true = get_ground_truth_labels(results_df, gt, ixn_type)
     methods = get_method_scores(results_df, num_samples, ixn_type)
-    fout = dout / f"{ixn_type}_pr_curve.png"
+    fout = dout / f"{ixn_type}_pr_curve"
 
-    plot_mtx_sim_pr_curve(
+    draw_simulation_precision_recall_curve(
         methods,
         y_true,
         fout,

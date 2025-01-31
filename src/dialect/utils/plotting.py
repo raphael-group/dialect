@@ -10,10 +10,12 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
+import scienceplots  # noqa: F401
 import seaborn as sns
 from matplotlib import rcParams
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import AutoMinorLocator
 from plotnine import (
     aes,
     element_text,
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
 # ------------------------------------------------------------------------------------ #
 FONT_FAMILY = "CMU Serif"
 FONT_STYLE = "serif"
-FONT_SIZE = 12
+FONT_SCALE = 1.5
 
 PUTATIVE_DRIVER_COLOR = "#A3C1DA"
 PUTATIVE_PASSENGER_COLOR = "#D7D7D7"
@@ -57,6 +59,8 @@ def draw_single_interaction_network(
     likely_passengers: set,
     method: str,
     fout: str,
+    figsize: tuple = (4, 4),
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
 
@@ -76,7 +80,7 @@ def draw_single_interaction_network(
             ha="center",
             va="center",
             fontfamily=FONT_STYLE,
-            fontsize=FONT_SIZE,
+            fontsize=font_scale * 8,
         )
 
     def _get_node_colors(graph: nx.Graph) -> list:
@@ -96,7 +100,7 @@ def draw_single_interaction_network(
     graph.add_edges_from(edges)
     node_colors = _get_node_colors(graph)
     pos = nx.spring_layout(graph, k=2.5, iterations=100, seed=42)
-    fig = plt.figure(figsize=(4, 4))
+    fig = plt.figure(figsize=figsize)
     ax = plt.gca()
 
     nx.draw(graph, pos, ax=ax, node_color="none", with_labels=False)
@@ -105,7 +109,7 @@ def draw_single_interaction_network(
     plt.tight_layout()
     plt.subplots_adjust(top=0.90)
 
-    plt.title(method, fontsize=16)
+    plt.title(method, fontsize=font_scale * 10)
     ax.set_aspect("equal")
     ax.axis("off")
     plt.savefig(f"{fout}.png", dpi=300, transparent=True)
@@ -116,26 +120,67 @@ def draw_single_interaction_network(
 # ------------------------------------------------------------------------------------ #
 #                                PRECISION-RECALL CURVES                               #
 # ------------------------------------------------------------------------------------ #
-def plot_mtx_sim_pr_curve(
+def draw_simulation_precision_recall_curve(
     methods: dict,
     y_true: np.ndarray,
     fout: str,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
-    figsize = (10, 8)
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+
     plt.figure(figsize=figsize)
-    set_dynamic_font_sizes(figsize=figsize)
     for method_name, scores in methods.items():
         precision, recall, _ = precision_recall_curve(y_true, scores)
         ap = average_precision_score(y_true, scores)
-        plt.plot(recall, precision, label=f"{method_name} (AUC={ap:.3f})")
+        plt.plot(
+            recall,
+            precision,
+            label=f"{method_name} (AUC={ap:.3f})",
+            linewidth=font_scale * 2,
+            alpha=0.75,
+        )
+    random_auc = sum(y_true) / len(y_true)
+    plt.axhline(
+        y=random_auc,
+        color="gray",
+        label=f"Baseline (AUC={random_auc:.3f})",
+        linewidth=font_scale * 2,
+        alpha=0.75,
+    )
+    plt.xlabel("Recall", fontsize=font_scale * 10)
+    plt.ylabel("Precision", fontsize=font_scale * 10)
 
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.legend(loc="best")
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+
+    plt.gca().patch.set_alpha(0)
+    plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+
     plt.tight_layout()
-
-    plt.savefig(fout, dpi=300)
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
     plt.close()
 
 
@@ -516,20 +561,6 @@ rcParams["font.sans-serif"] = ["Computer Modern"]
 EDGE_COLOR = "black"
 EPSILON_MUTATION_COUNT = 10
 PVALUE_THRESHOLD = 1
-
-
-def set_dynamic_font_sizes(
-    figsize: tuple,
-    base_label_size: int = 24,
-    base_tick_size: int = 20,
-) -> None:
-    """TODO: Add docstring."""
-    scale_factor = (figsize[0] * figsize[1]) / (10 * 8)
-    label_size = base_label_size * scale_factor
-    tick_size = base_tick_size * scale_factor
-    rcParams["axes.labelsize"] = label_size
-    rcParams["xtick.labelsize"] = tick_size
-    rcParams["ytick.labelsize"] = tick_size
 
 
 COLOR_MAPPING = {
