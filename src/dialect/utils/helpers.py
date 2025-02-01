@@ -20,7 +20,7 @@ def load_likely_passenger_genes(likely_passenger_dir: Path) -> set:
             continue
         subtype = likely_passenger_fn.stem
         likely_passengers = pd.read_csv(
-            likely_passenger_fn, header=None, names=["Gene"]
+            likely_passenger_fn, header=None, names=["Gene"],
         )["Gene"]
         subtype_to_likely_passengers[subtype] = set(likely_passengers)
     return subtype_to_likely_passengers

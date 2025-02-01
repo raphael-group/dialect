@@ -1,18 +1,18 @@
 """TODO: Add docstring."""
 
-from pathlib import Path
-import pandas as pd
 from argparse import ArgumentParser
+from pathlib import Path
 
+import pandas as pd
+
+from dialect.utils.helpers import (
+    load_likely_passenger_genes,
+    load_putative_driver_genes,
+)
 from dialect.utils.plotting import (
     draw_cbase_likely_passenger_proportion_barplot,
     draw_cbase_top_likely_passenger_upset,
     draw_gene_expected_and_observed_mutations_barplot,
-)
-
-from dialect.utils.helpers import (
-    load_putative_driver_genes,
-    load_likely_passenger_genes,
 )
 
 
@@ -59,8 +59,12 @@ def load_all_subtype_single_gene_results(results_dir: Path, num_genes: int) -> d
     """TODO: Add docstring."""
     subtype_to_results_df = {}
     for single_gene_results_fn in results_dir.iterdir():
-        subtype = single_gene_results_fn.stem  # TODO change for real data
-        subtype_results_df = pd.read_csv(single_gene_results_fn)  # TODO update path
+        subtype = (
+            single_gene_results_fn.stem
+        )  # TODO: update to take in server results dir
+        subtype_results_df = pd.read_csv(
+            single_gene_results_fn
+        )  # TODO: update to take in server results dir
         sorted_subtype_results_df = subtype_results_df.sort_values(
             by="CBaSE Pos. Sel. Phi",
             ascending=False,
@@ -166,8 +170,6 @@ def main() -> None:
             putative_driver_genes,
             out_fn=args.out_dir / f"{subtype}",
         )
-        print(args.out_dir / f"{subtype}")
-        quit()
 
 
 if __name__ == "__main__":

@@ -11,11 +11,9 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import scienceplots  # noqa: F401
-import seaborn as sns
 from matplotlib import rcParams
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-from matplotlib.ticker import AutoMinorLocator
 from plotnine import (
     aes,
     element_text,
@@ -328,92 +326,62 @@ def draw_gene_expected_and_observed_mutations_barplot(
 # ------------------------------------------------------------------------------------ #
 #                        TOP RANKED LIKELY PASSENGER PROPORTION                        #
 # ------------------------------------------------------------------------------------ #
-def plot_decoy_gene_fractions(
-    data_filepath: str,
-    num_pairs: int,
-    is_me: bool,
-    out_dir: str,
+def draw_likely_passenger_gene_proportion_violinplot(
+    method_to_subtype_to_passenger_proportion: dict,
+    out_fn: str,
+    figsize: tuple = (6, 4),
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
-    data_df = pd.read_csv(data_filepath)
-    if not is_me:
-        data_df = data_df[data_df["Method"] != "MEGSA"]
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
 
-    subtypes = data_df["Subtype"].unique()
-    colors = [
-        "green",
-        "blue",
-        "red",
-        "purple",
-        "yellow",
-        "orange",
-        "black",
-        "brown",
+    methods = list(method_to_subtype_to_passenger_proportion.keys())
+    values = [
+        list(method_to_subtype_to_passenger_proportion[method].values())
+        for method in methods
     ]
-    shapes = ["o", "s", "^", "D"]
+    methods = [
+        method.replace("Fisher's Exact Test", "Fisher's\nExact Test")
+        for method in methods
+    ]
 
-    color_shape_combinations = list(product(colors, shapes))
-    color_shape_mapping = {
-        subtypes[i]: color_shape_combinations[i] for i in range(len(subtypes))
-    }
-    color_mapping = {
-        subtype: combo[0] for subtype, combo in color_shape_mapping.items()
-    }
-    shape_mapping = {
-        subtype: combo[1] for subtype, combo in color_shape_mapping.items()
-    }
-    ixn_type = "ME" if is_me else "CO"
-
-    plot = (
-        ggplot(
-            data_df,
-            aes(x="Method", y="Fraction", color="Subtype", shape="Subtype"),
-        )
-        + geom_boxplot(
-            aes(group="Method"),
-            alpha=0.5,
-            outlier_alpha=0,
-            show_legend=False,
-        )
-        + geom_point(
-            position=position_jitter(width=0.25),
-            size=5,
-            alpha=0.75,
-            show_legend=True,
-        )
-        + scale_color_manual(values=color_mapping)
-        + scale_shape_manual(values=shape_mapping)
-        + labs(
-            title=f"Proportion of Top-Ranked {ixn_type} Pairs w/ Likely Passengers",
-            x="Method",
-            y=f"Proportion of Top {num_pairs} {ixn_type} Pairs with Decoy Genes",
-            color="Subtype",
-            shape="Subtype",
-        )
-        + theme_tufte(base_family="Computer Modern")
-        + theme(
-            figure_size=(12, 8),
-            plot_title=element_text(size=20, weight="bold"),
-            axis_title=element_text(size=18),
-            axis_text=element_text(size=16),
-            legend_title=element_text(size=14, hjust=0.5),
-            legend_text=element_text(size=12),
-            legend_position="bottom",
-            legend_box="horizontal",
-        )
-        + guides(
-            color=guide_legend(title="Subtypes", ncol=11),
-            shape=guide_legend(title="Subtypes", ncol=11),
-        )
-        + ylim(0, 1)
+    x_positions = np.arange(len(methods))
+    fig, ax = plt.subplots(figsize=figsize)
+    vp = ax.violinplot(
+        values,
+        positions=x_positions,
+        showextrema=True,
+        showmedians=True,
     )
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(methods)
+    ax.set_xlabel("Method", fontsize=font_scale * 10)
+    ax.set_ylabel("Likely Passenger\nProportion", fontsize=font_scale * 10)
 
-    dout = Path(out_dir)
-    dout.mkdir(parents=True, exist_ok=True)
-    plot.save(
-        f"{out_dir}/{ixn_type}_decoy_gene_fractions_boxplot.svg",
-        dpi=300,
-    )
+    for body in vp["bodies"]:
+        body.set_facecolor("lightslategray")
+        body.set_edgecolor("darkslategray")
+        body.set_alpha(0.8)
+
+    plt.setp(vp["cmedians"], color="maroon", linewidth=font_scale)
+    plt.setp(vp["cmins"], color="slategray", linewidth=font_scale)
+    plt.setp(vp["cmaxes"], color="slategray", linewidth=font_scale)
+    plt.setp(vp["cbars"], color="slategray", linewidth=font_scale)
+
+    ax.minorticks_on()
+    ax.tick_params(axis="both", direction="in", length=font_scale * 4, width=font_scale)
+    ax.tick_params(axis="x", which="minor", top=False, bottom=False)
+    ax.tick_params(axis="y", which="minor", left=True, right=True)
+    ax.tick_params(axis="x", which="major", top=False, bottom=True)
+    ax.tick_params(axis="y", which="major", left=True, right=True)
+    ax.patch.set_alpha(0)
+
+    plt.tight_layout()
+    plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close()
 
 
 # ------------------------------------------------------------------------------------ #
