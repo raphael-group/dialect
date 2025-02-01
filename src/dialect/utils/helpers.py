@@ -12,6 +12,26 @@ from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
 
+def load_likely_passenger_genes(likely_passenger_dir: Path) -> set:
+    """TODO: Add docstring."""
+    subtype_to_likely_passengers = {}
+    for likely_passenger_fn in likely_passenger_dir.iterdir():
+        if likely_passenger_fn.suffix == ".md":
+            continue
+        subtype = likely_passenger_fn.stem
+        likely_passengers = pd.read_csv(
+            likely_passenger_fn, header=None, names=["Gene"],
+        )["Gene"]
+        subtype_to_likely_passengers[subtype] = set(likely_passengers)
+    return subtype_to_likely_passengers
+
+
+def load_putative_driver_genes(driver_filepath: Path) -> set:
+    """TODO: Add docstring."""
+    driver_df = pd.read_csv(driver_filepath, sep="\t", index_col=0)
+    return set(driver_df.index + "_M") | set(driver_df.index + "_N")
+
+
 def verify_cnt_mtx_and_bmr_pmfs(cnt_mtx: str, bmr_pmfs: str) -> None:
     """TODO: Add docstring."""
     check_file_exists(cnt_mtx)

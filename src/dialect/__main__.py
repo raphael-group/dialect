@@ -75,7 +75,7 @@ def _handle_simulate_command(args: Namespace) -> None:
         evaluate_matrix_simulation(
             results_fn=args.results,
             simulation_info_fn=args.info,
-            dout=args.out,
+            out=args.out,
             ixn_type=args.ixn_type,
         )
 

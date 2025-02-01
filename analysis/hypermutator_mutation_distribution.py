@@ -1,55 +1,33 @@
 """TODO: Add docstring."""
 
-import os
+from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
 
-from dialect.utils.plotting import plot_sample_mutation_count_subtype_histograms
-
-HIGH_AVG_MUT_FREQ_SUBTYPES = [
-    "UCEC",
-    "SKCM",
-    "CRAD",
-    "STAD",
-    "LUAD",
-    "LUSC",
-]
-
-RESULTS_DIR = "output/TOP_500_Genes"
-FIGURES_DIR = "figures"
+from dialect.utils.plotting import draw_sample_mutation_count_subtype_histograms
 
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def compute_average_across_others(results_dir: str, exclude_list: list) -> float:
+def build_argument_parser() -> ArgumentParser:
     """TODO: Add docstring."""
-    all_dirs = os.listdir(results_dir)
-    all_other_samples = []
-
-    for d in all_dirs:
-        full_path = Path(results_dir) / d
-        if not full_path.is_dir():
-            continue
-        if d in exclude_list:
-            continue
-
-        count_csv = full_path / "count_matrix.csv"
-        if count_csv.exists():
-            cnt_df = pd.read_csv(count_csv, index_col=0)
-            sample_sums = cnt_df.sum(axis=1)
-            all_other_samples.append(sample_sums)
-
-    combined_sums = pd.concat(all_other_samples)
-    return combined_sums.mean()
+    parser = ArgumentParser()
+    parser.add_argument("-r", "--results_dir", type=Path, required=True)
+    parser.add_argument("-o", "--out_dir", type=Path, required=True)
+    parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,LUAD,LUSC")
+    return parser
 
 
-def get_mut_count_per_sample(results_dir: str, subtype: str) -> pd.Series:
+def compute_avg_sample_mutation_count(results_dir: Path) -> pd.Series:
     """TODO: Add docstring."""
-    filepath = Path(results_dir) / subtype / "count_matrix.csv"
-    res_df = pd.read_csv(filepath, index_col=0)
-    return res_df.sum(axis=1)
+    subtype_sample_mutation_count_sums = []
+    for subtype in results_dir.iterdir():
+        subtype_cnt_mtx_fn = subtype / "count_matrix.csv"
+        cnt_mtx_df = pd.read_csv(subtype_cnt_mtx_fn, index_col=0)
+        subtype_sample_mutation_count_sums.append(cnt_mtx_df.sum(axis=1))
+    return pd.concat(subtype_sample_mutation_count_sums).mean()
 
 
 # ------------------------------------------------------------------------------------ #
@@ -57,19 +35,31 @@ def get_mut_count_per_sample(results_dir: str, subtype: str) -> pd.Series:
 # ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    fout = Path(FIGURES_DIR) / "avg_mut_freq_histograms.svg"
-    avg_across_others = compute_average_across_others(
-        RESULTS_DIR,
-        HIGH_AVG_MUT_FREQ_SUBTYPES,
+    parser = build_argument_parser()
+    args = parser.parse_args()
+
+    subtype_avg_sample_mutation_count = compute_avg_sample_mutation_count(
+        args.results_dir,
     )
-    subtype_sample_mut_counts = {}
-    for subtype in HIGH_AVG_MUT_FREQ_SUBTYPES:
-        mut_count_per_sample = get_mut_count_per_sample(RESULTS_DIR, subtype)
-        subtype_sample_mut_counts[subtype] = mut_count_per_sample
-    plot_sample_mutation_count_subtype_histograms(
-        subtype_sample_mut_counts,
-        avg_across_others,
-        fout,
+
+    subtypes = [s.strip() for s in args.subtypes.split(",") if s.strip()]
+    xlim_mapping = {}
+    subtype_to_sample_mutation_counts = {}
+    for subtype in subtypes:
+        subtype_cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
+        sample_mutation_counts = pd.read_csv(
+            subtype_cnt_mtx_fn,
+            index_col=0,
+        ).sum(axis=1)
+        subtype_to_sample_mutation_counts[subtype] = sample_mutation_counts
+        xlim_mapping[subtype] = sample_mutation_counts.max() * 1.01
+
+    out_fn = Path(args.out_dir) / "sample_mutation_count_subtype_histograms"
+    draw_sample_mutation_count_subtype_histograms(
+        subtype_to_sample_mutation_counts,
+        subtype_avg_sample_mutation_count,
+        xlim_mapping,
+        out_fn,
     )
 
 
