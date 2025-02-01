@@ -2,39 +2,14 @@
 
 from __future__ import annotations
 
-from itertools import product
-from pathlib import Path
-from typing import TYPE_CHECKING
+import math
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-import scienceplots  # noqa: F401
-from matplotlib import rcParams
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
-from plotnine import (
-    aes,
-    element_text,
-    geom_boxplot,
-    geom_point,
-    ggplot,
-    guide_legend,
-    guides,
-    labs,
-    position_jitter,
-    scale_color_manual,
-    scale_shape_manual,
-    theme,
-    theme_tufte,
-    ylim,
-)
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from upsetplot import UpSet, from_contents
-
-if TYPE_CHECKING:
-    from matplotlib.axes import Axes
 
 # ------------------------------------------------------------------------------------ #
 #                                   MODULE CONSTANTS                                   #
@@ -387,140 +362,49 @@ def draw_likely_passenger_gene_proportion_violinplot(
 # ------------------------------------------------------------------------------------ #
 #                            MUTATION FREQUENCY DISTRIBUTION                           #
 # ------------------------------------------------------------------------------------ #
-def plot_subtype_histogram(
-    ax: Axes,
-    subtype: str,
-    data_series: pd.Series,
-    avg_across_others: float,
+def draw_sample_mutation_count_subtype_histograms(
+    subtype_to_sample_mutation_counts: dict,
+    subtype_avg_sample_mutation_count: float,
+    xlim_mapping: dict,
+    out_fn: str,
+    figsize: tuple = (5, 6),
+    font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
-    color = COLOR_MAPPING[subtype]
-    xlim = XLIM_MAPPING[subtype]
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
 
-    ax.hist(
-        data_series,
-        bins=20,
-        range=(0, xlim),
-        color=color,
-        alpha=0.8,
-        edgecolor="black",
-        log=True,
-    )
-    ax.set_ylim(1, 1000)
+    n_subtypes = len(subtype_to_sample_mutation_counts)
+    ncols = 2
 
-    if 0 < avg_across_others < xlim:
-        ax.axvline(
-            avg_across_others,
-            color="red",
-            linewidth=2,
-            linestyle="--",
-            label="Avg. Sample Mutation Count Across Other Subtypes",
-        )
+    nrows = math.ceil(n_subtypes / ncols)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    axes = axes.flatten() if n_subtypes > 1 else [axes]
 
-    ax.set_xlim(0, xlim)
-    ax.set_title(subtype, fontsize=28, pad=5)
-
-
-def plot_sample_mutation_count_subtype_histograms(
-    subtype_sample_mut_counts: dict,
-    avg_mut_cnt: float,
-    fout: str,
-) -> None:
-    """TODO: Add docstring."""
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 20))
-    axes = axes.flatten()
-
-    for i, (subtype, data_series) in enumerate(
-        subtype_sample_mut_counts.items(),
+    default_color = "lightslategray"
+    for i, (subtype, sample_mutation_counts) in enumerate(
+        subtype_to_sample_mutation_counts.items(),
     ):
         ax = axes[i]
-        plot_subtype_histogram(ax, subtype, data_series, avg_mut_cnt)
-
-    plt.subplots_adjust(hspace=0.3, wspace=0.2, bottom=0.1)
-
-    fig.text(
-        0.5,
-        0.06,
-        "Total Sample Mutation Count",
-        ha="center",
-        va="center",
-        fontsize=28,
-    )
-    fig.text(
-        0.06,
-        0.5,
-        "Number of Samples",
-        ha="center",
-        va="center",
-        rotation="vertical",
-        fontsize=28,
-    )
-
-    legend_handles = [
-        Patch(
-            facecolor="lightcoral",
+        ax.hist(
+            sample_mutation_counts,
+            color=default_color,
+            alpha=0.8,
             edgecolor="black",
-            label="Mut Cnt: 0-30k",
-        ),
-        Patch(facecolor="moccasin", edgecolor="black", label="Mut Cnt: 0-0k"),
-        Patch(facecolor="khaki", edgecolor="black", label="Mut Cnt: 0-2k"),
-        Line2D(
-            [0],
-            [0],
+            log=True,
+        )
+        ax.axvline(
+            subtype_avg_sample_mutation_count,
             color="red",
-            linewidth=2,
+            linewidth=font_scale,
             linestyle="--",
-            label="Avg. Sample Mutation Count Across Other Subtypes",
-        ),
-    ]
+        )
+        ax.set_xlim(0, xlim_mapping[subtype])
+        ax.set_ylim(1, 1e3)
+        ax.set_title(subtype, fontsize=font_scale * 10)
 
-    fig.legend(
-        handles=legend_handles,
-        loc="lower center",
-        ncol=4,
-        fontsize=24,
-        frameon=False,
-    )
-
-    dout = Path(fout).parent
-    dout.mkdir(parents=True, exist_ok=True)
-    fig.savefig(
-        fout,
-        format="svg",
-        bbox_inches="tight",
-        transparent=True,
-    )
+    plt.tight_layout()
+    fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
     plt.close(fig)
 
-
-# ------------------------------------------------------------------------------------ #
-#                              SET DEFAULT PLOTTING STYLE                              #
-# ------------------------------------------------------------------------------------ #
-rcParams["text.usetex"] = True
-rcParams["font.family"] = "sans-serif"
-rcParams["font.serif"] = ["Computer Modern"]
-rcParams["font.sans-serif"] = ["Computer Modern"]
-
-
-EDGE_COLOR = "black"
-EPSILON_MUTATION_COUNT = 10
-PVALUE_THRESHOLD = 1
-
-
-COLOR_MAPPING = {
-    "UCEC": "lightcoral",
-    "SKCM": "lightcoral",
-    "CRAD": "moccasin",
-    "STAD": "moccasin",
-    "LUAD": "khaki",
-    "LUSC": "khaki",
-}
-
-XLIM_MAPPING = {
-    "UCEC": 32000,
-    "SKCM": 32000,
-    "CRAD": 10000,
-    "STAD": 10000,
-    "LUAD": 2000,
-    "LUSC": 2000,
-}

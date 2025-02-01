@@ -59,12 +59,10 @@ def load_all_subtype_single_gene_results(results_dir: Path, num_genes: int) -> d
     """TODO: Add docstring."""
     subtype_to_results_df = {}
     for single_gene_results_fn in results_dir.iterdir():
-        subtype = (
-            single_gene_results_fn.stem
-        )  # TODO: update to take in server results dir
+        subtype = single_gene_results_fn.stem
         subtype_results_df = pd.read_csv(
-            single_gene_results_fn
-        )  # TODO: update to take in server results dir
+            single_gene_results_fn,
+        )
         sorted_subtype_results_df = subtype_results_df.sort_values(
             by="CBaSE Pos. Sel. Phi",
             ascending=False,

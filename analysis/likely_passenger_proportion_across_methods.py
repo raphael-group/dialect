@@ -127,7 +127,7 @@ def main() -> None:
         args.likely_passenger_dir,
     )
     if args.mutual_exclusivity:
-        method_to_subtype_to_passenger_proportion = compute_likely_passenger_proportions(
+        method_to_subtype_to_proportion = compute_likely_passenger_proportions(
             results_dir=args.results_dir,
             subtype_to_likely_passengers=subtype_to_likely_passengers,
             num_pairs=args.num_pairs,
@@ -135,7 +135,7 @@ def main() -> None:
             generate_top_ranked_interaction_table=generate_top_ranked_me_interaction_tables,
         )
     else:  # args.cooccurrence
-        method_to_subtype_to_passenger_proportion = compute_likely_passenger_proportions(
+        method_to_subtype_to_proportion = compute_likely_passenger_proportions(
             results_dir=args.results_dir,
             subtype_to_likely_passengers=subtype_to_likely_passengers,
             num_pairs=args.num_pairs,
@@ -143,7 +143,7 @@ def main() -> None:
             generate_top_ranked_interaction_table=generate_top_ranked_co_interaction_tables,
         )
     draw_likely_passenger_gene_proportion_violinplot(
-        method_to_subtype_to_passenger_proportion,
+        method_to_subtype_to_proportion,
         out_fn=args.out_dir / "likely_passenger_proportion_violinplot",
     )
 
