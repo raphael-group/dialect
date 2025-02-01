@@ -24,7 +24,7 @@ for subtype in "${SUBTYPES[@]}"; do
           for i in "${!TAU_LOW_VALUES[@]}"; do
             tau_low="${TAU_LOW_VALUES[i]}"
             tau_high="${TAU_HIGH_VALUES[i]}"
-            for run in {1..10}; do
+            for run in $(seq 1 $NUM_RUNS); do
 
               JOB_NAME="${subtype}_NS${num_samples}_${num_me_pairs}ME_${num_co_pairs}CO_${num_likely_psngrs}P_${tau_low}TL_${tau_high}TH_R${run}"
               SLURM_OUT_FN="${SLURM_LOG_DIR}/${JOB_NAME}.out"
