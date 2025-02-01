@@ -223,10 +223,11 @@ def add_simulate_create_matrix_gene_parser(subparsers: _SubParsersAction) -> Non
         type=int,
         default=100,
     )
-    matrix_gene_parser.add_argument("-nme", "--num_me_pairs", type=int, default=10)
-    matrix_gene_parser.add_argument("-nco", "--num_co_pairs", type=int, default=10)
+    matrix_gene_parser.add_argument("-nme", "--num_me_pairs", required=True, type=int)
+    matrix_gene_parser.add_argument("-nco", "--num_co_pairs", required=True, type=int)
     matrix_gene_parser.add_argument("-n", "--num_samples", type=int, default=1000)
-    matrix_gene_parser.add_argument("-ixn", "--ixn_strength", type=float, default=0.05)
+    matrix_gene_parser.add_argument("-tl", "--tau_low", required=True, type=float)
+    matrix_gene_parser.add_argument("-th", "--tau_high", required=True, type=float)
     matrix_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 

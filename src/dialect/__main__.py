@@ -67,7 +67,8 @@ def _handle_simulate_command(args: Namespace) -> None:
             num_me_pairs=args.num_me_pairs,
             num_co_pairs=args.num_co_pairs,
             num_samples=args.num_samples,
-            ixn_strength=args.ixn_strength,
+            tau_uv_low=args.tau_low,
+            tau_uv_high=args.tau_high,
             seed=args.seed,
         )
     elif args.mode == "evaluate" and args.type == "matrix":

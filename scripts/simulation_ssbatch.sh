@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH -N 1                   # Number of nodes
 #SBATCH --ntasks-per-node=4    # CPUs per node
-#SBATCH -t 96:00:00            # Walltime
-#SBATCH --mem=32GB             # Memory
+#SBATCH -t 144:00:00            # Walltime
+#SBATCH --mem=50GB             # Memory
 #SBATCH --job-name=matrix_sim  # Job name
 
 source /n/fs/ragr-research/users/ashuaibi/anaconda3/etc/profile.d/conda.sh
@@ -13,13 +13,15 @@ NUM_SAMPLES="$2"
 NUM_ME_PAIRS="$3"
 NUM_CO_PAIRS="$4"
 NUM_LIKELY_PASSENGERS="$5"
-IXN_STRENGTH="$6"
+TAU_LOW="$6"
+TAU_HIGH="$7"
+RUN="$8"
 
 DRIVER_GENES_FILE="data/references/OncoKB_Cancer_Gene_List.tsv"
 COUNT_MATRIX="output/TOP_500_Genes/${SUBTYPE}/count_matrix.csv"
 BMR_PMFS="output/TOP_500_Genes/${SUBTYPE}/bmr_pmfs.csv"
 OUTPUT_BASE="output/SIMULATIONS"
-OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P_${IXN_STRENGTH}IXN"
+OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P_${TAU_LOW}TL_${TAU_HIGH}TH_R${RUN}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -34,7 +36,8 @@ dialect simulate create matrix \
   -nme "$NUM_ME_PAIRS" \
   -nco "$NUM_CO_PAIRS" \
   -n "$NUM_SAMPLES" \
-  -ixn "$IXN_STRENGTH"
+  -tau_low "$TAU_LOW" \
+  -tau_high "$TAU_HIGH"
 
 dialect identify \
   -c "$OUTPUT_DIR/count_matrix.csv" \

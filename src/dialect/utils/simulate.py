@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import binom
+from scipy.stats import binom, truncnorm
 
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
@@ -258,13 +258,20 @@ def create_matrix_simulation(
     num_me_pairs: int,
     num_co_pairs: int,
     num_samples: int,
-    ixn_strength: float,
+    tau_uv_low: float,
+    tau_uv_high: float,
     seed: int = 42,
 ) -> None:
     """TODO: Add docstring."""
     rng = np.random.default_rng(seed)
     dir_out = Path(dout)
     dir_out.mkdir(parents=True, exist_ok=True)
+    tau_midpoint = (tau_uv_low + tau_uv_high) / 2
+    tau_std_dev = (tau_uv_high - tau_uv_low) / 6
+    a, b = (
+        (tau_uv_low - tau_midpoint) / tau_std_dev,
+        (tau_uv_high - tau_midpoint) / tau_std_dev,
+    )
 
     cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx_fn, bmr_pmfs_fn)
 
@@ -303,8 +310,20 @@ def create_matrix_simulation(
         bmr_pmf_a = arr_to_dict(bmr_dict[gene_a])
         bmr_pmf_b = arr_to_dict(bmr_dict[gene_b])
 
-        tau_01 = ixn_strength
-        tau_10 = ixn_strength
+        tau_01 = truncnorm.rvs(
+            a,
+            b,
+            loc=tau_midpoint,
+            scale=tau_std_dev,
+            random_state=rng,
+        )
+        tau_10 = truncnorm.rvs(
+            a,
+            b,
+            loc=tau_midpoint,
+            scale=tau_std_dev,
+            random_state=rng,
+        )
         tau_11 = 0.0
 
         interaction = simulate_pairwise_gene_somatic_mutations(
@@ -322,7 +341,13 @@ def create_matrix_simulation(
         bmr_pmf_a = arr_to_dict(bmr_dict[gene_a])
         bmr_pmf_b = arr_to_dict(bmr_dict[gene_b])
 
-        tau_11 = ixn_strength
+        tau_11 = truncnorm.rvs(
+            a,
+            b,
+            loc=tau_midpoint,
+            scale=tau_std_dev,
+            random_state=rng,
+        )
         tau_01 = 0.0
         tau_10 = 0.0
 
@@ -364,8 +389,8 @@ def create_matrix_simulation(
         "CO Pairs": co_pairs,
         "Likely Passengers": likely_passengers,
         "num_samples": num_samples,
-        "ME tau_01, tau_10": ixn_strength,
-        "CO tau_11": ixn_strength,
+        "tau_low": tau_uv_low,
+        "tau_high": tau_uv_high,
     }
     gt_out_fn = dir_out / "matrix_simulation_info.json"
     with gt_out_fn.open("w") as f:
