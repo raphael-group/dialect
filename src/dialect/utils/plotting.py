@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interp1d
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from upsetplot import UpSet, from_contents
 
@@ -151,6 +152,180 @@ def draw_simulation_precision_recall_curve(
         edgecolor="black",
     )
 
+    plt.tight_layout()
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
+def draw_average_simulation_precision_recall_curve(
+    all_methods: list,
+    all_y_true: list,
+    fout: str,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+    plt.figure(figsize=figsize)
+
+    method_names = list(all_methods[0].keys())
+    fixed_recall_points = np.linspace(0, 1, 10001)
+    for idx, method_name in enumerate(method_names):
+        single_curve_precisions = []
+        auprc_vals = []
+        for y_true, methods_dict in zip(all_y_true, all_methods):
+            scores = methods_dict[method_name]
+            single_precision, single_recall, _ = precision_recall_curve(y_true, scores)
+
+            interp_func = interp1d(
+                single_recall,
+                single_precision,
+                kind="linear",
+                bounds_error=False,
+                fill_value=(1, 0),
+            )
+            interp_precision = interp_func(fixed_recall_points)
+            single_curve_precisions.append(interp_precision)
+            auprc_vals.append(average_precision_score(y_true, scores))
+
+        precision_arr = np.array(single_curve_precisions)
+        precision_mean = np.mean(precision_arr, axis=0)
+        precision_std_dev = np.std(precision_arr, axis=0)
+        plt.plot(
+            fixed_recall_points,
+            precision_mean,
+            label=f"{method_name} (AUC={np.mean(auprc_vals):.3f})",
+            linewidth=2,
+            alpha=0.8,
+            color=f"C{idx}",
+        )
+        plt.fill_between(
+            fixed_recall_points,
+            np.clip(precision_mean - precision_std_dev, 0, 1),
+            np.clip(precision_mean + precision_std_dev, 0, 1),
+            color=f"C{idx}",
+            alpha=0.2,
+        )
+
+    total_positives = sum(np.sum(y_true) for y_true in all_y_true)
+    total_samples = sum(len(y_true) for y_true in all_y_true)
+    baseline = total_positives / total_samples if total_samples > 0 else 0
+
+    plt.axhline(
+        y=baseline,
+        color="gray",
+        label=f"Baseline (AUC={baseline:.3f})",
+        linewidth=font_scale * 2,
+        alpha=0.75,
+    )
+
+    plt.xlabel("Recall", fontsize=font_scale * 10)
+    plt.ylabel("Precision", fontsize=font_scale * 10)
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+    leg = plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+    leg.get_frame().set_edgecolor("k")
+    plt.gca().patch.set_alpha(0)
+    plt.tight_layout()
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
+def draw_concat_simulation_precision_recall_curve(
+    all_methods: list,
+    all_y_true: list,
+    fout: str,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+    plt.figure(figsize=figsize)
+
+    method_names = list(all_methods[0].keys())
+
+    for idx, method_name in enumerate(method_names):
+        y_true_concat = []
+        scores_concat = []
+        for y_true, methods_dict in zip(all_y_true, all_methods):
+            scores = methods_dict[method_name]
+            y_true_concat.append(y_true)
+            scores_concat.append(scores)
+        y_true_concat = np.concatenate(y_true_concat)
+        scores_concat = np.concatenate(scores_concat)
+
+        precision, recall, _ = precision_recall_curve(y_true_concat, scores_concat)
+        auc_val = average_precision_score(y_true_concat, scores_concat)
+        plt.plot(
+            recall,
+            precision,
+            label=f"{method_name} (AUC={auc_val:.3f})",
+            linewidth=font_scale * 2,
+            alpha=0.75,
+            color=f"C{idx}",
+        )
+
+    total_positives = sum(np.sum(y_true) for y_true in all_y_true)
+    total_samples = sum(len(y_true) for y_true in all_y_true)
+    baseline = total_positives / total_samples if total_samples > 0 else 0
+
+    plt.axhline(
+        y=baseline,
+        color="gray",
+        label=f"Baseline (AUC={baseline:.3f})",
+        linewidth=font_scale * 2,
+        alpha=0.75,
+    )
+
+    plt.xlabel("Recall", fontsize=font_scale * 10)
+    plt.ylabel("Precision", fontsize=font_scale * 10)
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+    leg = plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+    leg.get_frame().set_edgecolor("k")
+    plt.gca().patch.set_alpha(0)
     plt.tight_layout()
     plt.savefig(f"{fout}.png", dpi=300, transparent=True)
     plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
@@ -407,4 +582,3 @@ def draw_sample_mutation_count_subtype_histograms(
     fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
     fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
     plt.close(fig)
-

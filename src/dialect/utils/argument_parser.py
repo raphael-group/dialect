@@ -1,6 +1,7 @@
 """TODO: Add docstring."""
 
 from argparse import ArgumentParser, ArgumentTypeError, _SubParsersAction
+from pathlib import Path
 
 
 def add_generate_parser(subparsers: _SubParsersAction) -> None:
@@ -13,13 +14,13 @@ def add_generate_parser(subparsers: _SubParsersAction) -> None:
         "-m",
         "--maf",
         required=True,
-        help="Path to the input MAF file",
+        type=Path,
     )
     generate_parser.add_argument(
         "-o",
         "--out",
         required=True,
-        help="Path to the output directory",
+        type=Path,
     )
     generate_parser.add_argument(
         "-r",
@@ -46,19 +47,19 @@ def add_identify_parser(subparsers: _SubParsersAction) -> None:
         "-c",
         "--cnt",
         required=True,
-        help="Path to the input count matrix file",
+        type=Path,
     )
     identify_parser.add_argument(
         "-b",
         "--bmr",
         required=True,
-        help="Path to the BMR file",
+        type=Path,
     )
     identify_parser.add_argument(
         "-o",
         "--out",
         required=True,
-        help="Path to the output directory",
+        type=Path,
     )
     identify_parser.add_argument(
         "-k",
@@ -71,7 +72,7 @@ def add_identify_parser(subparsers: _SubParsersAction) -> None:
         "-cb",
         "--cbase_stats",
         default=None,
-        help="Path to the cbase results file",
+        type=Path,
     )
 
 
@@ -85,13 +86,13 @@ def add_compare_parser(subparsers: _SubParsersAction) -> None:
         "-c",
         "--cnt",
         required=True,
-        help="Path to the input count matrix file",
+        type=Path,
     )
     compare_parser.add_argument(
         "-o",
         "--out",
         required=True,
-        help="Path to the output directory",
+        type=Path,
     )
     compare_parser.add_argument(
         "-k",
@@ -118,19 +119,19 @@ def add_merge_parser(subparsers: _SubParsersAction) -> None:
         "-d",
         "--dialect",
         required=True,
-        help="Path to the DIALECT pairwise interaction results",
+        type=Path,
     )
     merge_parser.add_argument(
         "-a",
         "--alt",
         required=True,
-        help="Path to the comparison interaction results",
+        type=Path,
     )
     merge_parser.add_argument(
         "-o",
         "--out",
         required=True,
-        help="Path to the output directory",
+        type=Path,
     )
 
 
@@ -165,7 +166,7 @@ def add_simulate_create_single_gene_parser(subparsers: _SubParsersAction) -> Non
     )
     single_gene_parser.add_argument("-l", "--length", type=int, default=10000)
     single_gene_parser.add_argument("-m", "--mu", type=float, default=1e-6)
-    single_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    single_gene_parser.add_argument("-o", "--out", type=Path, required=True)
     single_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 def add_simulate_create_pair_gene_parser(subparsers: _SubParsersAction) -> None:
@@ -183,7 +184,7 @@ def add_simulate_create_pair_gene_parser(subparsers: _SubParsersAction) -> None:
     pair_gene_parser.add_argument("-lb", "--length_b", type=int, default=10000)
     pair_gene_parser.add_argument("-ma", "--mu_a", type=float, default=1e-6)
     pair_gene_parser.add_argument("-mb", "--mu_b", type=float, default=1e-6)
-    pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    pair_gene_parser.add_argument("-o", "--out", type=Path, required=True)
     pair_gene_parser.add_argument("-s", "--seed", type=int, default=42)
 
 
@@ -197,31 +198,37 @@ def add_simulate_create_matrix_gene_parser(subparsers: _SubParsersAction) -> Non
         "-c",
         "--cnt_mtx",
         required=True,
-        help="Path to the count matrix file",
+        type=Path,
     )
     matrix_gene_parser.add_argument(
         "-b",
         "--bmr_pmfs",
         required=True,
-        help="Path to the BMR PMFs file",
+        type=Path,
     )
     matrix_gene_parser.add_argument(
         "-d",
         "--driver_genes",
         required=True,
-        help="Path to the driver genes file",
+        type=Path,
     )
     matrix_gene_parser.add_argument(
         "-o",
         "--out",
         required=True,
-        help="Path to the output directory",
+        type=Path,
     )
     matrix_gene_parser.add_argument(
         "-nlp",
         "--num_likely_passengers",
         type=int,
         default=100,
+    )
+    matrix_gene_parser.add_argument(
+        "-dp",
+        "--driver_proportion",
+        type=float,
+        default=1.0,
     )
     matrix_gene_parser.add_argument("-nme", "--num_me_pairs", required=True, type=int)
     matrix_gene_parser.add_argument("-nco", "--num_co_pairs", required=True, type=int)
@@ -257,13 +264,13 @@ def add_simulate_evaluate_single_gene_parser(subparsers: _SubParsersAction) -> N
         "-p",
         "--params",
         required=True,
-        help="Path to the parameters file",
+        type=Path,
     )
     single_gene_parser.add_argument(
         "-d",
         "--data",
         required=True,
-        help="Path to the data file",
+        type=Path,
     )
     single_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
@@ -277,13 +284,13 @@ def add_simulate_evaluate_pair_gene_parser(subparsers: _SubParsersAction) -> Non
         "-p",
         "--params",
         required=True,
-        help="Path to the parameters file",
+        type=Path,
     )
     pair_gene_parser.add_argument(
         "-d",
         "--data",
         required=True,
-        help="Path to the data file",
+        type=Path,
     )
     pair_gene_parser.add_argument("-o", "--out", type=str, required=True)
 
@@ -297,16 +304,22 @@ def add_simulate_evaluate_matrix_gene_parser(subparsers: _SubParsersAction) -> N
         "-r",
         "--results",
         required=True,
-        help="Path to the results file",
+        type=Path,
     )
     matrix_gene_parser.add_argument(
         "-i",
         "--info",
         required=True,
-        help="Path to the simulation info file",
+        type=Path,
+    )
+    matrix_gene_parser.add_argument(
+        "-n",
+        "--num_runs",
+        required=True,
+        type=int,
     )
     matrix_gene_parser.add_argument("-ixn", "--ixn_type", required=True)
-    matrix_gene_parser.add_argument("-o", "--out", type=str, required=True)
+    matrix_gene_parser.add_argument("-o", "--out", type=Path, required=True)
 
 
 def add_simulate_evaluate_parser(subparsers: _SubParsersAction) -> None:

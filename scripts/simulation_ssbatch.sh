@@ -16,12 +16,15 @@ NUM_LIKELY_PASSENGERS="$5"
 TAU_LOW="$6"
 TAU_HIGH="$7"
 RUN="$8"
+DRIVER_PROP="$9"
+NUM_RUNS="${10}"
 
 DRIVER_GENES_FILE="data/references/OncoKB_Cancer_Gene_List.tsv"
 COUNT_MATRIX="output/TOP_500_Genes/${SUBTYPE}/count_matrix.csv"
 BMR_PMFS="output/TOP_500_Genes/${SUBTYPE}/bmr_pmfs.csv"
 OUTPUT_BASE="output/SIMULATIONS"
-OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P/${TAU_LOW}TL_${TAU_HIGH}TH/R${RUN}"
+OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P/${DRIVER_PROP}DP/${TAU_LOW}TL_${TAU_HIGH}TH/R${RUN}"
+TOP_K_GENES=500
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -36,16 +39,19 @@ dialect simulate create matrix \
   -nme "$NUM_ME_PAIRS" \
   -nco "$NUM_CO_PAIRS" \
   -n "$NUM_SAMPLES" \
-  -tau_low "$TAU_LOW" \
-  -tau_high "$TAU_HIGH"
+  -tl "$TAU_LOW" \
+  -th "$TAU_HIGH" \
+  -dp "$DRIVER_PROP"
 
 dialect identify \
   -c "$OUTPUT_DIR/count_matrix.csv" \
   -b "$BMR_PMFS" \
+  -k "$TOP_K_GENES" \
   -o "$OUTPUT_DIR" &
 
 dialect compare \
   -c "$OUTPUT_DIR/count_matrix.csv" \
+  -k "$TOP_K_GENES" \
   -o "$OUTPUT_DIR" &
 
 wait
@@ -59,12 +65,14 @@ dialect simulate evaluate matrix \
   -r "$OUTPUT_DIR/complete_pairwise_ixn_results.csv" \
   -i "$OUTPUT_DIR/matrix_simulation_info.json" \
   -ixn "ME" \
+  -n "$NUM_RUNS" \
   -o "$OUTPUT_DIR" &
 
 dialect simulate evaluate matrix \
   -r "$OUTPUT_DIR/complete_pairwise_ixn_results.csv" \
   -i "$OUTPUT_DIR/matrix_simulation_info.json" \
   -ixn "CO" \
+  -n "$NUM_RUNS" \
   -o "$OUTPUT_DIR" &
 
 wait

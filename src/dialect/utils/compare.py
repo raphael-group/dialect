@@ -102,7 +102,6 @@ def run_comparison_methods(
         how="inner",
     )
     merged_df = merged_df.merge(
-        merged_df,
         wesme_df,
         on=["Gene A", "Gene B"],
         how="inner",

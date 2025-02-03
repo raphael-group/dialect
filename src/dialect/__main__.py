@@ -9,7 +9,8 @@ from dialect.utils import (
     create_matrix_simulation,
     create_pair_gene_simulation,
     create_single_gene_simulation,
-    evaluate_matrix_simulation,
+    evaluate_matrix_simulation_all_runs,
+    evaluate_matrix_simulation_single_run,
     evaluate_pair_gene_simulation,
     evaluate_single_gene_simulation,
     generate_bmr_and_counts,
@@ -69,13 +70,20 @@ def _handle_simulate_command(args: Namespace) -> None:
             num_samples=args.num_samples,
             tau_uv_low=args.tau_low,
             tau_uv_high=args.tau_high,
+            driver_proportion=args.driver_proportion,
             seed=args.seed,
         )
     elif args.mode == "evaluate" and args.type == "matrix":
-        evaluate_matrix_simulation(
+        evaluate_matrix_simulation_single_run(
             results_fn=args.results,
             simulation_info_fn=args.info,
             out=args.out,
+            ixn_type=args.ixn_type,
+        )
+        evaluate_matrix_simulation_all_runs(
+            results_dir=args.results.parent.parent,
+            out=args.out.parent,
+            nruns=args.num_runs,
             ixn_type=args.ixn_type,
         )
 

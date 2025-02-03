@@ -10,7 +10,11 @@ from scipy.stats import binom, truncnorm
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
-from dialect.utils.plotting import draw_simulation_precision_recall_curve
+from dialect.utils.plotting import (
+    draw_average_simulation_precision_recall_curve,
+    draw_concat_simulation_precision_recall_curve,
+    draw_simulation_precision_recall_curve,
+)
 from dialect.utils.postprocessing import compute_epsilon_threshold
 
 
@@ -76,20 +80,23 @@ def simulate_pairwise_gene_driver_mutations(
     tau_10: float,
     tau_11: float,
     nsamples: int,
+    driver_proportion: float,
 ) -> tuple:
     """TODO: Add docstring."""
     gene_a_drivers = np.zeros(nsamples)
     gene_b_drivers = np.zeros(nsamples)
     rng = np.random.default_rng()
-    rnd = rng.uniform(size=nsamples)
-
-    both_mutations = rnd < tau_11
-    only_gene_b_mutations = (rnd >= tau_11) & (rnd < tau_11 + tau_01)
-    only_gene_a_mutations = (rnd >= tau_11 + tau_01) & (rnd < tau_11 + tau_01 + tau_10)
-
-    gene_a_drivers[both_mutations | only_gene_a_mutations] = 1
-    gene_b_drivers[both_mutations | only_gene_b_mutations] = 1
-
+    n_drivers = int(nsamples * driver_proportion)
+    if n_drivers:
+        rnd = rng.uniform(size=n_drivers)
+        both_mutations = rnd < tau_11
+        only_gene_b_mutations = (rnd >= tau_11) & (rnd < tau_11 + tau_01)
+        only_gene_a_mutations = (rnd >= tau_11 + tau_01) & (
+            rnd < tau_11 + tau_01 + tau_10
+        )
+        idx = np.arange(n_drivers)
+        gene_a_drivers[idx[both_mutations | only_gene_a_mutations]] = 1
+        gene_b_drivers[idx[both_mutations | only_gene_b_mutations]] = 1
     return gene_a_drivers, gene_b_drivers
 
 
@@ -100,6 +107,7 @@ def simulate_pairwise_gene_somatic_mutations(
     tau_10: float,
     tau_11: float,
     nsamples: int,
+    driver_proportion: float,
 ) -> Interaction:
     """TODO: Add docstring."""
     gene_a_passenger_mutations = simulate_single_gene_passenger_mutations(
@@ -111,7 +119,13 @@ def simulate_pairwise_gene_somatic_mutations(
         nsamples,
     )
     gene_a_driver_mutations, gene_b_driver_mutations = (
-        simulate_pairwise_gene_driver_mutations(tau_01, tau_10, tau_11, nsamples)
+        simulate_pairwise_gene_driver_mutations(
+            tau_01,
+            tau_10,
+            tau_11,
+            nsamples,
+            driver_proportion,
+        )
     )
     gene_a_somatic_mutations = (
         gene_a_passenger_mutations + gene_a_driver_mutations
@@ -201,6 +215,7 @@ def create_pair_gene_simulation(
     length_b: int,
     mu_b: float,
     out: str,
+    driver_proportion: float,
     seed: int,
 ) -> None:
     """TODO: Add docstring."""
@@ -218,6 +233,7 @@ def create_pair_gene_simulation(
             tau_10,
             tau_11,
             num_samples,
+            driver_proportion,
         )
         simulated_interactions.append(simulated_interaction)
 
@@ -260,6 +276,7 @@ def create_matrix_simulation(
     num_samples: int,
     tau_uv_low: float,
     tau_uv_high: float,
+    driver_proportion: float,
     seed: int = 42,
 ) -> None:
     """TODO: Add docstring."""
@@ -333,6 +350,7 @@ def create_matrix_simulation(
             tau_10=tau_10,
             tau_11=tau_11,
             nsamples=num_samples,
+            driver_proportion=driver_proportion,
         )
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
@@ -358,6 +376,7 @@ def create_matrix_simulation(
             tau_10=tau_10,
             tau_11=tau_11,
             nsamples=num_samples,
+            driver_proportion=driver_proportion,
         )
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
@@ -391,6 +410,7 @@ def create_matrix_simulation(
         "num_samples": num_samples,
         "tau_low": tau_uv_low,
         "tau_high": tau_uv_high,
+        "driver_proportion": driver_proportion,
     }
     gt_out_fn = dir_out / "matrix_simulation_info.json"
     with gt_out_fn.open("w") as f:
@@ -601,7 +621,7 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
     return methods
 
 
-def evaluate_matrix_simulation(
+def evaluate_matrix_simulation_single_run(
     results_fn: str,
     simulation_info_fn: str,
     out: str,
@@ -622,5 +642,38 @@ def evaluate_matrix_simulation(
     draw_simulation_precision_recall_curve(
         methods,
         y_true,
+        fout,
+    )
+
+def evaluate_matrix_simulation_all_runs(
+    results_dir: Path,
+    out: Path,
+    nruns: int,
+    ixn_type: str,
+) -> None:
+    """TODO: Add docstring."""
+    all_y_true = []
+    all_methods = []
+    for i in range(1, nruns + 1):
+        results_fn = results_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+        simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
+        results_df = pd.read_csv(results_fn)
+        with simulation_info_fn.open() as f:
+            gt = json.load(f)
+        num_samples = gt.get("num_samples")
+        all_y_true.append(get_ground_truth_labels(results_df, gt, ixn_type))
+        all_methods.append(get_method_scores(results_df, num_samples, ixn_type))
+
+    fout = out / f"{ixn_type}_average_pr_curve"
+    draw_average_simulation_precision_recall_curve(
+        all_methods,
+        all_y_true,
+        fout,
+    )
+
+    fout = out / f"{ixn_type}_concat_pr_curve"
+    draw_concat_simulation_precision_recall_curve(
+        all_methods,
+        all_y_true,
         fout,
     )
