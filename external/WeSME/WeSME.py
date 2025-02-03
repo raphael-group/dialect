@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import scipy.stats as ss
 from statsmodels.stats.multitest import multipletests
-from tqdm import tqdm
 
 
 # ------------------------------------------------------------------------------------ #
@@ -474,7 +473,7 @@ def compute_pairwise_pvalues(mut_fn, dout, gene_pairs):
     ws_me_pv_dic, ws_me_ex_cover_sizes_dic = {}, {}
     ws_co_pv_dic, ws_co_ex_cover_sizes_dic = {}, {}
     fisher_co_pv_dic, jaccard_dic = {}, {}
-    for gene_pair in tqdm(gene_pairs):
+    for gene_pair in gene_pairs:
         gene_a, gene_b = gene_pair
         covers = [mut_list_dic[gene_a], mut_list_dic[gene_b]]
         ws_me_pv, ws_me_ex_cover_sizes_dic = compute_me_co_pv_ws(

@@ -23,10 +23,12 @@ DRIVER_GENES_FILE="data/references/OncoKB_Cancer_Gene_List.tsv"
 COUNT_MATRIX="output/TOP_500_Genes/${SUBTYPE}/count_matrix.csv"
 BMR_PMFS="output/TOP_500_Genes/${SUBTYPE}/bmr_pmfs.csv"
 OUTPUT_BASE="output/SIMULATIONS"
-OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P/${DRIVER_PROP}DP/${TAU_LOW}TL_${TAU_HIGH}TH/R${RUN}"
+SUBTYPE_OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}"
+OUTPUT_DIR="${SUBTYPE_OUTPUT_DIR}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P/${DRIVER_PROP}DP/${TAU_LOW}TL_${TAU_HIGH}TH"
+RUN_OUTPUT_DIR="${OUTPUT_DIR}/R${RUN}"
 TOP_K_GENES=500
 
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$RUN_OUTPUT_DIR"
 
 echo "Starting matrix simulation pipeline..."
 
@@ -34,7 +36,7 @@ dialect simulate create matrix \
   -c "$COUNT_MATRIX" \
   -b "$BMR_PMFS" \
   -d "$DRIVER_GENES_FILE" \
-  -o "$OUTPUT_DIR" \
+  -o "$RUN_OUTPUT_DIR" \
   -nlp "$NUM_LIKELY_PASSENGERS" \
   -nme "$NUM_ME_PAIRS" \
   -nco "$NUM_CO_PAIRS" \
@@ -44,37 +46,35 @@ dialect simulate create matrix \
   -dp "$DRIVER_PROP"
 
 dialect identify \
-  -c "$OUTPUT_DIR/count_matrix.csv" \
+  -c "$RUN_OUTPUT_DIR/count_matrix.csv" \
   -b "$BMR_PMFS" \
   -k "$TOP_K_GENES" \
-  -o "$OUTPUT_DIR" &
+  -o "$RUN_OUTPUT_DIR" &
 
 dialect compare \
-  -c "$OUTPUT_DIR/count_matrix.csv" \
+  -c "$RUN_OUTPUT_DIR/count_matrix.csv" \
   -k "$TOP_K_GENES" \
-  -o "$OUTPUT_DIR" &
+  -o "$RUN_OUTPUT_DIR" &
 
 wait
 
 dialect merge \
-  -d "$OUTPUT_DIR/pairwise_interaction_results.csv" \
-  -a "$OUTPUT_DIR/comparison_interaction_results.csv" \
-  -o "$OUTPUT_DIR"
+  -d "$RUN_OUTPUT_DIR/pairwise_interaction_results.csv" \
+  -a "$RUN_OUTPUT_DIR/comparison_interaction_results.csv" \
+  -o "$RUN_OUTPUT_DIR"
 
-dialect simulate evaluate matrix \
-  -r "$OUTPUT_DIR/complete_pairwise_ixn_results.csv" \
-  -i "$OUTPUT_DIR/matrix_simulation_info.json" \
-  -ixn "ME" \
-  -n "$NUM_RUNS" \
-  -o "$OUTPUT_DIR" &
+# dialect simulate evaluate matrix \
+#   -r "$OUTPUT_DIR" \
+#   -ixn "ME" \
+#   -n "$NUM_RUNS" \
+#   -o "$OUTPUT_DIR" &
 
-dialect simulate evaluate matrix \
-  -r "$OUTPUT_DIR/complete_pairwise_ixn_results.csv" \
-  -i "$OUTPUT_DIR/matrix_simulation_info.json" \
-  -ixn "CO" \
-  -n "$NUM_RUNS" \
-  -o "$OUTPUT_DIR" &
+# dialect simulate evaluate matrix \
+#   -r "$OUTPUT_DIR" \
+#   -ixn "CO" \
+#   -n "$NUM_RUNS" \
+#   -o "$OUTPUT_DIR" &
 
-wait
+# wait
 
 echo "Matrix simulation pipeline completed."

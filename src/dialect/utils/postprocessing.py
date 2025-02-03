@@ -21,7 +21,7 @@ CO_METHOD_RANKING_CRITERIA = {
     "DIALECT": ("Rho", "descending"),
     "DISCOVER": ("Discover CO P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's CO P-Val", "ascending"),
-    "WeSCO": ("WeSCO P-Val", "ascending"),
+    "WeSME": ("WeSCO P-Val", "ascending"),
 }
 
 
@@ -65,7 +65,7 @@ def generate_top_ranked_co_interaction_tables(
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
-    methods: list[str],
+    methods: list,
 ) -> dict:
     """TODO: Add docstring."""
     method_to_top_ranked_co_interaction_table = {}
@@ -95,7 +95,7 @@ def generate_top_ranked_me_interaction_tables(
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
-    methods: list[str],
+    methods: list,
 ) -> dict:
     """TODO: Add docstring."""
     method_to_top_ranked_me_interaction_table = {}

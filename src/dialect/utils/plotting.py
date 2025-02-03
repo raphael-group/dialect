@@ -332,6 +332,155 @@ def draw_concat_simulation_precision_recall_curve(
     plt.close()
 
 
+def draw_hit_curve(
+    true_pair_lists: list,
+    top_ranked_tables: list,
+    methods: list,
+    total_pairs: int,
+    fout: str,
+    max_k: int = 1000,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+    plt.figure(figsize=figsize)
+
+    def get_recalls_at_k(
+        true_pairs: set,
+        top_ranked_table: pd.DataFrame,
+        num_positive: int,
+        max_k: int,
+    ) -> list:
+        recalls_at_k = []
+        for k in range(max_k):
+            top_k_pairs_set = {
+                tuple(sorted(pair))
+                for pair in top_ranked_table.head(k)[["Gene A", "Gene B"]].to_numpy()
+            }
+            recalls_at_k.append(len(top_k_pairs_set & true_pairs) / num_positive)
+        return recalls_at_k
+
+    method_to_recalls_at_k_lists = {}
+    for _, (true_pairs, top_ranked_table) in enumerate(
+        zip(true_pair_lists, top_ranked_tables),
+    ):
+        true_pairs_set = {tuple(sorted(pair)) for pair in true_pairs}
+        num_positive = len(true_pairs)
+        for method in methods:
+            if method not in method_to_recalls_at_k_lists:
+                method_to_recalls_at_k_lists[method] = []
+            method_top_ranked_table = top_ranked_table[method]
+            method_recalls_at_k = get_recalls_at_k(
+                true_pairs_set,
+                method_top_ranked_table,
+                num_positive,
+                max_k,
+            )
+            method_to_recalls_at_k_lists[method].append(method_recalls_at_k)
+    for method, recall_at_k_lists in method_to_recalls_at_k_lists.items():
+        mean_recall_at_k = np.mean(recall_at_k_lists, axis=0)
+        plt.plot(
+            np.arange(1, len(mean_recall_at_k) + 1),
+            mean_recall_at_k,
+            label=method,
+            linewidth=font_scale * 2,
+            alpha=0.75,
+        )
+
+    k_values = np.arange(max_k)
+    baseline_recall = k_values / total_pairs
+    plt.plot(
+        k_values,
+        baseline_recall,
+        color="gray",
+        label="Baseline",
+        linewidth=font_scale * 2,
+        alpha=0.75,
+    )
+
+    plt.ylabel("Recall@K", fontsize=font_scale * 10)
+    plt.xlabel("K", fontsize=font_scale * 10)
+    plt.ylim(0, 1)
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+    leg = plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+    leg.get_frame().set_edgecolor("k")
+    plt.gca().patch.set_alpha(0)
+    plt.tight_layout()
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
+def draw_auc_vs_factor_curve(
+    x: list,
+    method_to_avg_auprc_vals: dict,
+    fout: str,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.rcParams["font.family"] = FONT_STYLE
+    plt.figure(figsize=figsize)
+
+    for method, avg_auprc_vals in method_to_avg_auprc_vals.items():
+        plt.plot(x, avg_auprc_vals, label=method, linewidth=font_scale * 2, alpha=0.75)
+
+    plt.ylabel("AUPRC", fontsize=font_scale * 10)
+    plt.xlabel("Driver Proportion", fontsize=font_scale * 10)
+    plt.ylim(0, 1)
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+    leg = plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+    leg.get_frame().set_edgecolor("k")
+    plt.gca().patch.set_alpha(0)
+    plt.tight_layout()
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
 # ------------------------------------------------------------------------------------ #
 #                                    CBASE ANALYSIS                                    #
 # ------------------------------------------------------------------------------------ #

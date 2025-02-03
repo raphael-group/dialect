@@ -307,12 +307,6 @@ def add_simulate_evaluate_matrix_gene_parser(subparsers: _SubParsersAction) -> N
         type=Path,
     )
     matrix_gene_parser.add_argument(
-        "-i",
-        "--info",
-        required=True,
-        type=Path,
-    )
-    matrix_gene_parser.add_argument(
         "-n",
         "--num_runs",
         required=True,

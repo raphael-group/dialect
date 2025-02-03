@@ -1,21 +1,28 @@
 """TODO: Add docstring."""
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import binom, truncnorm
+from sklearn.metrics import average_precision_score
 
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 from dialect.utils.plotting import (
+    draw_auc_vs_factor_curve,
     draw_average_simulation_precision_recall_curve,
     draw_concat_simulation_precision_recall_curve,
-    draw_simulation_precision_recall_curve,
+    draw_hit_curve,
 )
-from dialect.utils.postprocessing import compute_epsilon_threshold
+from dialect.utils.postprocessing import (
+    compute_epsilon_threshold,
+    generate_top_ranked_co_interaction_tables,
+    generate_top_ranked_me_interaction_tables,
+)
 
 
 # ------------------------------------------------------------------------------------ #
@@ -594,7 +601,7 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         discover_score = -np.log10(discover_pval + 1e-300)
         wesme_score = -np.log10(wesme_pval + 1e-300)
 
-        methods = {
+        method_to_scores = {
             "DIALECT": dialect_rho,
             "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
@@ -611,41 +618,113 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         discover_score = -np.log10(discover_pval + 1e-300)
         wesco_score = -np.log10(wesco_pval + 1e-300)
 
-        methods = {
+        method_to_scores = {
             "DIALECT": dialect_rho,
             "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
             "WeSCO": wesco_score,
         }
 
-    return methods
+    return method_to_scores
 
-
-def evaluate_matrix_simulation_single_run(
-    results_fn: str,
-    simulation_info_fn: str,
-    out: str,
+def evaluate_auc_vs_driver_proportion(
+    nruns: int,
+    results_dir: Path,
+    out: Path,
     ixn_type: str,
 ) -> None:
     """TODO: Add docstring."""
-    dout = Path(out)
-    results_df = pd.read_csv(results_fn)
-    simulation_info_path = Path(simulation_info_fn)
-    with simulation_info_path.open() as f:
-        gt = json.load(f)
-    num_samples = gt.get("num_samples")
-
-    y_true = get_ground_truth_labels(results_df, gt, ixn_type)
-    methods = get_method_scores(results_df, num_samples, ixn_type)
-    fout = dout / f"{ixn_type}_pr_curve"
-
-    draw_simulation_precision_recall_curve(
-        methods,
-        y_true,
-        fout,
+    method_to_avg_auprc_vals = {}
+    driver_proportions = np.arange(0.1, 1.1, 0.1)
+    for driver_proportion in driver_proportions:
+        formatted_dp = f"{driver_proportion:.1f}DP"
+        method_to_auprc_val_lists = {}
+        for i in range(1, nruns + 1):
+            results_base_dir = Path(
+                re.sub(
+                    r"/[\d\.]+DP/",
+                    f"/{formatted_dp}/",
+                    str(results_dir),
+                ),
+            )
+            results_fn = (
+                results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+            )
+            simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
+            results_df = pd.read_csv(results_fn)
+            with simulation_info_fn.open() as f:
+                gt = json.load(f)
+            num_samples = gt.get("num_samples")
+            method_to_scores = get_method_scores(results_df, num_samples, ixn_type)
+            y_true = get_ground_truth_labels(results_df, gt, ixn_type)
+            for method, scores in method_to_scores.items():
+                auprc = average_precision_score(y_true, scores)
+                if method not in method_to_auprc_val_lists:
+                    method_to_auprc_val_lists[method] = []
+                method_to_auprc_val_lists[method].append(auprc)
+        for method in method_to_scores:
+            if method not in method_to_avg_auprc_vals:
+                method_to_avg_auprc_vals[method] = []
+            method_to_avg_auprc_vals[method].append(
+                np.mean(
+                    method_to_auprc_val_lists[method],
+                ),
+            )
+    draw_auc_vs_factor_curve(
+        driver_proportions,
+        method_to_avg_auprc_vals,
+        out / f"{ixn_type}_auc_vs_driver_proportion_curve",
     )
 
-def evaluate_matrix_simulation_all_runs(
+def evaluate_auc_vs_num_samples(
+    nruns: int,
+    results_dir: Path,
+    out: Path,
+    ixn_type: str,
+) -> None:
+    """TODO: Add docstring."""
+    method_to_avg_auprc_vals = {}
+    num_samples_list = np.arange(100, 4000, 100)
+    for num_samples in num_samples_list:
+        formatted_ns = f"{num_samples}NS"
+        method_to_auprc_val_lists = {}
+        for i in range(1, nruns + 1):
+            results_base_dir = Path(
+                re.sub(
+                    r"/NS[\d\.]+/",
+                    f"/{formatted_ns}/",
+                    str(results_dir),
+                ),
+            )
+            results_fn = (
+                results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+            )
+            simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
+            results_df = pd.read_csv(results_fn)
+            with simulation_info_fn.open() as f:
+                gt = json.load(f)
+            method_to_scores = get_method_scores(results_df, num_samples, ixn_type)
+            y_true = get_ground_truth_labels(results_df, gt, ixn_type)
+            for method, scores in method_to_scores.items():
+                auprc = average_precision_score(y_true, scores)
+                if method not in method_to_auprc_val_lists:
+                    method_to_auprc_val_lists[method] = []
+                method_to_auprc_val_lists[method].append(auprc)
+        for method in method_to_scores:
+            if method not in method_to_avg_auprc_vals:
+                method_to_avg_auprc_vals[method] = []
+            method_to_avg_auprc_vals[method].append(
+                np.mean(
+                    method_to_auprc_val_lists[method],
+                ),
+            )
+    draw_auc_vs_factor_curve(
+        num_samples_list,
+        method_to_avg_auprc_vals,
+        out / f"{ixn_type}_auc_vs_num_samples_curve",
+    )
+
+def evaluate_matrix_simulation(
     results_dir: Path,
     out: Path,
     nruns: int,
@@ -654,6 +733,11 @@ def evaluate_matrix_simulation_all_runs(
     """TODO: Add docstring."""
     all_y_true = []
     all_methods = []
+    true_me_pairs = []
+    true_co_pairs = []
+    top_ranked_me_tables = []
+    top_ranked_co_tables = []
+    num_genes = None
     for i in range(1, nruns + 1):
         results_fn = results_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
         simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
@@ -661,19 +745,76 @@ def evaluate_matrix_simulation_all_runs(
         with simulation_info_fn.open() as f:
             gt = json.load(f)
         num_samples = gt.get("num_samples")
+        num_genes = len(
+            gt.get("ME Pairs") + gt.get("CO Pairs") + gt.get("Likely Passengers"),
+        )
         all_y_true.append(get_ground_truth_labels(results_df, gt, ixn_type))
         all_methods.append(get_method_scores(results_df, num_samples, ixn_type))
 
-    fout = out / f"{ixn_type}_average_pr_curve"
+        true_me_pairs.append(gt.get("ME Pairs", []))
+        top_ranked_me_tables.append(
+            generate_top_ranked_me_interaction_tables(
+                results_df=results_df,
+                num_pairs=1_000,
+                num_samples=num_samples,
+                methods=[
+                    "DIALECT",
+                    "DISCOVER",
+                    "Fisher's Exact Test",
+                    "MEGSA",
+                    "WeSME",
+                ],
+            ),
+        )
+        true_co_pairs.append(gt.get("CO Pairs", []))
+        top_ranked_co_tables.append(
+            generate_top_ranked_co_interaction_tables(
+                results_df=results_df,
+                num_pairs=1_000,
+                num_samples=num_samples,
+                methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"],
+            ),
+        )
+
     draw_average_simulation_precision_recall_curve(
         all_methods,
         all_y_true,
-        fout,
+        out / f"{ixn_type}_average_pr_curve",
     )
 
-    fout = out / f"{ixn_type}_concat_pr_curve"
     draw_concat_simulation_precision_recall_curve(
         all_methods,
         all_y_true,
-        fout,
+        out / f"{ixn_type}_concat_pr_curve",
+    )
+
+    if ixn_type == "ME":
+        draw_hit_curve(
+            true_me_pairs,
+            top_ranked_me_tables,
+            methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"],
+            total_pairs=num_genes * (num_genes - 1) // 2,
+            fout=out / f"{ixn_type}_hit_curve",
+        )
+    else:
+        draw_hit_curve(
+            true_co_pairs,
+            top_ranked_co_tables,
+            methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"],
+            total_pairs=num_genes * (num_genes - 1) // 2,
+            fout=out / f"{ixn_type}_hit_curve",
+        )
+
+    evaluate_auc_vs_driver_proportion(
+        nruns,
+        results_dir,
+        out,
+        ixn_type,
+    )
+
+    evaluate_auc_vs_num_samples(
+        nruns,
+        results_dir,
+        out,
+        ixn_type,
     )
