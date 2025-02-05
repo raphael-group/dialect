@@ -4,7 +4,6 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
-
 from dialect.utils.plotting import draw_sample_mutation_count_subtype_histograms
 
 
@@ -25,6 +24,8 @@ def compute_avg_sample_mutation_count(results_dir: Path) -> pd.Series:
     subtype_sample_mutation_count_sums = []
     for subtype in results_dir.iterdir():
         subtype_cnt_mtx_fn = subtype / "count_matrix.csv"
+        if not subtype_cnt_mtx_fn.exists():
+            continue
         cnt_mtx_df = pd.read_csv(subtype_cnt_mtx_fn, index_col=0)
         subtype_sample_mutation_count_sums.append(cnt_mtx_df.sum(axis=1))
     return pd.concat(subtype_sample_mutation_count_sums).mean()

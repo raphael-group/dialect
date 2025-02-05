@@ -674,6 +674,7 @@ def evaluate_auc_vs_driver_proportion(
         driver_proportions,
         method_to_avg_auprc_vals,
         out / f"{ixn_type}_auc_vs_driver_proportion_curve",
+        xlabel="Driver Proportion",
     )
 
 def evaluate_auc_vs_num_samples(
@@ -684,9 +685,9 @@ def evaluate_auc_vs_num_samples(
 ) -> None:
     """TODO: Add docstring."""
     method_to_avg_auprc_vals = {}
-    num_samples_list = np.arange(100, 4000, 100)
+    num_samples_list = np.arange(100, 1400, 100)
     for num_samples in num_samples_list:
-        formatted_ns = f"{num_samples}NS"
+        formatted_ns = f"NS{num_samples}"
         method_to_auprc_val_lists = {}
         for i in range(1, nruns + 1):
             results_base_dir = Path(
@@ -722,6 +723,7 @@ def evaluate_auc_vs_num_samples(
         num_samples_list,
         method_to_avg_auprc_vals,
         out / f"{ixn_type}_auc_vs_num_samples_curve",
+        xlabel="Number of Samples",
     )
 
 def evaluate_matrix_simulation(

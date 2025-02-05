@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH -N 1                   # Number of nodes
 #SBATCH --ntasks-per-node=4    # CPUs per node
-#SBATCH -t 144:00:00            # Walltime
-#SBATCH --mem=50GB             # Memory
+#SBATCH -t 120:00:00            # Walltime
+#SBATCH --mem=25GB             # Memory
 #SBATCH --job-name=matrix_sim  # Job name
 
 source /n/fs/ragr-research/users/ashuaibi/anaconda3/etc/profile.d/conda.sh

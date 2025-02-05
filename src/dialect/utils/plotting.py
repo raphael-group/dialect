@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -15,8 +16,11 @@ from upsetplot import UpSet, from_contents
 # ------------------------------------------------------------------------------------ #
 #                                   MODULE CONSTANTS                                   #
 # ------------------------------------------------------------------------------------ #
-FONT_FAMILY = "CMU Serif"
-FONT_STYLE = "serif"
+font_path = "/u/ashuaibi/.fonts/cmuserif.ttf"
+font_prop = fm.FontProperties(fname=font_path)
+fm.fontManager.addfont(font_path)
+FONT_FAMILY = font_prop.get_name()
+plt.rcParams["font.family"] = FONT_FAMILY
 FONT_SCALE = 1.5
 
 PUTATIVE_DRIVER_COLOR = "#A3C1DA"
@@ -27,7 +31,7 @@ LIKELY_PASSENGER_COLOR = "#FFB3B3"
 # ------------------------------------------------------------------------------------ #
 #                                 NETWORK VISUALIZATION                                #
 # ------------------------------------------------------------------------------------ #
-def draw_single_interaction_network(
+def draw_single_me_or_co_interaction_network(
     edges: np.ndarray,
     putative_drivers: set,
     likely_passengers: set,
@@ -53,7 +57,6 @@ def draw_single_interaction_network(
             bbox=_get_bounding_box(color),
             ha="center",
             va="center",
-            fontfamily=FONT_STYLE,
             fontsize=font_scale * 8,
         )
 
@@ -68,7 +71,6 @@ def draw_single_interaction_network(
         ]
 
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
 
     graph = nx.Graph()
     graph.add_edges_from(edges)
@@ -77,7 +79,14 @@ def draw_single_interaction_network(
     fig = plt.figure(figsize=figsize)
     ax = plt.gca()
 
-    nx.draw(graph, pos, ax=ax, node_color="none", with_labels=False)
+    nx.draw(
+        graph,
+        pos,
+        ax=ax,
+        node_color="none",
+        edge_color="steelblue",
+        with_labels=False,
+    )
     for i, (node, (x, y)) in enumerate(pos.items()):
         _draw_label(x, y, node, node_colors[i])
     plt.tight_layout()
@@ -86,6 +95,91 @@ def draw_single_interaction_network(
     plt.title(method, fontsize=font_scale * 10)
     ax.set_aspect("equal")
     ax.axis("off")
+    plt.savefig(f"{fout}.png", dpi=300, transparent=True)
+    plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
+    plt.close(fig)
+
+
+def draw_single_me_and_co_interaction_network(
+    me_edges: np.ndarray,
+    co_edges: np.ndarray,
+    putative_drivers: set,
+    likely_passengers: set,
+    method: str,
+    fout: str,
+    figsize: tuple = (4, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+
+    def _get_bounding_box(color: tuple) -> dict:
+        return {
+            "facecolor": color,
+            "edgecolor": "black",
+            "boxstyle": "round,pad=0.25",
+        }
+
+    def _draw_label(x: float, y: float, label: str, color: tuple) -> None:
+        ax.text(
+            x,
+            y,
+            label,
+            bbox=_get_bounding_box(color),
+            ha="center",
+            va="center",
+            fontsize=font_scale * 8,
+        )
+
+    def _get_node_colors(graph: nx.Graph) -> list:
+        return [
+            LIKELY_PASSENGER_COLOR
+            if node in likely_passengers
+            else PUTATIVE_DRIVER_COLOR
+            if node in putative_drivers
+            else PUTATIVE_PASSENGER_COLOR
+            for node in graph.nodes
+        ]
+
+    graph = nx.Graph()
+    for a, b in me_edges:
+        graph.add_edge(a, b, interaction_type="ME")
+    for a, b in co_edges:
+        graph.add_edge(a, b, interaction_type="CO")
+
+    node_colors = _get_node_colors(graph)
+    pos = nx.spring_layout(graph, k=2.5, iterations=100, seed=42)
+
+    plt.rcParams["font.serif"] = FONT_FAMILY
+
+    fig = plt.figure(figsize=figsize)
+    ax = plt.gca()
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    me_edge_list = [
+        (u, v) for u, v, d in graph.edges(data=True) if d["interaction_type"] == "ME"
+    ]
+    co_edge_list = [
+        (u, v) for u, v, d in graph.edges(data=True) if d["interaction_type"] == "CO"
+    ]
+
+    nx.draw_networkx_edges(graph, pos, ax=ax, edgelist=me_edge_list, edge_color="green")
+    nx.draw_networkx_edges(graph, pos, ax=ax, edgelist=co_edge_list, edge_color="blue")
+
+    nx.draw_networkx_nodes(
+        graph,
+        pos,
+        ax=ax,
+        node_color="none",
+        edgecolors="none",
+    )
+
+    for i, (node, (x, y)) in enumerate(pos.items()):
+        _draw_label(x, y, node, node_colors[i])
+
+    plt.title(method, fontsize=font_scale * 10)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.90)
     plt.savefig(f"{fout}.png", dpi=300, transparent=True)
     plt.savefig(f"{fout}.svg", dpi=300, transparent=True)
     plt.close(fig)
@@ -103,7 +197,6 @@ def draw_simulation_precision_recall_curve(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
 
     plt.figure(figsize=figsize)
     for method_name, scores in methods.items():
@@ -167,7 +260,6 @@ def draw_average_simulation_precision_recall_curve(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
     plt.figure(figsize=figsize)
 
     method_names = list(all_methods[0].keys())
@@ -197,8 +289,8 @@ def draw_average_simulation_precision_recall_curve(
             fixed_recall_points,
             precision_mean,
             label=f"{method_name} (AUC={np.mean(auprc_vals):.3f})",
-            linewidth=2,
-            alpha=0.8,
+            linewidth=font_scale * 2,
+            alpha=0.75,
             color=f"C{idx}",
         )
         plt.fill_between(
@@ -262,7 +354,6 @@ def draw_concat_simulation_precision_recall_curve(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
     plt.figure(figsize=figsize)
 
     method_names = list(all_methods[0].keys())
@@ -344,7 +435,6 @@ def draw_hit_curve(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
     plt.figure(figsize=figsize)
 
     def get_recalls_at_k(
@@ -401,7 +491,7 @@ def draw_hit_curve(
     )
 
     plt.ylabel("Recall@K", fontsize=font_scale * 10)
-    plt.xlabel("K", fontsize=font_scale * 10)
+    plt.xlabel("Top K Ranked Interactions", fontsize=font_scale * 10)
     plt.ylim(0, 1)
     plt.xticks(fontsize=font_scale * 8)
     plt.yticks(fontsize=font_scale * 8)
@@ -437,19 +527,19 @@ def draw_auc_vs_factor_curve(
     x: list,
     method_to_avg_auprc_vals: dict,
     fout: str,
+    xlabel: str,
     figsize: tuple = (5, 4),
     font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
     plt.figure(figsize=figsize)
 
     for method, avg_auprc_vals in method_to_avg_auprc_vals.items():
         plt.plot(x, avg_auprc_vals, label=method, linewidth=font_scale * 2, alpha=0.75)
 
     plt.ylabel("AUPRC", fontsize=font_scale * 10)
-    plt.xlabel("Driver Proportion", fontsize=font_scale * 10)
+    plt.xlabel(xlabel, fontsize=font_scale * 10)
     plt.ylim(0, 1)
     plt.xticks(fontsize=font_scale * 8)
     plt.yticks(fontsize=font_scale * 8)
@@ -493,7 +583,6 @@ def draw_cbase_likely_passenger_proportion_barplot(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
 
     plt.figure(figsize=figsize)
     plt.minorticks_on()
@@ -628,20 +717,15 @@ def draw_gene_expected_and_observed_mutations_barplot(
 def draw_likely_passenger_gene_proportion_violinplot(
     method_to_subtype_to_passenger_proportion: dict,
     out_fn: str,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (8, 3),
     font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
 
     methods = list(method_to_subtype_to_passenger_proportion.keys())
     values = [
         list(method_to_subtype_to_passenger_proportion[method].values())
-        for method in methods
-    ]
-    methods = [
-        method.replace("Fisher's Exact Test", "Fisher's\nExact Test")
         for method in methods
     ]
 
@@ -696,7 +780,6 @@ def draw_sample_mutation_count_subtype_histograms(
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
-    plt.rcParams["font.family"] = FONT_STYLE
 
     n_subtypes = len(subtype_to_sample_mutation_counts)
     ncols = 2

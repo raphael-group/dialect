@@ -4,7 +4,6 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
-
 from dialect.utils.helpers import load_likely_passenger_genes
 from dialect.utils.plotting import draw_likely_passenger_gene_proportion_violinplot
 from dialect.utils.postprocessing import (
@@ -89,6 +88,8 @@ def compute_likely_passenger_proportions(
     for subtype_dir in results_dir.iterdir():
         subtype = subtype_dir.name
         cnt_mtx_fn = subtype_dir / "count_matrix.csv"
+        if not cnt_mtx_fn.exists():
+            continue
         results_df = pd.read_csv(subtype_dir / "complete_pairwise_ixn_results.csv")
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
