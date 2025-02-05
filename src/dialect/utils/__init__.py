@@ -1,6 +1,9 @@
 """TODO: Add docstring."""
 
-from .argument_parser import build_argument_parser
+from .argument_parser import (
+    build_analysis_argument_parser,
+    build_dialect_argument_parser,
+)
 from .compare import run_comparison_methods
 from .generate import generate_bmr_and_counts
 from .helpers import read_cbase_results_file
@@ -17,7 +20,8 @@ from .simulate import (
 )
 
 __all__ = [
-    "build_argument_parser",
+    "build_analysis_argument_parser",
+    "build_dialect_argument_parser",
     "configure_logging",
     "create_matrix_simulation",
     "create_pair_gene_simulation",

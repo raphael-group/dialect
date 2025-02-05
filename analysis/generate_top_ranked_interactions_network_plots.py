@@ -1,9 +1,7 @@
 """TODO: Add docstring."""
 
-from argparse import ArgumentParser
-from pathlib import Path
-
 import pandas as pd
+from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import (
     draw_single_me_and_co_interaction_network,
     draw_single_me_or_co_interaction_network,
@@ -13,68 +11,20 @@ from dialect.utils.postprocessing import (
     generate_top_ranked_me_interaction_tables,
 )
 
-
-# ------------------------------------------------------------------------------------ #
-#                                   HELPER FUNCTIONS                                   #
-# ------------------------------------------------------------------------------------ #
-def build_argument_parser() -> ArgumentParser:
-    """TODO: Add docstring."""
-    parser = ArgumentParser(description="Decoy Gene Analysis")
-    parser.add_argument(
-        "-n",
-        "--num_edges",
-        type=int,
-        default=10,
-    )
-    parser.add_argument(
-        "-r",
-        "--results_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-d",
-        "--driver_genes_fn",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-lp",
-        "--likely_passenger_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-o",
-        "--out",
-        type=Path,
-        required=True,
-    )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "-me",
-        "--mutual_exclusivity",
-        action="store_true",
-    )
-    group.add_argument(
-        "-co",
-        "--cooccurrence",
-        action="store_true",
-    )
-    group.add_argument(
-        "-both",
-        "--both",
-        action="store_true",
-    )
-    return parser
+ME_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"]
 
 
-# ------------------------------------------------------------------------------------ #
-#                                     MAIN FUNCTION                                    #
-# ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        likely_passenger_required=True,
+        add_analysis_type=True,
+        add_num_pairs=True,
+        driver_genes_required=True,
+    )
     args = parser.parse_args()
 
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
@@ -98,13 +48,7 @@ def main() -> None:
                 results_df=results_df,
                 num_pairs=num_edges,
                 num_samples=num_samples,
-                methods=[
-                    "DIALECT",
-                    "DISCOVER",
-                    "Fisher's Exact Test",
-                    "MEGSA",
-                    "WeSME",
-                ],
+                methods=ME_METHODS,
             )
         )
         top_ranked_co_interactions_by_method = (
@@ -112,21 +56,18 @@ def main() -> None:
                 results_df=results_df,
                 num_pairs=num_edges,
                 num_samples=num_samples,
-                methods=[
-                    "DIALECT",
-                    "DISCOVER",
-                    "Fisher's Exact Test",
-                    "WeSME",
-                ],
+                methods=CO_METHODS,
             )
         )
         for method in top_ranked_co_interactions_by_method:
             top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
             top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
             top_ranked_pairs = (
-                top_ranked_me_pairs if args.mutual_exclusivity else top_ranked_co_pairs
+                top_ranked_me_pairs
+                if args.analysis_type == "mutual_exclusivity"
+                else top_ranked_co_pairs
             )
-            fout = f"{args.out}/{subtype}_{method}_network"
+            fout = f"{args.out_dir}/{subtype}_{method}_network"
             if args.mutual_exclusivity or args.cooccurrence:
                 draw_single_me_or_co_interaction_network(
                     edges=top_ranked_pairs[["Gene A", "Gene B"]].to_numpy(),

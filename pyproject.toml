@@ -15,6 +15,7 @@ ignore = ["D203", "D213", "FIX002"]
 "src/dialect/utils/logger.py" = ["SLF001", "FBT001", "FBT002"]
 "src/dialect/utils/generate.py" = ["S603"]
 "src/dialect/utils/identify.py" = ["FBT001"]
+"src/dialect/utils/argument_parser.py" = ["FBT001", "FBT002", "PLR0913", "C901"]
 "setup.py" = ["D100"]
 
 [lint.pydocstyle]

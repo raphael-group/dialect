@@ -348,7 +348,82 @@ def add_simulate_parser(subparsers: _SubParsersAction) -> None:
     add_simulate_evaluate_parser(simulate_subparsers)
 
 
-def build_argument_parser() -> ArgumentParser:
+# ------------------------------------------------------------------------------------ #
+#                                    MAIN FUNCTIONS                                    #
+# ------------------------------------------------------------------------------------ #
+def build_analysis_argument_parser(
+    add_num_pairs: bool = False,
+    add_num_genes: bool = False,
+    add_subtypes: bool = False,
+    add_driver_genes_fn: bool = False,
+    add_putative_driver_gene_fn: bool = False,
+    add_likely_passenger_dir: bool = False,
+    add_analysis_type: bool = False,
+    add_study_abbrev_fn: bool = False,
+    add_pancancer_counts_fn: bool = False,
+    driver_genes_required: bool = False,
+    putative_driver_required: bool = False,
+    likely_passenger_required: bool = False,
+    results_dir_required: bool = False,
+    out_dir_required: bool = False,
+) -> ArgumentParser:
+    """TODO: Add docstring."""
+    parser = ArgumentParser()
+    if add_num_pairs:
+        parser.add_argument("-n", "--num_pairs", type=int, default=10)
+    if add_num_genes:
+        parser.add_argument("-ng", "--num_genes", type=int, default=50)
+    if add_subtypes:
+        parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,LUAD,LUSC")
+    parser.add_argument("-r", "--results_dir", type=Path, required=results_dir_required)
+    if out_dir_required:
+        parser.add_argument("-o", "--out_dir", type=Path, required=True)
+    if add_study_abbrev_fn:
+        parser.add_argument(
+            "-sa",
+            "--study_abbrev_fn",
+            type=Path,
+            required=True,
+        )
+    if add_pancancer_counts_fn:
+        parser.add_argument(
+            "-pc",
+            "--pancancer_counts_fn",
+            type=Path,
+            required=True,
+        )
+    if add_likely_passenger_dir:
+        parser.add_argument(
+            "-lp",
+            "--likely_passenger_dir",
+            type=Path,
+            required=likely_passenger_required,
+        )
+    if add_driver_genes_fn:
+        parser.add_argument(
+            "-d",
+            "--driver_genes_fn",
+            type=Path,
+            required=driver_genes_required,
+        )
+    if add_putative_driver_gene_fn:
+        parser.add_argument(
+            "-pd",
+            "--putative_driver_gene_fn",
+            type=Path,
+            required=putative_driver_required,
+        )
+    if add_analysis_type:
+        parser.add_argument(
+            "-at",
+            "--analysis_type",
+            choices=["mutual_exclusivity", "cooccurrence", "both"],
+            required=True,
+        )
+    return parser
+
+
+def build_dialect_argument_parser() -> ArgumentParser:
     """TODO: Add docstring."""
     parser = ArgumentParser(description="DIALECT")
     parser.add_argument(

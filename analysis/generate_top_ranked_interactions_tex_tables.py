@@ -1,75 +1,24 @@
 """TODO: Add docstring."""
 
 import os
-from argparse import ArgumentParser
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-from dialect.utils.postprocessing import generate_top_ranking_tables
+from dialect.utils.argument_parser import build_analysis_argument_parser
+from dialect.utils.postprocessing import (
+    generate_top_ranked_co_interaction_tables,
+    generate_top_ranked_me_interaction_tables,
+)
 
 FLOAT_LOW_THRESHOLD = 0.01
 MANTISSA_MAX_THRESHOLD = 10
+ME_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
 
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def build_argument_parser() -> ArgumentParser:
-    """TODO: Add docstring."""
-    parser = ArgumentParser(
-        description="Generate LaTeX tables for top pairs across methods.",
-    )
-    parser.add_argument(
-        "-n",
-        "--num_pairs",
-        type=int,
-        default=10,
-        help="Number of top ranking pairs to include in table",
-    )
-    parser.add_argument(
-        "-r",
-        "--results_dir",
-        type=str,
-        required=True,
-        help="Directory with results for all subtypes",
-    )
-    parser.add_argument(
-        "-dvr",
-        "--driver_genes_fn",
-        type=str,
-        default="data/references/OncoKB_Cancer_Gene_List.tsv",
-        help="File with driver genes",
-    )
-    parser.add_argument(
-        "-d",
-        "--decoy_genes_dir",
-        type=str,
-        default="data/decoy_genes",
-        help="Directory with all decoy gene files",
-    )
-    parser.add_argument(
-        "-o",
-        "--out",
-        type=str,
-        default="tables",
-        help="Output directory for tex files",
-    )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--me",
-        action="store_true",
-        help="Perform analysis for mutual exclusivity",
-    )
-    group.add_argument(
-        "--co",
-        action="store_true",
-        help="Perform analysis for co-occurrence",
-    )
-    return parser
-
-
 def format_float(value: float) -> str:
     """TODO: Add docstring."""
     sign = "-" if value < 0 else ""
@@ -201,29 +150,44 @@ def create_final_table(
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------------------------ #
+#                                     MAIN FUNCTION                                    #
+# ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        putative_driver_required=True,
+        likely_passenger_required=True,
+        add_num_pairs=True,
+        add_analysis_type=True,
+    )
     args = parser.parse_args()
-
-    Path(args.out).mkdir(parents=True, exist_ok=True)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
-        results_fn = (
-            Path(args.results_dir) / subtype / "complete_pairwise_ixn_results.csv"
-        )
-        cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
+        results_fn = args.results_dir / subtype / "complete_pairwise_ixn_results.csv"
+        cnt_mtx_fn = args.results_dir / subtype / "count_matrix.csv"
         if not results_fn.exists() or not cnt_mtx_fn.exists():
             continue
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
-        top_tables = generate_top_ranking_tables(
-            results_df=results_df,
-            is_me=args.me,
-            num_pairs=args.num_pairs,
-            num_samples=num_samples,
-        )
+        if args.analysis_type == "mutual_exclusivity":
+            top_tables = generate_top_ranked_me_interaction_tables(
+                results_df=results_df,
+                num_pairs=args.num_pairs,
+                num_samples=num_samples,
+                methods=ME_METHODS,
+            )
+        else:
+            top_tables = generate_top_ranked_co_interaction_tables(
+                results_df=results_df,
+                num_pairs=args.num_pairs,
+                num_samples=num_samples,
+                methods=CO_METHODS,
+            )
         top_pairs_by_method = {}
         for method_name, method_df in top_tables.items():
             if method_df is None or method_df.empty:
@@ -238,7 +202,7 @@ def main() -> None:
                 val_str = format_float(metric_val) if metric_val is not None else "N/A"
                 interaction_str = f"{gene_a}:{gene_b}"
                 pairs_list.append((interaction_str, val_str))
-            if method_name == "WeSME" and args.co:
+            if method_name == "WeSME" and args.analysis_type == "cooccurrence":
                 adjusted_method_name = "WeSCO"
                 top_pairs_by_method[adjusted_method_name] = pairs_list
             else:
@@ -248,12 +212,12 @@ def main() -> None:
             subtype,
             top_pairs_by_method,
             args.num_pairs,
-            args.me,
+            "ME" if args.analysis_type == "mutual_exclusivity" else "CO",
         )
-        if args.me:
-            fout = Path(args.out) / f"table_of_top_me_pairs_{subtype}.tex"
+        if args.analysis_type == "mutual_exclusivity":
+            fout = args.out_dir / f"table_of_top_me_pairs_{subtype}.tex"
         else:
-            fout = Path(args.out) / f"table_of_top_co_pairs_{subtype}.tex"
+            fout = args.out_dir / f"table_of_top_co_pairs_{subtype}.tex"
         with fout.open("w") as f:
             f.write(latex_str)
 

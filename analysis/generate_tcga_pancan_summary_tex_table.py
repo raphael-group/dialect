@@ -1,50 +1,14 @@
 """TODO: Add docstring."""
 
-import argparse
 import os
-from pathlib import Path
 
 import pandas as pd
+from dialect.utils.argument_parser import build_analysis_argument_parser
 
 
-def build_argument_parser() -> argparse.ArgumentParser:
-    """TODO: Add docstring."""
-    parser = argparse.ArgumentParser(description="Generate TCGA subtype LaTeX table.")
-    parser.add_argument(
-        "-r",
-        "--results_dir",
-        type=str,
-        required=True,
-        help=(
-            "Directory with subfolders for each subtype, "
-            "each containing count_matrix.csv"
-        ),
-    )
-    parser.add_argument(
-        "--study_abbrev_fn",
-        type=str,
-        default="data/references/TCGA_Study_Abbreviations.csv",
-        help="CSV with columns: 'Study Abbreviation', 'Study Name'",
-    )
-    parser.add_argument(
-        "--pancancer_counts_fn",
-        type=str,
-        default="data/references/TCGA_Pancancer_Sample_Counts.csv",
-        help=(
-            "CSV with columns: 'Subtype' (matching study abbreviation), "
-            "'Number of Samples'"
-        ),
-    )
-    parser.add_argument(
-        "-o",
-        "--out",
-        type=str,
-        default="tables",
-        help="Output LaTeX table file",
-    )
-    return parser
-
-
+# ------------------------------------------------------------------------------------ #
+#                                   HELPER FUNCTIONS                                   #
+# ------------------------------------------------------------------------------------ #
 def create_latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
     """TODO: Add docstring."""
     lines = []
@@ -85,9 +49,17 @@ def create_latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------------------------ #
+#                                     MAIN FUNCTION                                    #
+# ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        add_study_abbrev_fn=True,
+        add_pancancer_counts_fn=True,
+    )
     args = parser.parse_args()
     abbrev_df = pd.read_csv(args.study_abbrev_fn)
     pancancer_df = pd.read_csv(args.pancancer_counts_fn)
@@ -98,7 +70,7 @@ def main() -> None:
     results_list = []
 
     for stype in subtypes:
-        stype_path = Path(args.results_dir) / stype
+        stype_path = args.results_dir / stype
         if not stype_path.is_dir():
             continue
         cnt_mtx_fn = stype_path / "count_matrix.csv"
@@ -139,10 +111,9 @@ def main() -> None:
         label="tab:tcga_subtypes",
     )
 
-    fout = Path(args.out) / "tcga_data_overview_table.tex"
+    fout = args.out_dir / "tcga_data_overview_table.tex"
     with fout.open("w") as f:
         f.write(latex_str)
-
 
 
 if __name__ == "__main__":

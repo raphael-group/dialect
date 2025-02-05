@@ -1,9 +1,9 @@
 """TODO: Add docstring."""
 
-from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
+from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.helpers import load_likely_passenger_genes
 from dialect.utils.plotting import draw_likely_passenger_gene_proportion_violinplot
 from dialect.utils.postprocessing import (
@@ -21,47 +21,6 @@ CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"]
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def build_argument_parser() -> ArgumentParser:
-    """TODO: Add docstring."""
-    parser = ArgumentParser()
-    parser.add_argument(
-        "-n",
-        "--num_pairs",
-        type=int,
-        default=10,
-    )
-    parser.add_argument(
-        "-r",
-        "--results_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-lp",
-        "--likely_passenger_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-o",
-        "--out_dir",
-        type=Path,
-        required=True,
-    )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "-me",
-        "--mutual_exclusivity",
-        action="store_true",
-    )
-    group.add_argument(
-        "-co",
-        "--cooccurrence",
-        action="store_true",
-    )
-    return parser
-
-
 def compute_num_likely_passengers_in_top_ranked_pairs(
     likely_passengers: set,
     top_ranking_pairs: pd.DataFrame,
@@ -122,7 +81,13 @@ def compute_likely_passenger_proportions(
 # ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        likely_passenger_required=True,
+        add_num_pairs=True,
+        add_analysis_type=True,
+    )
     args = parser.parse_args()
     subtype_to_likely_passengers = load_likely_passenger_genes(
         args.likely_passenger_dir,

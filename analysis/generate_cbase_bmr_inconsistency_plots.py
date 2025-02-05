@@ -1,10 +1,9 @@
 """TODO: Add docstring."""
 
-from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
-
+from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.helpers import (
     load_likely_passenger_genes,
     load_putative_driver_genes,
@@ -19,42 +18,6 @@ from dialect.utils.plotting import (
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def build_argument_parser() -> ArgumentParser:
-    """TODO: Add docstring."""
-    parser = ArgumentParser()
-    parser.add_argument(
-        "-r",
-        "--results_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-pd",
-        "--putative_driver_gene_fn",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-lp",
-        "--likely_passenger_dir",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "-ng",
-        "--num_genes",
-        type=int,
-        default=50,
-    )
-    parser.add_argument(
-        "-o",
-        "--out_dir",
-        type=Path,
-        required=True,
-    )
-    return parser
-
-
 def load_all_subtype_single_gene_results(results_dir: Path, num_genes: int) -> dict:
     """TODO: Add docstring."""
     subtype_to_results_df = {}
@@ -122,7 +85,13 @@ def compute_subtype_putative_driver_gene_overlap(
 # ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        likely_passenger_required=True,
+        putative_driver_required=True,
+        add_num_genes=True,
+    )
     args = parser.parse_args()
     putative_drivers = load_putative_driver_genes(args.putative_driver_gene_fn)
     subtype_to_likely_passengers = load_likely_passenger_genes(

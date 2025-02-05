@@ -1,24 +1,15 @@
 """TODO: Add docstring."""
 
-from argparse import ArgumentParser
 from pathlib import Path
 
 import pandas as pd
+from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import draw_sample_mutation_count_subtype_histograms
 
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def build_argument_parser() -> ArgumentParser:
-    """TODO: Add docstring."""
-    parser = ArgumentParser()
-    parser.add_argument("-r", "--results_dir", type=Path, required=True)
-    parser.add_argument("-o", "--out_dir", type=Path, required=True)
-    parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,LUAD,LUSC")
-    return parser
-
-
 def compute_avg_sample_mutation_count(results_dir: Path) -> pd.Series:
     """TODO: Add docstring."""
     subtype_sample_mutation_count_sums = []
@@ -36,7 +27,11 @@ def compute_avg_sample_mutation_count(results_dir: Path) -> pd.Series:
 # ------------------------------------------------------------------------------------ #
 def main() -> None:
     """TODO: Add docstring."""
-    parser = build_argument_parser()
+    parser = build_analysis_argument_parser(
+        results_dir_required=True,
+        out_dir_required=True,
+        add_subtypes=True,
+    )
     args = parser.parse_args()
 
     subtype_avg_sample_mutation_count = compute_avg_sample_mutation_count(

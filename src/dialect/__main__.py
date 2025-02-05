@@ -4,7 +4,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from dialect.utils import (
-    build_argument_parser,
+    build_dialect_argument_parser,
     configure_logging,
     create_matrix_simulation,
     create_pair_gene_simulation,
@@ -82,7 +82,7 @@ def _handle_simulate_command(args: Namespace) -> None:
 
 def main() -> None:
     """Run main entry point for the DIALECT CLI."""
-    parser = build_argument_parser()
+    parser = build_dialect_argument_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
 
