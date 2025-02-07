@@ -634,11 +634,12 @@ def evaluate_auc_vs_driver_proportion(
     ixn_type: str,
 ) -> None:
     """TODO: Add docstring."""
-    method_to_avg_auprc_vals = {}
-    driver_proportions = np.arange(0.1, 1.1, 0.1)
+    method_to_auprc_vals = {}
+    driver_proportions = np.arange(0.1, 1.01, 0.1)
     for driver_proportion in driver_proportions:
         formatted_dp = f"{driver_proportion:.1f}DP"
-        method_to_auprc_val_lists = {}
+        all_y_true = []
+        all_method_scores = []
         for i in range(1, nruns + 1):
             results_base_dir = Path(
                 re.sub(
@@ -650,29 +651,34 @@ def evaluate_auc_vs_driver_proportion(
             results_fn = (
                 results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
             )
-            simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
+            simulation_info_fn = (
+                results_base_dir / f"R{i}" / "matrix_simulation_info.json"
+            )
             results_df = pd.read_csv(results_fn)
             with simulation_info_fn.open() as f:
                 gt = json.load(f)
             num_samples = gt.get("num_samples")
-            method_to_scores = get_method_scores(results_df, num_samples, ixn_type)
-            y_true = get_ground_truth_labels(results_df, gt, ixn_type)
-            for method, scores in method_to_scores.items():
-                auprc = average_precision_score(y_true, scores)
-                if method not in method_to_auprc_val_lists:
-                    method_to_auprc_val_lists[method] = []
-                method_to_auprc_val_lists[method].append(auprc)
-        for method in method_to_scores:
-            if method not in method_to_avg_auprc_vals:
-                method_to_avg_auprc_vals[method] = []
-            method_to_avg_auprc_vals[method].append(
-                np.mean(
-                    method_to_auprc_val_lists[method],
-                ),
+            all_y_true.append(get_ground_truth_labels(results_df, gt, ixn_type))
+            all_method_scores.append(
+                get_method_scores(results_df, num_samples, ixn_type),
             )
+        method_names = list(all_method_scores[0].keys())
+        for _, method_name in enumerate(method_names):
+            y_true_concat = []
+            scores_concat = []
+            for y_true, methods_dict in zip(all_y_true, all_method_scores):
+                scores = methods_dict[method_name]
+                y_true_concat.append(y_true)
+                scores_concat.append(scores)
+            y_true_concat = np.concatenate(y_true_concat)
+            scores_concat = np.concatenate(scores_concat)
+            auc_val = average_precision_score(y_true_concat, scores_concat)
+            if method_name not in method_to_auprc_vals:
+                method_to_auprc_vals[method_name] = []
+            method_to_auprc_vals[method_name].append(auc_val)
     draw_auc_vs_factor_curve(
         driver_proportions,
-        method_to_avg_auprc_vals,
+        method_to_auprc_vals,
         out / f"{ixn_type}_auc_vs_driver_proportion_curve",
         xlabel="Driver Proportion",
     )
@@ -684,11 +690,12 @@ def evaluate_auc_vs_num_samples(
     ixn_type: str,
 ) -> None:
     """TODO: Add docstring."""
-    method_to_avg_auprc_vals = {}
-    num_samples_list = np.arange(100, 1400, 100)
+    method_to_auprc_vals = {}
+    num_samples_list = np.arange(100, 1701, 100)
     for num_samples in num_samples_list:
         formatted_ns = f"NS{num_samples}"
-        method_to_auprc_val_lists = {}
+        all_y_true = []
+        all_method_scores = []
         for i in range(1, nruns + 1):
             results_base_dir = Path(
                 re.sub(
@@ -700,28 +707,33 @@ def evaluate_auc_vs_num_samples(
             results_fn = (
                 results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
             )
-            simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
+            simulation_info_fn = (
+                results_base_dir / f"R{i}" / "matrix_simulation_info.json"
+            )
             results_df = pd.read_csv(results_fn)
             with simulation_info_fn.open() as f:
                 gt = json.load(f)
-            method_to_scores = get_method_scores(results_df, num_samples, ixn_type)
-            y_true = get_ground_truth_labels(results_df, gt, ixn_type)
-            for method, scores in method_to_scores.items():
-                auprc = average_precision_score(y_true, scores)
-                if method not in method_to_auprc_val_lists:
-                    method_to_auprc_val_lists[method] = []
-                method_to_auprc_val_lists[method].append(auprc)
-        for method in method_to_scores:
-            if method not in method_to_avg_auprc_vals:
-                method_to_avg_auprc_vals[method] = []
-            method_to_avg_auprc_vals[method].append(
-                np.mean(
-                    method_to_auprc_val_lists[method],
-                ),
+            all_y_true.append(get_ground_truth_labels(results_df, gt, ixn_type))
+            all_method_scores.append(
+                get_method_scores(results_df, num_samples, ixn_type),
             )
+        method_names = list(all_method_scores[0].keys())
+        for _, method_name in enumerate(method_names):
+            y_true_concat = []
+            scores_concat = []
+            for y_true, methods_dict in zip(all_y_true, all_method_scores):
+                scores = methods_dict[method_name]
+                y_true_concat.append(y_true)
+                scores_concat.append(scores)
+            y_true_concat = np.concatenate(y_true_concat)
+            scores_concat = np.concatenate(scores_concat)
+            auc_val = average_precision_score(y_true_concat, scores_concat)
+            if method_name not in method_to_auprc_vals:
+                method_to_auprc_vals[method_name] = []
+            method_to_auprc_vals[method_name].append(auc_val)
     draw_auc_vs_factor_curve(
         num_samples_list,
-        method_to_avg_auprc_vals,
+        method_to_auprc_vals,
         out / f"{ixn_type}_auc_vs_num_samples_curve",
         xlabel="Number of Samples",
     )

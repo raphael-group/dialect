@@ -20,13 +20,13 @@ DRIVER_PROP="$9"
 NUM_RUNS="${10}"
 
 DRIVER_GENES_FILE="data/references/OncoKB_Cancer_Gene_List.tsv"
-COUNT_MATRIX="output/TOP_500_Genes/${SUBTYPE}/count_matrix.csv"
-BMR_PMFS="output/TOP_500_Genes/${SUBTYPE}/bmr_pmfs.csv"
-OUTPUT_BASE="output/SIMULATIONS"
+COUNT_MATRIX="output/tcga_pancan/${SUBTYPE}/count_matrix.csv"
+BMR_PMFS="output/tcga_pancan/${SUBTYPE}/bmr_pmfs.csv"
+OUTPUT_BASE="output/simulations"
 SUBTYPE_OUTPUT_DIR="${OUTPUT_BASE}/${SUBTYPE}"
 OUTPUT_DIR="${SUBTYPE_OUTPUT_DIR}/NS${NUM_SAMPLES}/${NUM_ME_PAIRS}ME_${NUM_CO_PAIRS}CO_${NUM_LIKELY_PASSENGERS}P/${DRIVER_PROP}DP/${TAU_LOW}TL_${TAU_HIGH}TH"
 RUN_OUTPUT_DIR="${OUTPUT_DIR}/R${RUN}"
-TOP_K_GENES=500
+TOP_K_GENES=200 # max 200 genes used
 
 mkdir -p "$RUN_OUTPUT_DIR"
 

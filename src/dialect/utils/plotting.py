@@ -536,7 +536,15 @@ def draw_auc_vs_factor_curve(
     plt.figure(figsize=figsize)
 
     for method, avg_auprc_vals in method_to_avg_auprc_vals.items():
-        plt.plot(x, avg_auprc_vals, label=method, linewidth=font_scale * 2, alpha=0.75)
+        plt.plot(
+            x,
+            avg_auprc_vals,
+            label=method,
+            linewidth=font_scale * 2,
+            alpha=0.75,
+            marker="o",
+            markersize=font_scale * 3,
+        )
 
     plt.ylabel("AUPRC", fontsize=font_scale * 10)
     plt.xlabel(xlabel, fontsize=font_scale * 10)
