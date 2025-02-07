@@ -408,7 +408,8 @@ def create_matrix_simulation(
     )
     matrix_out_fn = dir_out / "count_matrix.csv"
     sim_df.index.name = "sample"
-    sim_df.to_csv(matrix_out_fn, index=True)
+    nonzero_gene_mut_cnt_sim_df = sim_df.loc[:, sim_df.sum() != 0]
+    nonzero_gene_mut_cnt_sim_df.to_csv(matrix_out_fn, index=True)
 
     info = {
         "ME Pairs": me_pairs,
