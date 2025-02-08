@@ -584,13 +584,21 @@ def get_ground_truth_labels(
 def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict:
     """TODO: Add docstring."""
     dialect_rho = df["Rho"].astype(float).to_numpy()
+    dialect_lrt = df["Likelihood Ratio"].astype(float).to_numpy()
     tau_1x = df["Tau_1X"].astype(float).to_numpy()
     tau_x1 = df["Tau_X1"].astype(float).to_numpy()
     epsilon = compute_epsilon_threshold(num_samples)
     mask_no_interaction = (tau_1x < epsilon) | (tau_x1 < epsilon)
     dialect_rho[mask_no_interaction] = 0.0
+    dialect_lrt[mask_no_interaction] = 0.0
 
-    dialect_rho = -dialect_rho if ixn_type == "ME" else dialect_rho
+    if ixn_type == "ME":
+        dialect_rho = -dialect_rho
+        mask_co_interaction = df["Rho"] > 0
+        dialect_lrt[mask_co_interaction] = 0.0
+    else:
+        mask_me_interaction = df["Rho"] < 0
+        dialect_lrt[mask_me_interaction] = 0.0
 
     if ixn_type == "ME":
         fishers_pval = df["Fisher's ME P-Val"].astype(float).to_numpy()
@@ -603,7 +611,8 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         wesme_score = -np.log10(wesme_pval + 1e-300)
 
         method_to_scores = {
-            "DIALECT": dialect_rho,
+            "DIALECT (Rho)": dialect_rho,
+            "DIALECT (LRT)": dialect_lrt,
             "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
             "MEGSA": megsa_s,
@@ -620,7 +629,8 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         wesco_score = -np.log10(wesco_pval + 1e-300)
 
         method_to_scores = {
-            "DIALECT": dialect_rho,
+            "DIALECT (Rho)": dialect_rho,
+            "DIALECT (LRT)": dialect_lrt,
             "Fisher's Exact": fishers_score,
             "DISCOVER": discover_score,
             "WeSCO": wesco_score,
@@ -773,7 +783,7 @@ def evaluate_matrix_simulation(
                 num_pairs=1_000,
                 num_samples=num_samples,
                 methods=[
-                    "DIALECT",
+                    "DIALECT (Rho)",
                     "DISCOVER",
                     "Fisher's Exact Test",
                     "MEGSA",
@@ -787,7 +797,12 @@ def evaluate_matrix_simulation(
                 results_df=results_df,
                 num_pairs=1_000,
                 num_samples=num_samples,
-                methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"],
+                methods=[
+                    "DIALECT (LRT)",
+                    "DISCOVER",
+                    "Fisher's Exact Test",
+                    "WeSME",
+                ],
             ),
         )
 
@@ -807,7 +822,13 @@ def evaluate_matrix_simulation(
         draw_hit_curve(
             true_me_pairs,
             top_ranked_me_tables,
-            methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"],
+            methods=[
+                "DIALECT (Rho)",
+                "DISCOVER",
+                "Fisher's Exact Test",
+                "MEGSA",
+                "WeSME",
+            ],
             total_pairs=num_genes * (num_genes - 1) // 2,
             fout=out / f"{ixn_type}_hit_curve",
         )
@@ -815,7 +836,12 @@ def evaluate_matrix_simulation(
         draw_hit_curve(
             true_co_pairs,
             top_ranked_co_tables,
-            methods=["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"],
+            methods=[
+                "DIALECT (LRT)",
+                "DISCOVER",
+                "Fisher's Exact Test",
+                "WeSME",
+            ],
             total_pairs=num_genes * (num_genes - 1) // 2,
             fout=out / f"{ixn_type}_hit_curve",
         )

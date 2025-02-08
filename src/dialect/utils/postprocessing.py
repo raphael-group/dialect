@@ -10,7 +10,8 @@ from scipy.stats import norm
 #                                       CONSTANTS                                      #
 # ------------------------------------------------------------------------------------ #
 ME_METHOD_RANKING_CRITERIA = {
-    "DIALECT": ("Rho", "ascending"),
+    "DIALECT (Rho)": ("Rho", "ascending"),
+    "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
     "DISCOVER": ("Discover ME P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's ME P-Val", "ascending"),
     "MEGSA": ("MEGSA S-Score (LRT)", "descending"),
@@ -18,7 +19,8 @@ ME_METHOD_RANKING_CRITERIA = {
 }
 
 CO_METHOD_RANKING_CRITERIA = {
-    "DIALECT": ("Rho", "descending"),
+    "DIALECT (Rho)": ("Rho", "descending"),
+    "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
     "DISCOVER": ("Discover CO P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's CO P-Val", "ascending"),
     "WeSME": ("WeSCO P-Val", "ascending"),
