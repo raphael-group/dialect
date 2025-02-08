@@ -107,6 +107,7 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
         )
         rho = interaction.compute_rho(taus)
         log_odds_ratio = interaction.compute_log_odds_ratio(taus)
+        wald_statistic = interaction.compute_wald_statistic(taus)
         likelihood_ratio = interaction.compute_likelihood_ratio(taus)
         cm = interaction.compute_contingency_table()
 
@@ -127,6 +128,7 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
                 "Rho": rho,
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,
+                "Wald Statistic": wald_statistic,
             },
         )
 
