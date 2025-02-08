@@ -11,8 +11,8 @@ from dialect.utils.postprocessing import (
     generate_top_ranked_me_interaction_tables,
 )
 
-ME_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"]
+ME_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSME"]
 
 
 def main() -> None:
@@ -20,17 +20,19 @@ def main() -> None:
     parser = build_analysis_argument_parser(
         results_dir_required=True,
         out_dir_required=True,
-        likely_passenger_required=True,
+        add_driver_genes_fn=True,
+        add_likely_passenger_dir=True,
         add_analysis_type=True,
         add_num_pairs=True,
         driver_genes_required=True,
+        likely_passenger_required=True,
     )
     args = parser.parse_args()
 
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
     putative_drivers = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
-    num_edges = args.num_edges // 2 if args.both else args.num_edges
+    num_edges = args.num_pairs // 2 if args.analysis_type == "both" else args.num_pairs
     for subtype in subtypes:
         results_fn = args.results_dir / subtype / "complete_pairwise_ixn_results.csv"
         cnt_mtx_fn = args.results_dir / subtype / "count_matrix.csv"
@@ -68,7 +70,7 @@ def main() -> None:
                 else top_ranked_co_pairs
             )
             fout = f"{args.out_dir}/{subtype}_{method}_network"
-            if args.mutual_exclusivity or args.cooccurrence:
+            if args.analysis_type in {"mutual_exclusivity", "cooccurrence"}:
                 draw_single_me_or_co_interaction_network(
                     edges=top_ranked_pairs[["Gene A", "Gene B"]].to_numpy(),
                     putative_drivers=putative_drivers,

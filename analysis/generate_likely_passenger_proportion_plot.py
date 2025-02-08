@@ -14,8 +14,8 @@ from dialect.utils.postprocessing import (
 # ------------------------------------------------------------------------------------ #
 #                                       CONSTANTS                                      #
 # ------------------------------------------------------------------------------------ #
-ME_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSME"]
+ME_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSME"]
 
 
 # ------------------------------------------------------------------------------------ #
@@ -84,6 +84,7 @@ def main() -> None:
     parser = build_analysis_argument_parser(
         results_dir_required=True,
         out_dir_required=True,
+        add_likely_passenger_dir=True,
         likely_passenger_required=True,
         add_num_pairs=True,
         add_analysis_type=True,
@@ -92,7 +93,7 @@ def main() -> None:
     subtype_to_likely_passengers = load_likely_passenger_genes(
         args.likely_passenger_dir,
     )
-    if args.mutual_exclusivity:
+    if args.analysis_type == "mutual_exclusivity":
         method_to_subtype_to_proportion = compute_likely_passenger_proportions(
             results_dir=args.results_dir,
             subtype_to_likely_passengers=subtype_to_likely_passengers,
