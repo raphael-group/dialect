@@ -26,6 +26,9 @@ from dialect.utils.postprocessing import (
 
 ME_METHODS = [
     "DIALECT (Rho)",
+    "DIALECT (LRT)",
+    "DIALECT (LOR)",
+    "DIALECT (Wald)",
     "DISCOVER",
     "Fisher's Exact Test",
     "WeSME",
@@ -33,7 +36,10 @@ ME_METHODS = [
 ]
 
 CO_METHODS = [
+    "DIALECT (Rho)",
     "DIALECT (LRT)",
+    "DIALECT (LOR)",
+    "DIALECT (Wald)",
     "DISCOVER",
     "Fisher's Exact Test",
     "WeSCO",
@@ -600,12 +606,16 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
     """TODO: Add docstring."""
     dialect_rho = df["Rho"].astype(float).to_numpy()
     dialect_lrt = df["Likelihood Ratio"].astype(float).to_numpy()
+    dialect_wald = df["Wald Statistic"].astype(float).to_numpy()
+    dialect_lor = df["Log Odds Ratio"].astype(float).to_numpy()
     tau_1x = df["Tau_1X"].astype(float).to_numpy()
     tau_x1 = df["Tau_X1"].astype(float).to_numpy()
     epsilon = compute_epsilon_threshold(num_samples)
     mask_no_interaction = (tau_1x < epsilon) | (tau_x1 < epsilon)
     dialect_rho[mask_no_interaction] = 0.0
     dialect_lrt[mask_no_interaction] = 0.0
+    dialect_wald[mask_no_interaction] = 0.0
+    dialect_lor[mask_no_interaction] = 0.0
 
     if ixn_type == "ME":
         dialect_rho = -dialect_rho
@@ -628,6 +638,8 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         method_to_scores = {
             "DIALECT (Rho)": dialect_rho,
             "DIALECT (LRT)": dialect_lrt,
+            "DIALECT (LOR)": dialect_lor,
+            "DIALECT (Wald)": dialect_wald,
             "Fisher's Exact Test": fishers_score,
             "DISCOVER": discover_score,
             "WeSME": wesme_score,
@@ -642,10 +654,11 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         fishers_score = -np.log10(fishers_pval + 1e-300)
         discover_score = -np.log10(discover_pval + 1e-300)
         wesco_score = -np.log10(wesco_pval + 1e-300)
-
         method_to_scores = {
             "DIALECT (Rho)": dialect_rho,
             "DIALECT (LRT)": dialect_lrt,
+            "DIALECT (LOR)": dialect_lor,
+            "DIALECT (Wald)": dialect_wald,
             "Fisher's Exact Test": fishers_score,
             "DISCOVER": discover_score,
             "WeSCO": wesco_score,
@@ -718,7 +731,7 @@ def evaluate_auc_vs_num_samples(
     """TODO: Add docstring."""
     methods = ME_METHODS if ixn_type == "ME" else CO_METHODS
     method_to_auprc_vals = {}
-    num_samples_list = np.arange(50, 1851, 50)
+    num_samples_list = np.arange(50, 2001, 50)
     for num_samples in num_samples_list:
         formatted_ns = f"NS{num_samples}"
         all_y_true = []

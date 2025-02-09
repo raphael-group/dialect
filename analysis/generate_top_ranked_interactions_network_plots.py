@@ -3,7 +3,6 @@
 import pandas as pd
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import (
-    draw_single_me_and_co_interaction_network,
     draw_single_me_or_co_interaction_network,
 )
 from dialect.utils.postprocessing import (
@@ -11,8 +10,8 @@ from dialect.utils.postprocessing import (
     generate_top_ranked_me_interaction_tables,
 )
 
-ME_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSME"]
+ME_METHODS = ["DIALECT (Rho)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
 
 
 def main() -> None:
@@ -61,33 +60,28 @@ def main() -> None:
                 methods=CO_METHODS,
             )
         )
-        for method in top_ranked_co_interactions_by_method:
-            top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
-            top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
-            top_ranked_pairs = (
-                top_ranked_me_pairs
-                if args.analysis_type == "mutual_exclusivity"
-                else top_ranked_co_pairs
-            )
-            fout = f"{args.out_dir}/{subtype}_{method}_network"
-            if args.analysis_type in {"mutual_exclusivity", "cooccurrence"}:
+        if args.analysis_type == "mutual_exclusivity":
+            for method in top_ranked_me_interactions_by_method:
+                top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
+                fout = f"{args.out_dir}/{subtype}_{method}_network"
                 draw_single_me_or_co_interaction_network(
-                    edges=top_ranked_pairs[["Gene A", "Gene B"]].to_numpy(),
+                    edges=top_ranked_me_pairs[["Gene A", "Gene B"]].to_numpy(),
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
                     method=method,
                     fout=fout,
                 )
-            else:
-                draw_single_me_and_co_interaction_network(
-                    me_edges=top_ranked_me_pairs[["Gene A", "Gene B"]].to_numpy(),
-                    co_edges=top_ranked_co_pairs[["Gene A", "Gene B"]].to_numpy(),
+        elif args.analysis_type == "cooccurrence":
+            for method in top_ranked_co_interactions_by_method:
+                top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
+                fout = f"{args.out_dir}/{subtype}_{method}_network"
+                draw_single_me_or_co_interaction_network(
+                    edges=top_ranked_co_pairs[["Gene A", "Gene B"]].to_numpy(),
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
                     method=method,
                     fout=fout,
                 )
-
 
 if __name__ == "__main__":
     main()

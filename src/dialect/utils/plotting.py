@@ -269,6 +269,7 @@ def draw_average_simulation_precision_recall_curve(
         auprc_vals = []
         for y_true, methods_dict in zip(all_y_true, all_method_scores):
             scores = methods_dict[method_name]
+            scores = np.nan_to_num(scores, nan=0)
             single_precision, single_recall, _ = precision_recall_curve(y_true, scores)
 
             interp_func = interp1d(
@@ -363,6 +364,7 @@ def draw_concat_simulation_precision_recall_curve(
         scores_concat = []
         for y_true, methods_dict in zip(all_y_true, all_method_scores):
             scores = methods_dict[method_name]
+            scores = np.nan_to_num(scores, nan=0)
             y_true_concat.append(y_true)
             scores_concat.append(scores)
         y_true_concat = np.concatenate(y_true_concat)

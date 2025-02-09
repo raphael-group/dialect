@@ -12,6 +12,8 @@ from scipy.stats import norm
 ME_METHOD_RANKING_CRITERIA = {
     "DIALECT (Rho)": ("Rho", "ascending"),
     "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
+    "DIALECT (LOR)": ("Log Odds Ratio", "descending"),
+    "DIALECT (Wald)": ("Wald Statistic", "descending"),
     "DISCOVER": ("Discover ME P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's ME P-Val", "ascending"),
     "MEGSA": ("MEGSA S-Score (LRT)", "descending"),
@@ -21,6 +23,8 @@ ME_METHOD_RANKING_CRITERIA = {
 CO_METHOD_RANKING_CRITERIA = {
     "DIALECT (Rho)": ("Rho", "descending"),
     "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
+    "DIALECT (LOR)": ("Log Odds Ratio", "ascending"),
+    "DIALECT (Wald)": ("Wald Statistic", "ascending"),
     "DISCOVER": ("Discover CO P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's CO P-Val", "ascending"),
     "WeSCO": ("WeSCO P-Val", "ascending"),
@@ -79,7 +83,12 @@ def generate_top_ranked_co_interaction_tables(
             by=metric,
             ascending=sort_order == "ascending",
         )
-        if method in {"DIALECT (Rho)", "DIALECT (LRT)"}:
+        if method in {
+            "DIALECT (Rho)",
+            "DIALECT (LRT)",
+            "DIALECT (LOR)",
+            "DIALECT (Wald)",
+        }:
             epsilon = compute_epsilon_threshold(num_samples)
             top_ranked_co_interaction_table = top_ranked_co_interaction_table[
                 (top_ranked_co_interaction_table["Tau_1X"] > epsilon)
@@ -109,7 +118,12 @@ def generate_top_ranked_me_interaction_tables(
             by=metric,
             ascending=sort_order == "ascending",
         )
-        if method in {"DIALECT (Rho)", "DIALECT (LRT)"}:
+        if method in {
+            "DIALECT (Rho)",
+            "DIALECT (LRT)",
+            "DIALECT (LOR)",
+            "DIALECT (Wald)",
+        }:
             epsilon = compute_epsilon_threshold(num_samples)
             top_ranked_me_interaction_table = top_ranked_me_interaction_table[
                 (top_ranked_me_interaction_table["Tau_1X"] > epsilon)
