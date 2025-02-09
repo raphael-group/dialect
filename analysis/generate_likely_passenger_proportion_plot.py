@@ -14,8 +14,8 @@ from dialect.utils.postprocessing import (
 # ------------------------------------------------------------------------------------ #
 #                                       CONSTANTS                                      #
 # ------------------------------------------------------------------------------------ #
-ME_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSME"]
+ME_METHODS = ["DIALECT (Rho)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
 
 
 # ------------------------------------------------------------------------------------ #
@@ -109,9 +109,13 @@ def main() -> None:
             methods=CO_METHODS,
             generate_top_ranked_interaction_table=generate_top_ranked_co_interaction_tables,
         )
+    methods = ME_METHODS if args.analysis_type == "mutual_exclusivity" else CO_METHODS
+    figsize = (len(methods) * 1.2, 3)
     draw_likely_passenger_gene_proportion_violinplot(
         method_to_subtype_to_proportion,
-        out_fn=args.out_dir / "likely_passenger_proportion_violinplot",
+        out_fn=args.out_dir
+        / f"{args.analysis_type}_likely_passenger_proportion_violinplot",
+        figsize=figsize,
     )
 
 

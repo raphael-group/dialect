@@ -7,31 +7,31 @@
 # ---------------------
 # 1. Define Parameters
 # ---------------------
-SUBTYPES=("UCEC")
-NUM_SAMPLES_VALUES=(100)
+SUBTYPES=("LAML")
+NUM_SAMPLES_VALUES=(50)
 NUM_ME_PAIRS_VALUES=(1)
-NUM_CO_PAIRS_VALUES=(0)
-LIKELY_PASSENGERS_VALUES=(8)
-TAU_LOW_VALUES=(0.15)
-TAU_HIGH_VALUES=(0.25)
-DRIVER_PROPORTIONS=($(seq 0.1 0.1 1.0))
-NUM_RUNS=2
-TOP_K_GENES=500
+NUM_CO_PAIRS_VALUES=(1)
+LIKELY_PASSENGERS_VALUES=(6)
+TAU_LOW_VALUES=(0.049)
+TAU_HIGH_VALUES=(0.051)
+DRIVER_PROPORTIONS=(1.0)
+NUM_RUNS=1
+TOP_K_GENES=200
 
 # ---------------------
 # 2. Define I/O Paths
 # ---------------------
 
 DRIVER_GENES_FILE="data/references/OncoKB_Cancer_Gene_List.tsv"
-OUTPUT_BASE="output/SIMULATIONS"
+OUTPUT_BASE="output/simulations"
 
 # -------------------------------
 # 3. Loop Over Parameters and Run
 # -------------------------------
 
 for subtype in "${SUBTYPES[@]}"; do
-  COUNT_MATRIX="output/TOP_500_Genes/${subtype}/count_matrix.csv"
-  BMR_PMFS="output/TOP_500_Genes/${subtype}/bmr_pmfs.csv"
+  COUNT_MATRIX="output/tcga_pancan/${subtype}/count_matrix.csv"
+  BMR_PMFS="output/tcga_pancan/${subtype}/bmr_pmfs.csv"
 
   if [[ ! -f "$COUNT_MATRIX" ]]; then
       echo "Count matrix file not found: $COUNT_MATRIX"
@@ -114,29 +114,26 @@ for subtype in "${SUBTYPES[@]}"; do
                   -a "${RUN_OUTPUT_DIR}/comparison_interaction_results.csv" \
                   -o "${RUN_OUTPUT_DIR}"
 
-                echo "Done with run ${run} for subtype ${subtype} (NS=${num_samples})."
-
-
               done
 
               # ----------------------------------------------------
               # 8. Evaluate the results (ME and CO) in parallel
               # ----------------------------------------------------
 
-              echo dialect simulate evaluate matrix \
-                -r "${PARAM_DIR}" \
-                -ixn "ME" \
-                -n "$NUM_RUNS" \
-                -o "${PARAM_DIR}" &
-              exit
+              # dialect simulate evaluate matrix \
+              #   -r "${PARAM_DIR}" \
+              #   -ixn "ME" \
+              #   -n "$NUM_RUNS" \
+              #   -o "${PARAM_DIR}" &
+              # exit
 
-              dialect simulate evaluate matrix \
-                -r "${PARAM_DIR}" \
-                -ixn "CO" \
-                -n "$NUM_RUNS" \
-                -o "${PARAM_DIR}" &
+              # dialect simulate evaluate matrix \
+              #   -r "${PARAM_DIR}" \
+              #   -ixn "CO" \
+              #   -n "$NUM_RUNS" \
+              #   -o "${PARAM_DIR}" &
 
-              wait
+              # wait
 
             done
           done

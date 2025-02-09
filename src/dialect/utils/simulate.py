@@ -24,6 +24,21 @@ from dialect.utils.postprocessing import (
     generate_top_ranked_me_interaction_tables,
 )
 
+ME_METHODS = [
+    "DIALECT (Rho)",
+    "DISCOVER",
+    "Fisher's Exact Test",
+    "WeSME",
+    "MEGSA",
+]
+
+CO_METHODS = [
+    "DIALECT (LRT)",
+    "DISCOVER",
+    "Fisher's Exact Test",
+    "WeSCO",
+]
+
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -613,10 +628,10 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         method_to_scores = {
             "DIALECT (Rho)": dialect_rho,
             "DIALECT (LRT)": dialect_lrt,
-            "Fisher's Exact": fishers_score,
+            "Fisher's Exact Test": fishers_score,
             "DISCOVER": discover_score,
-            "MEGSA": megsa_s,
             "WeSME": wesme_score,
+            "MEGSA": megsa_s,
         }
 
     else:
@@ -631,7 +646,7 @@ def get_method_scores(df: pd.DataFrame, num_samples: int, ixn_type: str) -> dict
         method_to_scores = {
             "DIALECT (Rho)": dialect_rho,
             "DIALECT (LRT)": dialect_lrt,
-            "Fisher's Exact": fishers_score,
+            "Fisher's Exact Test": fishers_score,
             "DISCOVER": discover_score,
             "WeSCO": wesco_score,
         }
@@ -645,8 +660,9 @@ def evaluate_auc_vs_driver_proportion(
     ixn_type: str,
 ) -> None:
     """TODO: Add docstring."""
+    methods = ME_METHODS if ixn_type == "ME" else CO_METHODS
     method_to_auprc_vals = {}
-    driver_proportions = np.arange(0.1, 1.01, 0.1)
+    driver_proportions = np.arange(0.05, 1.01, 0.05)
     for driver_proportion in driver_proportions:
         formatted_dp = f"{driver_proportion:.1f}DP"
         all_y_true = []
@@ -673,8 +689,7 @@ def evaluate_auc_vs_driver_proportion(
             all_method_scores.append(
                 get_method_scores(results_df, num_samples, ixn_type),
             )
-        method_names = list(all_method_scores[0].keys())
-        for _, method_name in enumerate(method_names):
+        for _, method_name in enumerate(methods):
             y_true_concat = []
             scores_concat = []
             for y_true, methods_dict in zip(all_y_true, all_method_scores):
@@ -701,8 +716,9 @@ def evaluate_auc_vs_num_samples(
     ixn_type: str,
 ) -> None:
     """TODO: Add docstring."""
+    methods = ME_METHODS if ixn_type == "ME" else CO_METHODS
     method_to_auprc_vals = {}
-    num_samples_list = np.arange(100, 1701, 100)
+    num_samples_list = np.arange(50, 1851, 50)
     for num_samples in num_samples_list:
         formatted_ns = f"NS{num_samples}"
         all_y_true = []
@@ -728,8 +744,7 @@ def evaluate_auc_vs_num_samples(
             all_method_scores.append(
                 get_method_scores(results_df, num_samples, ixn_type),
             )
-        method_names = list(all_method_scores[0].keys())
-        for _, method_name in enumerate(method_names):
+        for _, method_name in enumerate(methods):
             y_true_concat = []
             scores_concat = []
             for y_true, methods_dict in zip(all_y_true, all_method_scores):
@@ -757,7 +772,7 @@ def evaluate_matrix_simulation(
 ) -> None:
     """TODO: Add docstring."""
     all_y_true = []
-    all_methods = []
+    all_method_scores = []
     true_me_pairs = []
     true_co_pairs = []
     top_ranked_me_tables = []
@@ -774,7 +789,7 @@ def evaluate_matrix_simulation(
             gt.get("ME Pairs") + gt.get("CO Pairs") + gt.get("Likely Passengers"),
         )
         all_y_true.append(get_ground_truth_labels(results_df, gt, ixn_type))
-        all_methods.append(get_method_scores(results_df, num_samples, ixn_type))
+        all_method_scores.append(get_method_scores(results_df, num_samples, ixn_type))
 
         true_me_pairs.append(gt.get("ME Pairs", []))
         top_ranked_me_tables.append(
@@ -782,13 +797,7 @@ def evaluate_matrix_simulation(
                 results_df=results_df,
                 num_pairs=1_000,
                 num_samples=num_samples,
-                methods=[
-                    "DIALECT (Rho)",
-                    "DISCOVER",
-                    "Fisher's Exact Test",
-                    "MEGSA",
-                    "WeSME",
-                ],
+                methods=ME_METHODS,
             ),
         )
         true_co_pairs.append(gt.get("CO Pairs", []))
@@ -797,54 +806,40 @@ def evaluate_matrix_simulation(
                 results_df=results_df,
                 num_pairs=1_000,
                 num_samples=num_samples,
-                methods=[
-                    "DIALECT (LRT)",
-                    "DISCOVER",
-                    "Fisher's Exact Test",
-                    "WeSME",
-                ],
+                methods=CO_METHODS,
             ),
         )
 
+    methods = ME_METHODS if ixn_type == "ME" else CO_METHODS
+
     draw_average_simulation_precision_recall_curve(
-        all_methods,
+        all_method_scores,
         all_y_true,
         out / f"{ixn_type}_average_pr_curve",
+        methods=methods,
     )
 
     draw_concat_simulation_precision_recall_curve(
-        all_methods,
+        all_method_scores,
         all_y_true,
         out / f"{ixn_type}_concat_pr_curve",
+        methods=methods,
     )
 
     if ixn_type == "ME":
-        draw_hit_curve(
-            true_me_pairs,
-            top_ranked_me_tables,
-            methods=[
-                "DIALECT (Rho)",
-                "DISCOVER",
-                "Fisher's Exact Test",
-                "MEGSA",
-                "WeSME",
-            ],
-            total_pairs=num_genes * (num_genes - 1) // 2,
-            fout=out / f"{ixn_type}_hit_curve",
-        )
+        true_pairs = true_me_pairs
+        top_ranked_tables = top_ranked_me_tables
     else:
-        draw_hit_curve(
-            true_co_pairs,
-            top_ranked_co_tables,
-            methods=[
-                "DIALECT (LRT)",
-                "DISCOVER",
-                "Fisher's Exact Test",
-                "WeSME",
-            ],
-            total_pairs=num_genes * (num_genes - 1) // 2,
-            fout=out / f"{ixn_type}_hit_curve",
-        )
+        true_pairs = true_co_pairs
+        top_ranked_tables = top_ranked_co_tables
+
+    draw_hit_curve(
+        true_pairs,
+        top_ranked_tables,
+        methods=methods,
+        total_pairs=num_genes * (num_genes - 1) // 2,
+        fout=out / f"{ixn_type}_hit_curve",
+    )
 
     evaluate_auc_vs_driver_proportion(
         nruns,

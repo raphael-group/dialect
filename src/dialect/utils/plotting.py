@@ -252,9 +252,10 @@ def draw_simulation_precision_recall_curve(
 
 
 def draw_average_simulation_precision_recall_curve(
-    all_methods: list,
+    all_method_scores: list,
     all_y_true: list,
     fout: str,
+    methods: list,
     figsize: tuple = (5, 4),
     font_scale: float = FONT_SCALE,
 ) -> None:
@@ -262,12 +263,11 @@ def draw_average_simulation_precision_recall_curve(
     plt.rcParams["font.serif"] = FONT_FAMILY
     plt.figure(figsize=figsize)
 
-    method_names = list(all_methods[0].keys())
     fixed_recall_points = np.linspace(0, 1, 10001)
-    for idx, method_name in enumerate(method_names):
+    for idx, method_name in enumerate(methods):
         single_curve_precisions = []
         auprc_vals = []
-        for y_true, methods_dict in zip(all_y_true, all_methods):
+        for y_true, methods_dict in zip(all_y_true, all_method_scores):
             scores = methods_dict[method_name]
             single_precision, single_recall, _ = precision_recall_curve(y_true, scores)
 
@@ -313,6 +313,7 @@ def draw_average_simulation_precision_recall_curve(
         alpha=0.75,
     )
 
+    plt.ylim(-0.01, 1.01)
     plt.xlabel("Recall", fontsize=font_scale * 10)
     plt.ylabel("Precision", fontsize=font_scale * 10)
     plt.xticks(fontsize=font_scale * 8)
@@ -346,9 +347,10 @@ def draw_average_simulation_precision_recall_curve(
 
 
 def draw_concat_simulation_precision_recall_curve(
-    all_methods: list,
+    all_method_scores: list,
     all_y_true: list,
     fout: str,
+    methods: list,
     figsize: tuple = (5, 4),
     font_scale: float = FONT_SCALE,
 ) -> None:
@@ -356,12 +358,10 @@ def draw_concat_simulation_precision_recall_curve(
     plt.rcParams["font.serif"] = FONT_FAMILY
     plt.figure(figsize=figsize)
 
-    method_names = list(all_methods[0].keys())
-
-    for idx, method_name in enumerate(method_names):
+    for idx, method_name in enumerate(methods):
         y_true_concat = []
         scores_concat = []
-        for y_true, methods_dict in zip(all_y_true, all_methods):
+        for y_true, methods_dict in zip(all_y_true, all_method_scores):
             scores = methods_dict[method_name]
             y_true_concat.append(y_true)
             scores_concat.append(scores)
@@ -391,6 +391,7 @@ def draw_concat_simulation_precision_recall_curve(
         alpha=0.75,
     )
 
+    plt.ylim(-0.01, 1.01)
     plt.xlabel("Recall", fontsize=font_scale * 10)
     plt.ylabel("Precision", fontsize=font_scale * 10)
     plt.xticks(fontsize=font_scale * 8)
@@ -490,9 +491,9 @@ def draw_hit_curve(
         alpha=0.75,
     )
 
+    plt.ylim(-0.01, 1.01)
     plt.ylabel("Recall@K", fontsize=font_scale * 10)
     plt.xlabel("Top K Ranked Interactions", fontsize=font_scale * 10)
-    plt.ylim(0, 1)
     plt.xticks(fontsize=font_scale * 8)
     plt.yticks(fontsize=font_scale * 8)
     plt.gca().tick_params(
@@ -725,7 +726,7 @@ def draw_gene_expected_and_observed_mutations_barplot(
 def draw_likely_passenger_gene_proportion_violinplot(
     method_to_subtype_to_passenger_proportion: dict,
     out_fn: str,
-    figsize: tuple = (8, 3),
+    figsize: tuple = (4.8, 3),
     font_scale: float = FONT_SCALE,
 ) -> None:
     """TODO: Add docstring."""
