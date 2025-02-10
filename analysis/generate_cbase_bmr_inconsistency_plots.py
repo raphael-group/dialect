@@ -21,10 +21,11 @@ from dialect.utils.plotting import (
 def load_all_subtype_single_gene_results(results_dir: Path, num_genes: int) -> dict:
     """TODO: Add docstring."""
     subtype_to_results_df = {}
-    for single_gene_results_fn in results_dir.iterdir():
-        subtype = single_gene_results_fn.stem
+    for subtype_dir in results_dir.iterdir():
+        subtype = subtype_dir.stem
+        subtype_results_fn = subtype_dir / "single_gene_results.csv"
         subtype_results_df = pd.read_csv(
-            single_gene_results_fn,
+            subtype_results_fn,
         )
         sorted_subtype_results_df = subtype_results_df.sort_values(
             by="CBaSE Pos. Sel. Phi",
@@ -88,6 +89,8 @@ def main() -> None:
     parser = build_analysis_argument_parser(
         results_dir_required=True,
         out_dir_required=True,
+        add_putative_driver_gene_fn=True,
+        add_likely_passenger_dir=True,
         likely_passenger_required=True,
         putative_driver_required=True,
         add_num_genes=True,
@@ -116,12 +119,12 @@ def main() -> None:
 
     draw_cbase_top_likely_passenger_upset(
         subtype_to_likely_passenger_gene_overlap,
-        out_fn=args.out_dir / "temp1",
+        out_fn=args.out_dir / "cbase_likely_passenger_upset",
     )
 
     draw_cbase_likely_passenger_proportion_barplot(
         subtype_to_likely_passenger_proportion=subtype_to_likely_passenger_proportion,
-        out_fn=args.out_dir / "temp2",
+        out_fn=args.out_dir / "cbase_likely_passenger_proportion",
         num_genes=args.num_genes,
     )
 
@@ -135,7 +138,7 @@ def main() -> None:
             cbase_top_ranked_results,
             likely_passenger_genes,
             putative_driver_genes,
-            out_fn=args.out_dir / f"{subtype}",
+            out_fn=args.out_dir / "cbase_obs_exp_plots" / f"{subtype}",
         )
 
 
