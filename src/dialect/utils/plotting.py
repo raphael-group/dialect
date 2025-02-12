@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
+from matplotlib import colors
 from scipy.interpolate import interp1d
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from upsetplot import UpSet, from_contents
@@ -820,6 +821,39 @@ def draw_sample_mutation_count_subtype_histograms(
         ax.set_ylim(1, 1e3)
         ax.set_title(subtype, fontsize=font_scale * 10)
 
+    plt.tight_layout()
+    fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close(fig)
+
+
+def draw_gene_mutation_variability_hexbin_plots(
+    subtype_to_gene_mean_mutation_counts: dict,
+    subtype_to_gene_std_dev_mutation_counts: dict,
+    out_fn: str,
+    subtypes: list,
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    ncols = len(subtype_to_gene_mean_mutation_counts)
+    nrows = 1
+    figsize = (font_scale * ncols, font_scale * nrows)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    axes = axes.flatten()
+    for i, subtype in enumerate(subtypes):
+        ax = axes[i]
+        means = subtype_to_gene_mean_mutation_counts[subtype]
+        stds = subtype_to_gene_std_dev_mutation_counts[subtype]
+
+        ax.hexbin(
+            means,
+            stds,
+            norm=colors.LogNorm(),
+            gridsize=int(font_scale * 10),
+            cmap="cividis",
+        )
+        ax.set_title(subtype, fontsize=font_scale * 10)
     plt.tight_layout()
     fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
     fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
