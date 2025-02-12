@@ -427,7 +427,7 @@ def draw_concat_simulation_precision_recall_curve(
     plt.close()
 
 
-def draw_hit_curve(
+def draw_auprc_hit_curve(
     true_pair_lists: list,
     top_ranked_tables: list,
     methods: list,
@@ -753,7 +753,10 @@ def draw_likely_passenger_gene_proportion_violinplot(
     ax.set_xticks(x_positions)
     ax.set_xticklabels(methods)
     ax.set_xlabel("Method", fontsize=font_scale * 10)
-    ax.set_ylabel("Likely Passenger\nProportion", fontsize=font_scale * 10)
+    ax.set_ylabel(
+        "Likely Passenger\nProportion AUC",
+        fontsize=font_scale * 10,
+    )
 
     for body in vp["bodies"]:
         body.set_facecolor("lightslategray")
@@ -773,6 +776,56 @@ def draw_likely_passenger_gene_proportion_violinplot(
     ax.tick_params(axis="y", which="major", left=True, right=True)
     ax.patch.set_alpha(0)
 
+    plt.tight_layout()
+    plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close()
+
+
+def draw_likely_passenger_proportion_hit_curve(
+    method_to_likely_passenger_proportions: dict,
+    out_fn: str,
+    figsize: tuple = (5, 4),
+    font_scale: float = FONT_SCALE,
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    plt.figure(figsize=figsize)
+    for method, proportions in method_to_likely_passenger_proportions.items():
+        plt.plot(
+            np.arange(1, len(proportions) + 1),
+            proportions,
+            label=method,
+            linewidth=font_scale * 2,
+            alpha=0.75,
+        )
+    plt.ylim(-0.01, 1.01)
+    plt.ylabel("Likely Passenger\nProportion @ K", fontsize=font_scale * 10)
+    plt.xlabel("Top K Ranked Pairs", fontsize=font_scale * 10)
+    plt.xticks(fontsize=font_scale * 8)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
+    leg = plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=2,
+        fontsize=font_scale * 6,
+        frameon=True,
+        facecolor="none",
+        edgecolor="black",
+    )
+    leg.get_frame().set_edgecolor("k")
+    plt.gca().patch.set_alpha(0)
     plt.tight_layout()
     plt.savefig(f"{out_fn}.png", dpi=300, transparent=True)
     plt.savefig(f"{out_fn}.svg", dpi=300, transparent=True)

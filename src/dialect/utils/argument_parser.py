@@ -374,7 +374,7 @@ def build_analysis_argument_parser(
     if add_num_genes:
         parser.add_argument("-ng", "--num_genes", type=int, default=50)
     if add_subtypes:
-        parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,LUAD,LUSC")
+        parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,BRCA,LAML")
     parser.add_argument("-r", "--results_dir", type=Path, required=results_dir_required)
     if out_dir_required:
         parser.add_argument("-o", "--out_dir", type=Path, required=True)

@@ -14,9 +14,9 @@ from dialect.models.interaction import Interaction
 from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 from dialect.utils.plotting import (
     draw_auc_vs_factor_curve,
+    draw_auprc_hit_curve,
     draw_average_simulation_precision_recall_curve,
     draw_concat_simulation_precision_recall_curve,
-    draw_hit_curve,
 )
 from dialect.utils.postprocessing import (
     compute_epsilon_threshold,
@@ -846,7 +846,7 @@ def evaluate_matrix_simulation(
         true_pairs = true_co_pairs
         top_ranked_tables = top_ranked_co_tables
 
-    draw_hit_curve(
+    draw_auprc_hit_curve(
         true_pairs,
         top_ranked_tables,
         methods=methods,
