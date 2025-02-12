@@ -784,7 +784,6 @@ def draw_likely_passenger_gene_proportion_violinplot(
 def draw_sample_mutation_count_subtype_histograms(
     subtype_to_sample_mutation_counts: dict,
     subtype_avg_sample_mutation_count: float,
-    xlim_mapping: dict,
     out_fn: str,
     figsize: tuple = (5, 6),
     font_scale: float = FONT_SCALE,
@@ -809,6 +808,7 @@ def draw_sample_mutation_count_subtype_histograms(
             color=default_color,
             alpha=0.8,
             edgecolor="black",
+            bins=10,
             log=True,
         )
         ax.axvline(
@@ -817,7 +817,6 @@ def draw_sample_mutation_count_subtype_histograms(
             linewidth=font_scale,
             linestyle="--",
         )
-        ax.set_xlim(0, xlim_mapping[subtype])
         ax.set_ylim(1, 1e3)
         ax.set_title(subtype, fontsize=font_scale * 10)
 

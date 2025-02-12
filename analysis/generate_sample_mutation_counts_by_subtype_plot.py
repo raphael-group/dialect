@@ -39,7 +39,6 @@ def main() -> None:
     )
 
     subtypes = [s.strip() for s in args.subtypes.split(",") if s.strip()]
-    xlim_mapping = {}
     subtype_to_sample_mutation_counts = {}
     for subtype in subtypes:
         subtype_cnt_mtx_fn = Path(args.results_dir) / subtype / "count_matrix.csv"
@@ -47,14 +46,19 @@ def main() -> None:
             subtype_cnt_mtx_fn,
             index_col=0,
         ).sum(axis=1)
+        sample_mutation_count_lower = sample_mutation_counts.quantile(0.05)
+        sample_mutation_count_upper = sample_mutation_counts.quantile(0.95)
+        valid_samples = sample_mutation_counts.index[
+            (sample_mutation_counts >= sample_mutation_count_lower)
+            & (sample_mutation_counts <= sample_mutation_count_upper)
+        ]
+        sample_mutation_counts = sample_mutation_counts.loc[valid_samples]
         subtype_to_sample_mutation_counts[subtype] = sample_mutation_counts
-        xlim_mapping[subtype] = sample_mutation_counts.max() * 1.01
 
     out_fn = Path(args.out_dir) / "sample_mutation_count_subtype_histograms"
     draw_sample_mutation_count_subtype_histograms(
         subtype_to_sample_mutation_counts,
         subtype_avg_sample_mutation_count,
-        xlim_mapping,
         out_fn,
     )
 
