@@ -51,3 +51,4 @@ def run_megsa_analysis(cnt_df: pd.DataFrame, interactions: list) -> pd.DataFrame
     results_df = pd.DataFrame(results)
     q_values = multipletests(results_df["MEGSA P-Val"], method="fdr_bh")[1]
     results_df["MEGSA Q-Val"] = q_values
+    return results_df
