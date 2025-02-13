@@ -6,6 +6,7 @@ import pandas as pd
 from rpy2.robjects import pandas2ri
 from rpy2.robjects.packages import SignatureTranslatedAnonymousPackage
 from scipy.stats import chi2
+from statsmodels.stats.multitest import multipletests
 
 
 # ------------------------------------------------------------------------------------ #
@@ -47,5 +48,6 @@ def run_megsa_analysis(cnt_df: pd.DataFrame, interactions: list) -> pd.DataFrame
                 "MEGSA P-Val": p_val,
             },
         )
-
-    return pd.DataFrame(results)
+    results_df = pd.DataFrame(results)
+    q_values = multipletests(results_df["MEGSA P-Val"], method="fdr_bh")[1]
+    results_df["MEGSA Q-Val"] = q_values
