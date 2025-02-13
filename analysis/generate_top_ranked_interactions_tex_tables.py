@@ -12,9 +12,33 @@ from dialect.utils.postprocessing import (
 
 FLOAT_LOW_THRESHOLD = 0.01
 MANTISSA_MAX_THRESHOLD = 10
-ME_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
+ME_METHODS = ["DIALECT (Rho)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
+CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
 
+METHOD_TO_METRIC = {
+    "DIALECT (Rho)": r"$\rho$",
+    "DIALECT (LRT)": "LRT",
+    "DISCOVER": "q-value",
+    "Fisher's Exact Test": "q-value",
+    "MEGSA": "p-value",
+    "WeSME": "p-value",
+    "WeSCO": "p-value",
+}
+
+METHOD_TO_ME_METRIC = {
+    "DIALECT (Rho)": "Rho",
+    "DISCOVER": "Discover ME Q-Val",
+    "Fisher's Exact Test": "Fisher's ME Q-Val",
+    "MEGSA": "MEGSA P-Val",
+    "WeSME": "WeSME P-Val",
+}
+
+METHOD_TO_CO_METRICS = {
+    "DIALECT (LRT)": "Likelihood Ratio",
+    "DISCOVER": "Discover CO Q-Val",
+    "Fisher's Exact Test": "Fisher's CO Q-Val",
+    "WeSCO": "WeSCO P-Val",
+}
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -58,7 +82,7 @@ def _build_subtable_latex_(
     col_spec = "||".join(["cc"] * num_methods)
 
     lines = []
-    lines.append(r"\renewcommand{\arraystretch}{1.2}")
+    lines.append(r"\renewcommand{\arraystretch}{1}")
     lines.append(r"\begin{tabular}{" + col_spec + r"}")
     lines.append(r"\hline")
 
@@ -91,46 +115,75 @@ def _build_subtable_latex_(
     return "\n".join(lines)
 
 
+def _write_caption(ixn_type: str, method_to_num_sig_pairs: dict) -> str:
+    if ixn_type == "ME":
+        ixn_label = "mutually exclusive"
+        indicator_text = (
+            "More negative $\\rho$ values, lower p-values, and higher likelihood ratio "
+            "test (LRT) scores indicate stronger mutual exclusivity."
+        )
+    elif ixn_type == "CO":
+        ixn_label = "co-occurring"
+        indicator_text = (
+            "More positive $\\rho$ values, lower p-values, and higher likelihood ratio "
+            "test (LRT) scores indicate stronger co-occurrence."
+        )
+    else:
+        ixn_label = "interactions"
+        indicator_text = ""
+
+    sig_pairs_list = [
+        f"{method}: {num}" for method, num in method_to_num_sig_pairs.items()
+    ]
+    sig_pairs_str = ", ".join(sig_pairs_list)
+
+    return (
+        f"\\textbf{{Top ranked {ixn_label} interactions in UCEC across methods.}} "
+        f"$10$ {ixn_label} gene pairs most highly ranked by \\OurMethod{{}}, DISCOVER, "
+        f"Fisher's Exact Test, MEGSA, and WeSME on TCGA endometrial cancer. "
+        f"{indicator_text} "
+        "Significance thresholds applied were: Fisher's Exact Test"
+        " (FDR threshold of 0.01), "
+        "DISCOVER (Benjamini-Hochberg correction with a"
+        " maximum FDR threshold of 0.01), "
+        "MEGSA (p-value threshold of 1 \\times 10$^{-3}$), and WeSME"
+        "(FDR-corrected at 0.01), "
+        "while DIALECT did not threshold by significance. "
+        f"The total number of significant pairs identified were: {sig_pairs_str}."
+    )
+
+
 # ------------------------------------------------------------------------------------ #
 #                                    MAIN FUNCTIONS                                    #
 # ------------------------------------------------------------------------------------ #
 def create_final_table(
     subtype: str,
     top_pairs_by_method: dict,
-    num_pairs: int,
     ixn_type: str,
+    method_to_num_sig_pairs: dict,
 ) -> str:
     """Create one big table environment with two "sub-tables" across methods.
 
     - First row (3 methods): DIALECT, DISCOVER, Fisher's Exact Test
     - Second row (2 methods): MEGSA, WeSME
     """
-    metric_labels = {
-        "DIALECT": r"$\rho$",
-        "DISCOVER": "p-value",
-        "Fisher's Exact Test": "p-value",
-        "MEGSA": "S-Score",
-        "WeSME": "p-value",
-        "WeSCO": "p-value",
-    }
-
-    top_row_methods = ["DIALECT", "DISCOVER", "Fisher's Exact Test"]
-    bottom_row_methods = ["MEGSA"]
     if ixn_type == "ME":
-        bottom_row_methods.append("WeSME")
+        top_row_methods = ["DIALECT (Rho)", "DISCOVER", "Fisher's Exact Test"]
+        bottom_row_methods = ["MEGSA", "WeSME"]
     else:
-        bottom_row_methods.append("WeSCO")
+        top_row_methods = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test"]
+        bottom_row_methods = ["Fisher's Exact Test", "WeSCO"]
 
     top_subtable = _build_subtable_latex_(
         top_row_methods,
         top_pairs_by_method,
-        metric_labels,
+        METHOD_TO_METRIC,
         ixn_type,
     )
     bottom_subtable = _build_subtable_latex_(
         bottom_row_methods,
         top_pairs_by_method,
-        metric_labels,
+        METHOD_TO_METRIC,
         ixn_type,
     )
 
@@ -142,8 +195,8 @@ def create_final_table(
     lines.append(r"\vspace{-0.2cm}")
     lines.append(bottom_subtable)
 
-    caption_str = rf"Top {num_pairs} ranked ME pairs across methods in {subtype}"
-    lines.append(rf"\caption{{{caption_str}}}")
+    caption = _write_caption(ixn_type, method_to_num_sig_pairs)
+    lines.append(rf"\caption{{{caption}}}")
     lines.append(r"\label{tab:" + subtype + "}")
     lines.append(r"\end{table}")
 
@@ -168,25 +221,30 @@ def main() -> None:
 
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
-        results_fn = args.results_dir / subtype / "complete_pairwise_ixn_results.csv"
-        cnt_mtx_fn = args.results_dir / subtype / "count_matrix.csv"
+        subtype_dir = args.results_dir / subtype
+        results_fn = subtype_dir / "complete_pairwise_ixn_results.csv"
+        cnt_mtx_fn = subtype_dir / "count_matrix.csv"
         if not results_fn.exists() or not cnt_mtx_fn.exists():
             continue
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
         if args.analysis_type == "mutual_exclusivity":
-            top_tables = generate_top_ranked_me_interaction_tables(
-                results_df=results_df,
-                num_pairs=args.num_pairs,
-                num_samples=num_samples,
-                methods=ME_METHODS,
+            top_tables, method_to_num_sig_pairs = (
+                generate_top_ranked_me_interaction_tables(
+                    results_df=results_df,
+                    num_pairs=args.num_pairs,
+                    num_samples=num_samples,
+                    methods=ME_METHODS,
+                )
             )
         else:
-            top_tables = generate_top_ranked_co_interaction_tables(
-                results_df=results_df,
-                num_pairs=args.num_pairs,
-                num_samples=num_samples,
-                methods=CO_METHODS,
+            top_tables, method_to_num_sig_pairs = (
+                generate_top_ranked_co_interaction_tables(
+                    results_df=results_df,
+                    num_pairs=args.num_pairs,
+                    num_samples=num_samples,
+                    methods=CO_METHODS,
+                )
             )
         top_pairs_by_method = {}
         for method_name, method_df in top_tables.items():
@@ -194,7 +252,11 @@ def main() -> None:
                 top_pairs_by_method[method_name] = []
                 continue
             pairs_list = []
-            metric_col_name = method_df.columns[-1]
+            metric_col_name = (
+                METHOD_TO_ME_METRIC[method_name]
+                if args.analysis_type == "mutual_exclusivity"
+                else METHOD_TO_CO_METRICS[method_name]
+            )
             for _, row in method_df.iterrows():
                 gene_a = escape_gene_name(str(row["Gene A"]))
                 gene_b = escape_gene_name(str(row["Gene B"]))
@@ -211,14 +273,13 @@ def main() -> None:
         latex_str = create_final_table(
             subtype,
             top_pairs_by_method,
-            args.num_pairs,
             "ME" if args.analysis_type == "mutual_exclusivity" else "CO",
+            method_to_num_sig_pairs,
         )
-        if args.analysis_type == "mutual_exclusivity":
-            fout = args.out_dir / f"table_of_top_me_pairs_{subtype}.tex"
-        else:
-            fout = args.out_dir / f"table_of_top_co_pairs_{subtype}.tex"
-        with fout.open("w") as f:
+        out_dir = args.out_dir / subtype
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_fn = out_dir / f"table_of_{args.analysis_type}_top_pairs.tex"
+        with out_fn.open("w") as f:
             f.write(latex_str)
 
 
