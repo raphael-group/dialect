@@ -46,7 +46,7 @@ def run_comparison_methods(
     cnt_mtx: str,
     out: str,
     k: int,
-    gene_level: str,
+    is_gene_level: bool,
 ) -> None:
     """TODO: Add docstring."""
     check_file_exists(cnt_mtx)
@@ -107,7 +107,7 @@ def run_comparison_methods(
         how="inner",
     )
     comparison_interaction_fout = f"{out}/comparison_interaction_results.csv"
-    if gene_level:
+    if is_gene_level:
         comparison_interaction_fout = (
             f"{out}/gene_level_comparison_interaction_results.csv"
         )

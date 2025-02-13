@@ -115,7 +115,7 @@ def main() -> None:
             cnt_mtx=args.cnt,
             out=args.out,
             k=args.top_k,
-            gene_level=args.gene_level,
+            is_gene_level=args.gene_level,
         )
 
     elif args.command == "merge":
