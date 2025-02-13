@@ -1,5 +1,7 @@
 """TODO: Add docstring."""
 
+from pathlib import Path
+
 import pandas as pd
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import (
@@ -44,7 +46,7 @@ def main() -> None:
         )
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
 
-        top_ranked_me_interactions_by_method = (
+        top_ranked_me_interactions_by_method, method_to_num_significant_me_pairs = (
             generate_top_ranked_me_interaction_tables(
                 results_df=results_df,
                 num_pairs=num_edges,
@@ -52,7 +54,7 @@ def main() -> None:
                 methods=ME_METHODS,
             )
         )
-        top_ranked_co_interactions_by_method = (
+        top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
             generate_top_ranked_co_interaction_tables(
                 results_df=results_df,
                 num_pairs=num_edges,
@@ -63,9 +65,23 @@ def main() -> None:
         if args.analysis_type == "mutual_exclusivity":
             for method in top_ranked_me_interactions_by_method:
                 top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
-                fout = f"{args.out_dir}/{subtype}_{method}_network"
+                dout = Path(f"{args.out_dir}/{subtype}")
+                dout.mkdir(parents=True, exist_ok=True)
+                fout = f"{args.out_dir}/{subtype}/{method}_network"
+                significant_pairs = top_ranked_me_pairs[
+                    top_ranked_me_pairs["Significant"]
+                ]
+                significant_nodes = (
+                    {}
+                    if significant_pairs.empty
+                    else set(significant_pairs["Gene A"])
+                    | set(
+                        significant_pairs["Gene B"],
+                    )
+                )
                 draw_single_me_or_co_interaction_network(
                     edges=top_ranked_me_pairs[["Gene A", "Gene B"]].to_numpy(),
+                    significant_nodes=significant_nodes,
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
                     method=method,
@@ -74,9 +90,23 @@ def main() -> None:
         elif args.analysis_type == "cooccurrence":
             for method in top_ranked_co_interactions_by_method:
                 top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
-                fout = f"{args.out_dir}/{subtype}_{method}_network"
+                dout = Path(f"{args.out_dir}/{subtype}")
+                dout.mkdir(parents=True, exist_ok=True)
+                fout = f"{args.out_dir}/{subtype}/{method}_network"
+                significant_pairs = top_ranked_co_pairs[
+                    top_ranked_co_pairs["Significant"]
+                ]
+                significant_nodes = (
+                    {}
+                    if significant_pairs.empty
+                    else set(significant_pairs["Gene A"])
+                    | set(
+                        significant_pairs["Gene B"],
+                    )
+                )
                 draw_single_me_or_co_interaction_network(
                     edges=top_ranked_co_pairs[["Gene A", "Gene B"]].to_numpy(),
+                    significant_nodes=significant_nodes,
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
                     method=method,

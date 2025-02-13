@@ -34,6 +34,7 @@ LIKELY_PASSENGER_COLOR = "#FFB3B3"
 # ------------------------------------------------------------------------------------ #
 def draw_single_me_or_co_interaction_network(
     edges: np.ndarray,
+    significant_nodes: set,
     putative_drivers: set,
     likely_passengers: set,
     method: str,
@@ -43,23 +44,31 @@ def draw_single_me_or_co_interaction_network(
 ) -> None:
     """TODO: Add docstring."""
 
-    def _get_bounding_box(color: tuple) -> dict:
+    def _get_bounding_box(color: tuple, is_significant: bool) -> dict:
         return {
             "facecolor": color,
             "edgecolor": "black",
             "boxstyle": "round,pad=0.25",
+            "linewidth": 2 * font_scale if is_significant else font_scale / 2,
         }
 
-    def _draw_label(x: float, y: float, label: str, color: tuple) -> None:
+    def _draw_label(
+        x: float,
+        y: float,
+        label: str,
+        color: tuple,
+        is_significant: bool,
+    ) -> None:
         ax.text(
             x,
             y,
             label,
-            bbox=_get_bounding_box(color),
+            bbox=_get_bounding_box(color, is_significant),
             ha="center",
             va="center",
             fontsize=font_scale * 8,
         )
+
 
     def _get_node_colors(graph: nx.Graph) -> list:
         return [
@@ -89,7 +98,7 @@ def draw_single_me_or_co_interaction_network(
         with_labels=False,
     )
     for i, (node, (x, y)) in enumerate(pos.items()):
-        _draw_label(x, y, node, node_colors[i])
+        _draw_label(x, y, node, node_colors[i], node in significant_nodes)
     plt.tight_layout()
     plt.subplots_adjust(top=0.90)
 
