@@ -352,6 +352,7 @@ def add_simulate_parser(subparsers: _SubParsersAction) -> None:
 #                                    MAIN FUNCTIONS                                    #
 # ------------------------------------------------------------------------------------ #
 def build_analysis_argument_parser(
+    add_methods: bool = False,
     add_subtypes: bool = False,
     add_num_pairs: bool = False,
     add_num_genes: bool = False,
@@ -366,6 +367,13 @@ def build_analysis_argument_parser(
     parser = ArgumentParser()
     parser.add_argument("-o", "--out_dir", type=Path, required=True)
     parser.add_argument("-r", "--results_dir", type=Path, required=True)
+    parser.add_argument("-g", "--gene_level", action="store_true")
+    if add_methods:
+        parser.add_argument(
+            "-m",
+            "--methods",
+            default="DIALECT (Rho),DISCOVER,Fisher's Exact Test,MEGSA,WeSME",
+        )
     if add_subtypes:
         parser.add_argument("-s", "--subtypes", default="UCEC,SKCM,CRAD,STAD,BRCA,LAML")
     if add_num_pairs:

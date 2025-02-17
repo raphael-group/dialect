@@ -60,7 +60,7 @@ wait
 
 dialect merge \
   -d "$RUN_OUTPUT_DIR/pairwise_interaction_results.csv" \
-  -a "$RUN_OUTPUT_DIR/comparison_interaction_results.csv" \
+  -a "$RUN_OUTPUT_DIR/comparison_pairwise_interaction_results.csv" \
   -o "$RUN_OUTPUT_DIR"
 
 # dialect simulate evaluate matrix \

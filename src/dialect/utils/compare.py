@@ -106,9 +106,9 @@ def run_comparison_methods(
         on=["Gene A", "Gene B"],
         how="inner",
     )
-    comparison_interaction_fout = f"{out}/comparison_interaction_results.csv"
+    comparison_interaction_fout = f"{out}/comparison_pairwise_interaction_results.csv"
     if is_gene_level:
         comparison_interaction_fout = (
-            f"{out}/gene_level_comparison_interaction_results.csv"
+            f"{out}/gene_level_comparison_pairwise_interaction_results.csv"
         )
     merged_df.to_csv(comparison_interaction_fout, index=False)

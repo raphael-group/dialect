@@ -52,7 +52,9 @@ def compute_likely_passenger_proportions(
         cnt_mtx_fn = subtype_dir / "count_matrix.csv"
         if not cnt_mtx_fn.exists():
             continue
-        results_df = pd.read_csv(subtype_dir / "complete_pairwise_ixn_results.csv")
+        results_df = pd.read_csv(
+            subtype_dir / "complete_pairwise_interaction_results.csv",
+        )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         method_to_top_ranked_interaction_table = generate_top_ranked_interaction_table(
@@ -92,7 +94,9 @@ def compute_likely_passenger_proportions_range(
         cnt_mtx_fn = subtype_dir / "count_matrix.csv"
         if not cnt_mtx_fn.exists():
             continue
-        results_df = pd.read_csv(subtype_dir / "complete_pairwise_ixn_results.csv")
+        results_df = pd.read_csv(
+            subtype_dir / "complete_pairwise_interaction_results.csv",
+        )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         method_to_top_ranked_interaction_table = generate_top_ranked_interaction_table(

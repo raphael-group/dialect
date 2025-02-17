@@ -12,13 +12,13 @@ from dialect.utils.postprocessing import (
     generate_top_ranked_me_interaction_tables,
 )
 
-ME_METHODS = ["DIALECT (Rho)", "DISCOVER", "Fisher's Exact Test", "MEGSA", "WeSME"]
-CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
-
+RESULTS_BASENAME = "pairwise_interaction_results.csv"
+COUNT_MTX_BASENAME = "count_matrix.csv"
 
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
+        add_methods=True,
         add_num_pairs=True,
         add_analysis_type=True,
         add_driver_genes_fn=True,
@@ -26,13 +26,26 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    results_basename = (
+        f"gene_level_comparison_{RESULTS_BASENAME}"
+        if args.gene_level
+        else f"complete_{RESULTS_BASENAME}"
+    )
+    count_mtx_basename = (
+        f"gene_level_{COUNT_MTX_BASENAME}" if args.gene_level else COUNT_MTX_BASENAME
+    )
+
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
-    putative_drivers = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
+    putative_drivers = (
+        set(drvr_df.index)
+        if args.gene_level
+        else set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
+    )
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
     num_edges = args.num_pairs // 2 if args.analysis_type == "BOTH" else args.num_pairs
     for subtype in subtypes:
-        results_fn = args.results_dir / subtype / "complete_pairwise_ixn_results.csv"
-        cnt_mtx_fn = args.results_dir / subtype / "count_matrix.csv"
+        results_fn = args.results_dir / subtype / results_basename
+        cnt_mtx_fn = args.results_dir / subtype / count_mtx_basename
         likely_passenger_fn = args.likely_passenger_dir / f"{subtype}.txt"
         if not results_fn.exists() or not likely_passenger_fn.exists():
             continue
@@ -47,7 +60,7 @@ def main() -> None:
                 results_df=results_df,
                 num_pairs=num_edges,
                 num_samples=num_samples,
-                methods=ME_METHODS,
+                methods=args.methods.split(","),
             )
         )
         top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
@@ -55,7 +68,7 @@ def main() -> None:
                 results_df=results_df,
                 num_pairs=num_edges,
                 num_samples=num_samples,
-                methods=CO_METHODS,
+                methods=args.methods.split(","),
             )
         )
         if args.analysis_type == "ME":

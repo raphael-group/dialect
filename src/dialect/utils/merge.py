@@ -20,5 +20,5 @@ def merge_pairwise_interaction_results(
         on=["Gene A", "Gene B"],
         how="inner",
     )
-    comparison_interaction_fout = f"{out}/complete_pairwise_ixn_results.csv"
+    comparison_interaction_fout = f"{out}/complete_pairwise_interaction_results.csv"
     merged_df.to_csv(comparison_interaction_fout, index=False)

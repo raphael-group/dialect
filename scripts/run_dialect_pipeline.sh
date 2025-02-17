@@ -72,7 +72,7 @@ for MAF_FILE in "${MAF_FILES[@]}"; do
                     ;;
                 merge)
                     echo "Running merge for ${SUBTYPE_NAME}..."
-                    dialect merge -d "${OUTPUT_DIR}/pairwise_interaction_results.csv" -a "${OUTPUT_DIR}/comparison_interaction_results.csv" -o "${OUTPUT_DIR}"
+                    dialect merge -d "${OUTPUT_DIR}/pairwise_interaction_results.csv" -a "${OUTPUT_DIR}/comparison_pairwise_interaction_results.csv" -o "${OUTPUT_DIR}"
                     ;;
                 *)
                     echo "Warning: Unknown step '$STEP'. Skipping."
