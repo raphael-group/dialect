@@ -689,7 +689,7 @@ def evaluate_auc_vs_driver_proportion(
                 ),
             )
             results_fn = (
-                results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+                results_base_dir / f"R{i}" / "complete_pairwise_interaction_results.csv"
             )
             simulation_info_fn = (
                 results_base_dir / f"R{i}" / "matrix_simulation_info.json"
@@ -745,7 +745,7 @@ def evaluate_auc_vs_num_samples(
                 ),
             )
             results_fn = (
-                results_base_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+                results_base_dir / f"R{i}" / "complete_pairwise_interaction_results.csv"
             )
             simulation_info_fn = (
                 results_base_dir / f"R{i}" / "matrix_simulation_info.json"
@@ -792,7 +792,7 @@ def evaluate_matrix_simulation(
     top_ranked_co_tables = []
     num_genes = None
     for i in range(1, nruns + 1):
-        results_fn = results_dir / f"R{i}" / "complete_pairwise_ixn_results.csv"
+        results_fn = results_dir / f"R{i}" / "complete_pairwise_interaction_results.csv"
         simulation_info_fn = results_dir / f"R{i}" / "matrix_simulation_info.json"
         results_df = pd.read_csv(results_fn)
         with simulation_info_fn.open() as f:
