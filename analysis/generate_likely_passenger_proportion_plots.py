@@ -147,7 +147,7 @@ def main() -> None:
     subtype_to_likely_passengers = load_likely_passenger_genes(
         args.likely_passenger_dir,
     )
-    if args.analysis_type == "mutual_exclusivity":
+    if args.analysis_type == "ME":
         methods = ME_METHODS
         generate_top_ranked_table_function = generate_top_ranked_me_interaction_tables
     else:  # args.cooccurrence

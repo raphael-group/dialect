@@ -209,10 +209,6 @@ def create_final_table(
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
-        putative_driver_required=True,
-        likely_passenger_required=True,
         add_num_pairs=True,
         add_analysis_type=True,
     )
@@ -228,7 +224,7 @@ def main() -> None:
             continue
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
         results_df = pd.read_csv(results_fn)
-        if args.analysis_type == "mutual_exclusivity":
+        if args.analysis_type == "ME":
             top_tables, method_to_num_sig_pairs = (
                 generate_top_ranked_me_interaction_tables(
                     results_df=results_df,
@@ -254,7 +250,7 @@ def main() -> None:
             pairs_list = []
             metric_col_name = (
                 METHOD_TO_ME_METRIC[method_name]
-                if args.analysis_type == "mutual_exclusivity"
+                if args.analysis_type == "ME"
                 else METHOD_TO_CO_METRICS[method_name]
             )
             for _, row in method_df.iterrows():
@@ -264,7 +260,7 @@ def main() -> None:
                 val_str = format_float(metric_val) if metric_val is not None else "N/A"
                 interaction_str = f"{gene_a}:{gene_b}"
                 pairs_list.append((interaction_str, val_str))
-            if method_name == "WeSME" and args.analysis_type == "cooccurrence":
+            if method_name == "WeSME" and args.analysis_type == "CO":
                 adjusted_method_name = "WeSCO"
                 top_pairs_by_method[adjusted_method_name] = pairs_list
             else:
@@ -273,7 +269,7 @@ def main() -> None:
         latex_str = create_final_table(
             subtype,
             top_pairs_by_method,
-            "ME" if args.analysis_type == "mutual_exclusivity" else "CO",
+            args.analysis_type,
             method_to_num_sig_pairs,
         )
         out_dir = args.out_dir / subtype

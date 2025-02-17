@@ -28,8 +28,6 @@ def compute_avg_sample_mutation_count(results_dir: Path) -> pd.Series:
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
         add_subtypes=True,
     )
     args = parser.parse_args()

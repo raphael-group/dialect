@@ -55,8 +55,6 @@ def create_latex_table(df: pd.DataFrame, caption: str, label: str) -> str:
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
         add_study_abbrev_fn=True,
         add_pancancer_counts_fn=True,
     )

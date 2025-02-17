@@ -19,21 +19,17 @@ CO_METHODS = ["DIALECT (LRT)", "DISCOVER", "Fisher's Exact Test", "WeSCO"]
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
+        add_num_pairs=True,
+        add_analysis_type=True,
         add_driver_genes_fn=True,
         add_likely_passenger_dir=True,
-        add_analysis_type=True,
-        add_num_pairs=True,
-        driver_genes_required=True,
-        likely_passenger_required=True,
     )
     args = parser.parse_args()
 
     drvr_df = pd.read_csv(args.driver_genes_fn, sep="\t", index_col=0)
     putative_drivers = set(drvr_df.index + "_M") | set(drvr_df.index + "_N")
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
-    num_edges = args.num_pairs // 2 if args.analysis_type == "both" else args.num_pairs
+    num_edges = args.num_pairs // 2 if args.analysis_type == "BOTH" else args.num_pairs
     for subtype in subtypes:
         results_fn = args.results_dir / subtype / "complete_pairwise_ixn_results.csv"
         cnt_mtx_fn = args.results_dir / subtype / "count_matrix.csv"
@@ -62,7 +58,7 @@ def main() -> None:
                 methods=CO_METHODS,
             )
         )
-        if args.analysis_type == "mutual_exclusivity":
+        if args.analysis_type == "ME":
             for method in top_ranked_me_interactions_by_method:
                 top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
                 dout = Path(f"{args.out_dir}/{subtype}")
@@ -87,7 +83,7 @@ def main() -> None:
                     method=method,
                     fout=fout,
                 )
-        elif args.analysis_type == "cooccurrence":
+        elif args.analysis_type == "CO":
             for method in top_ranked_co_interactions_by_method:
                 top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
                 dout = Path(f"{args.out_dir}/{subtype}")

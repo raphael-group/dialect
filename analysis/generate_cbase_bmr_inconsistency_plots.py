@@ -87,13 +87,9 @@ def compute_subtype_putative_driver_gene_overlap(
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
-        add_putative_driver_gene_fn=True,
-        add_likely_passenger_dir=True,
-        likely_passenger_required=True,
-        putative_driver_required=True,
         add_num_genes=True,
+        add_likely_passenger_dir=True,
+        add_putative_driver_gene_fn=True,
     )
     args = parser.parse_args()
     putative_drivers = load_putative_driver_genes(args.putative_driver_gene_fn)
