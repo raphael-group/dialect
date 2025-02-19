@@ -39,9 +39,7 @@ class Gene:
     # -------------------------------------------------------------------------------- #
     def calculate_expected_mutations(self) -> float:
         """TODO: Add docstring."""
-        total_samples = len(self.counts)
-        expected_mutations = sum(k * prob for k, prob in self.bmr_pmf.items())
-        return expected_mutations * total_samples
+        return sum(k * prob for k, prob in enumerate(self.bmr_pmf))
 
     # -------------------------------------------------------------------------------- #
     #                            DATA VALIDATION AND LOGGING                           #

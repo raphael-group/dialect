@@ -920,3 +920,58 @@ def draw_gene_mutation_variability_hexbin_plots(
     fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
     fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
     plt.close(fig)
+
+
+def draw_single_subtype_background_mutation_distribution(
+    subtype: str,
+    exp_bkgd_muts: list,
+    out_fn: str,
+    font_scale: float = FONT_SCALE,
+    figsize: type = (4, 4),
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    fig = plt.figure(figsize=figsize)
+    plt.hist(
+        exp_bkgd_muts,
+        color="lightslategray",
+        alpha=0.8,
+        edgecolor="black",
+        log=True,
+    )
+    plt.title(subtype, fontsize=font_scale * 10)
+    plt.xlabel("Expected Passenger Mutations\nPer Sample", fontsize=font_scale * 10)
+    plt.ylabel("Number of Genes", fontsize=font_scale * 10)
+
+    plt.tight_layout()
+    fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close(fig)
+
+
+def draw_all_subtypes_background_mutation_distribution(
+    exp_bkgd_muts: list,
+    out_fn: str,
+    font_scale: float = FONT_SCALE,
+    figsize: type = (4, 4),
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    fig = plt.figure(figsize=figsize)
+    plt.hist(
+        exp_bkgd_muts,
+        color="lightslategray",
+        alpha=0.8,
+        edgecolor="black",
+        log=True,
+    )
+    plt.xlabel(
+        "Expected Per Sample Passenger\nMutations of a Gene",
+        fontsize=font_scale * 10,
+    )
+    plt.ylabel("Number of Genes", fontsize=font_scale * 10)
+
+    plt.tight_layout()
+    fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close(fig)
