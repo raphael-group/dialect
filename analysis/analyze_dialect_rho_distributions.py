@@ -52,8 +52,8 @@ def main() -> None:
         me_threshold = get_me_threshold(pd.Series(rho_values))
         co_threshold = get_co_threshold(pd.Series(lrt_values))
         subtype_to_significance_thresholds[subtype] = {
-                "ME_Rho_Threshold": me_threshold,
-                "CO_LRT_Thrshold": co_threshold,
+            "ME_Rho_Threshold": me_threshold,
+            "CO_LRT_Threshold": co_threshold,
         }
     thresholds_df = pd.DataFrame.from_dict(subtype_to_significance_thresholds,
                                            orient="index")
