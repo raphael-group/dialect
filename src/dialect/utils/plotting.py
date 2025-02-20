@@ -27,6 +27,8 @@ FONT_SCALE = 1.5
 PUTATIVE_DRIVER_COLOR = "#A3C1DA"
 PUTATIVE_PASSENGER_COLOR = "#D7D7D7"
 LIKELY_PASSENGER_COLOR = "#FFB3B3"
+ME_EDGE_COLOR = "#4C784C"
+CO_EDGE_COLOR = "#4B5BB1"
 
 
 # ------------------------------------------------------------------------------------ #
@@ -37,6 +39,7 @@ def draw_single_me_or_co_interaction_network(
     significant_nodes: set,
     putative_drivers: set,
     likely_passengers: set,
+    ixn_type: str,
     method: str,
     fout: str,
     figsize: tuple = (4, 4),
@@ -49,7 +52,7 @@ def draw_single_me_or_co_interaction_network(
             "facecolor": color,
             "edgecolor": "black",
             "boxstyle": "round,pad=0.25",
-            "linewidth": 2 * font_scale if is_significant else font_scale / 2,
+            "linewidth": 3 * font_scale if is_significant else font_scale / 2,
         }
 
     def _draw_label(
@@ -94,7 +97,8 @@ def draw_single_me_or_co_interaction_network(
         pos,
         ax=ax,
         node_color="none",
-        edge_color="steelblue",
+        edge_color=ME_EDGE_COLOR if ixn_type == "ME" else CO_EDGE_COLOR,
+        width=2 * font_scale,
         with_labels=False,
     )
     for i, (node, (x, y)) in enumerate(pos.items()):

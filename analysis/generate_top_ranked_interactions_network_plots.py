@@ -44,6 +44,8 @@ def main() -> None:
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
     num_edges = args.num_pairs // 2 if args.analysis_type == "BOTH" else args.num_pairs
     for subtype in subtypes:
+        if subtype != "UCEC":
+            continue
         results_fn = args.results_dir / subtype / results_basename
         cnt_mtx_fn = args.results_dir / subtype / count_mtx_basename
         likely_passenger_fn = args.likely_passenger_dir / f"{subtype}.txt"
@@ -93,7 +95,10 @@ def main() -> None:
                     significant_nodes=significant_nodes,
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
-                    method=method,
+                    ixn_type=args.analysis_type,
+                    method=method.split(" ")[0]
+                    if method.startswith("DIALECT")
+                    else method,
                     fout=fout,
                 )
         elif args.analysis_type == "CO":
@@ -118,9 +123,13 @@ def main() -> None:
                     significant_nodes=significant_nodes,
                     putative_drivers=putative_drivers,
                     likely_passengers=likely_passengers,
-                    method=method,
+                    ixn_type=args.analysis_type,
+                    method=method.split(" ")[0]
+                    if method.startswith("DIALECT")
+                    else method,
                     fout=fout,
                 )
+
 
 if __name__ == "__main__":
     main()
