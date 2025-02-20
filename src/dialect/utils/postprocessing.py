@@ -1,6 +1,7 @@
 """TODO: Add docstring."""
 
 from math import sqrt
+from pathlib import Path
 
 import pandas as pd
 from scipy.optimize import brentq
@@ -40,7 +41,7 @@ ME_METHOD_SIGNIFICANCE_THRESOLDS = {
 CO_METHOD_SIGNIFICANCE_THRESOLDS = {
     "DISCOVER": ("Discover CO Q-Val", 0.01),
     "Fisher's Exact Test": ("Fisher's CO Q-Val", 0.01),
-    "WeSME": ("WeSCO Q-Val", 0.01),
+    "WeSCO": ("WeSCO Q-Val", 0.01),
 }
 
 # ------------------------------------------------------------------------------------ #
@@ -80,12 +81,15 @@ def compute_epsilon_threshold(num_samples: int, alpha: float = 0.001) -> float:
 
 
 def generate_top_ranked_co_interaction_tables(
+    subtype: str,
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
     methods: list,
+    dialect_thresholds_fn: Path,
 ) -> dict:
     """TODO: Add docstring."""
+    dialect_thresholds_df = pd.read_csv(dialect_thresholds_fn, index_col=0)
     method_to_top_ranked_co_interaction_table = {}
     method_to_num_significant_co_pairs = {}
     for method in methods:
@@ -96,6 +100,9 @@ def generate_top_ranked_co_interaction_tables(
             method,
             (None, None),
         )
+        if method == "DIALECT (LRT)":
+            significance_metric = "Likelihood Ratio"
+            threshold = dialect_thresholds_df.loc[subtype]["CO_LRT_Threshold"]
         top_ranked_co_interaction_table = results_df.sort_values(
             by=rank_metric,
             ascending=sort_order == "ascending",
@@ -113,7 +120,17 @@ def generate_top_ranked_co_interaction_tables(
                 & (top_ranked_co_interaction_table["Rho"] > 0)
             ]
 
-        if significance_metric:
+        if method == "DIALECT (LRT)":
+            method_top_ranked_co_interaction_table = top_ranked_co_interaction_table[
+                ["Gene A", "Gene B", rank_metric]
+            ].copy()
+            method_top_ranked_co_interaction_table["Significant"] = (
+                method_top_ranked_co_interaction_table[significance_metric] > threshold
+            )
+            method_to_num_significant_co_pairs[method] = (
+                method_top_ranked_co_interaction_table["Significant"].sum()
+            )
+        else:
             method_top_ranked_co_interaction_table = top_ranked_co_interaction_table[
                 ["Gene A", "Gene B", rank_metric, significance_metric]
             ].copy()
@@ -123,12 +140,6 @@ def generate_top_ranked_co_interaction_tables(
             method_to_num_significant_co_pairs[method] = (
                 method_top_ranked_co_interaction_table["Significant"].sum()
             )
-        else:  # DIALECT
-            method_top_ranked_co_interaction_table = top_ranked_co_interaction_table[
-                ["Gene A", "Gene B", rank_metric]
-            ].copy()
-            method_top_ranked_co_interaction_table["Significant"] = False
-            method_to_num_significant_co_pairs[method] = False
 
         method_to_top_ranked_co_interaction_table[method] = (
             method_top_ranked_co_interaction_table.head(num_pairs)
@@ -137,12 +148,15 @@ def generate_top_ranked_co_interaction_tables(
     return method_to_top_ranked_co_interaction_table, method_to_num_significant_co_pairs
 
 def generate_top_ranked_me_interaction_tables(
+    subtype: str,
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
     methods: list,
+    dialect_thresholds_fn: Path,
 ) -> dict:
     """TODO: Add docstring."""
+    dialect_thresholds_df = pd.read_csv(dialect_thresholds_fn, index_col=0)
     method_to_top_ranked_me_interaction_table = {}
     method_to_num_significant_me_pairs = {}
     for method in methods:
@@ -153,6 +167,9 @@ def generate_top_ranked_me_interaction_tables(
             method,
             (None, None),
         )
+        if method == "DIALECT (Rho)":
+            significance_metric = "Rho"
+            threshold = dialect_thresholds_df.loc[subtype]["ME_Rho_Threshold"]
         top_ranked_me_interaction_table = results_df.sort_values(
             by=rank_metric,
             ascending=sort_order == "ascending",
@@ -170,23 +187,20 @@ def generate_top_ranked_me_interaction_tables(
                 & (top_ranked_me_interaction_table["Rho"] < 0)
             ]
 
-        if significance_metric:
-            method_top_ranked_me_interaction_table = top_ranked_me_interaction_table[
-                ["Gene A", "Gene B", rank_metric, significance_metric]
-            ].copy()
-            method_top_ranked_me_interaction_table["Significant"] = (
-                method_top_ranked_me_interaction_table[significance_metric] < threshold
-            )
-            method_to_num_significant_me_pairs[method] = (
-                method_top_ranked_me_interaction_table["Significant"].sum()
-            )
-        else:  # DIALECT
+        if rank_metric == significance_metric:
             method_top_ranked_me_interaction_table = top_ranked_me_interaction_table[
                 ["Gene A", "Gene B", rank_metric]
             ].copy()
-            method_top_ranked_me_interaction_table["Significant"] = False
-            method_to_num_significant_me_pairs[method] = 0
-
+        else:
+            method_top_ranked_me_interaction_table = top_ranked_me_interaction_table[
+                ["Gene A", "Gene B", rank_metric, significance_metric]
+            ].copy()
+        method_top_ranked_me_interaction_table["Significant"] = (
+            method_top_ranked_me_interaction_table[significance_metric] < threshold
+        )
+        method_to_num_significant_me_pairs[method] = (
+            method_top_ranked_me_interaction_table["Significant"].sum()
+        )
         method_to_top_ranked_me_interaction_table[method] = (
             method_top_ranked_me_interaction_table.head(num_pairs)
         )

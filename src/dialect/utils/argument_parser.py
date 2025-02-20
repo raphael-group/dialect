@@ -361,6 +361,7 @@ def build_analysis_argument_parser(
     add_driver_genes_fn: bool = False,
     add_pancancer_counts_fn: bool = False,
     add_likely_passenger_dir: bool = False,
+    add_dialect_thresholds_fn: bool = False,
     add_putative_driver_gene_fn: bool = False,
 ) -> ArgumentParser:
     """TODO: Add docstring."""
@@ -392,6 +393,8 @@ def build_analysis_argument_parser(
         parser.add_argument("-lp", "--likely_passenger_dir", type=Path)
     if add_putative_driver_gene_fn:
         parser.add_argument("-pd", "--putative_driver_gene_fn", type=Path)
+    if add_dialect_thresholds_fn:
+        parser.add_argument("-dt", "--dialect_thresholds_fn", type=Path)
     return parser
 
 

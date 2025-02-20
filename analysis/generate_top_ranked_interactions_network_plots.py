@@ -23,6 +23,7 @@ def main() -> None:
         add_analysis_type=True,
         add_driver_genes_fn=True,
         add_likely_passenger_dir=True,
+        add_dialect_thresholds_fn=True,
     )
     args = parser.parse_args()
 
@@ -44,7 +45,7 @@ def main() -> None:
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
     num_edges = args.num_pairs // 2 if args.analysis_type == "BOTH" else args.num_pairs
     for subtype in subtypes:
-        if subtype != "UCEC":
+        if subtype != "LAML":
             continue
         results_fn = args.results_dir / subtype / results_basename
         cnt_mtx_fn = args.results_dir / subtype / count_mtx_basename
@@ -57,23 +58,17 @@ def main() -> None:
         )
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
 
-        top_ranked_me_interactions_by_method, method_to_num_significant_me_pairs = (
-            generate_top_ranked_me_interaction_tables(
-                results_df=results_df,
-                num_pairs=num_edges,
-                num_samples=num_samples,
-                methods=args.methods.split(","),
-            )
-        )
-        top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
-            generate_top_ranked_co_interaction_tables(
-                results_df=results_df,
-                num_pairs=num_edges,
-                num_samples=num_samples,
-                methods=args.methods.split(","),
-            )
-        )
         if args.analysis_type == "ME":
+            top_ranked_me_interactions_by_method, method_to_num_significant_me_pairs = (
+                generate_top_ranked_me_interaction_tables(
+                    subtype=subtype,
+                    results_df=results_df,
+                    num_pairs=num_edges,
+                    num_samples=num_samples,
+                    methods=args.methods.split(","),
+                    dialect_thresholds_fn=args.dialect_thresholds_fn,
+                )
+            )
             for method in top_ranked_me_interactions_by_method:
                 top_ranked_me_pairs = top_ranked_me_interactions_by_method[method]
                 dout = Path(f"{args.out_dir}/{subtype}")
@@ -102,6 +97,16 @@ def main() -> None:
                     fout=fout,
                 )
         elif args.analysis_type == "CO":
+            top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
+                generate_top_ranked_co_interaction_tables(
+                    subtype=subtype,
+                    results_df=results_df,
+                    num_pairs=num_edges,
+                    num_samples=num_samples,
+                    methods=args.methods.split(","),
+                    dialect_thresholds_fn=args.dialect_thresholds_fn,
+                )
+            )
             for method in top_ranked_co_interactions_by_method:
                 top_ranked_co_pairs = top_ranked_co_interactions_by_method[method]
                 dout = Path(f"{args.out_dir}/{subtype}")
