@@ -57,11 +57,13 @@ def compute_likely_passenger_proportions(
         )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
-        method_to_top_ranked_interaction_table = generate_top_ranked_interaction_table(
-            results_df=results_df,
-            num_pairs=num_pairs,
-            num_samples=num_samples,
-            methods=methods,
+        method_to_top_ranked_interaction_table, method_to_num_sig_pairs = (
+            generate_top_ranked_interaction_table(
+                results_df=results_df,
+                num_pairs=num_pairs,
+                num_samples=num_samples,
+                methods=methods,
+            )
         )
         for (
             method,
@@ -99,11 +101,13 @@ def compute_likely_passenger_proportions_range(
         )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
-        method_to_top_ranked_interaction_table = generate_top_ranked_interaction_table(
-            results_df=results_df,
-            num_pairs=100,
-            num_samples=num_samples,
-            methods=methods,
+        method_to_top_ranked_interaction_table, method_to_num_sig_pairs = (
+            generate_top_ranked_interaction_table(
+                results_df=results_df,
+                num_pairs=100,
+                num_samples=num_samples,
+                methods=methods,
+            )
         )
         for k in range(1, 101):
             for (
@@ -139,12 +143,8 @@ def compute_likely_passenger_proportions_range(
 def main() -> None:
     """TODO: Add docstring."""
     parser = build_analysis_argument_parser(
-        results_dir_required=True,
-        out_dir_required=True,
         add_likely_passenger_dir=True,
         add_subtypes=True,
-        likely_passenger_required=True,
-        add_num_pairs=True,
         add_analysis_type=True,
     )
     args = parser.parse_args()
@@ -165,7 +165,7 @@ def main() -> None:
             generate_top_ranked_interaction_table=generate_top_ranked_table_function,
         )
     )
-    figsize = (len(methods) * 1.2, 3)
+    figsize = (len(methods) * 1.4, 3)
     draw_likely_passenger_gene_proportion_violinplot(
         method_to_subtype_to_auc,
         out_fn=args.out_dir

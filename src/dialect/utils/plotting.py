@@ -777,6 +777,24 @@ def draw_likely_passenger_gene_proportion_violinplot(
     plt.setp(vp["cmaxes"], color="slategray", linewidth=font_scale)
     plt.setp(vp["cbars"], color="slategray", linewidth=font_scale)
 
+    for idx, method in enumerate(methods):
+        subtype_data = method_to_subtype_to_passenger_proportion[method]
+        for subtype, color, marker in zip(
+            ["BRCA", "UCEC"],
+            ["#6666CC", "#CC6666"],
+            ["o", "o"],
+        ):
+            y_value = subtype_data[subtype]
+            ax.scatter(
+                idx,
+                y_value,
+                color=color,
+                marker=marker,
+                alpha=0.80,
+                s=font_scale * 50,
+                zorder=10,
+            )
+
     ax.minorticks_on()
     ax.tick_params(axis="both", direction="in", length=font_scale * 4, width=font_scale)
     ax.tick_params(axis="x", which="minor", top=False, bottom=False)
