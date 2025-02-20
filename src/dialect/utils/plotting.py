@@ -953,7 +953,7 @@ def draw_all_subtypes_background_mutation_distribution(
     exp_bkgd_muts: list,
     out_fn: str,
     font_scale: float = FONT_SCALE,
-    figsize: type = (4, 4),
+    figsize: type = (6, 4),
 ) -> None:
     """TODO: Add docstring."""
     plt.rcParams["font.serif"] = FONT_FAMILY
@@ -971,6 +971,48 @@ def draw_all_subtypes_background_mutation_distribution(
     )
     plt.ylabel("Number of Genes", fontsize=font_scale * 10)
 
+    plt.tight_layout()
+    fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
+    fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
+    plt.close(fig)
+
+def draw_mutation_variability_scatterplot(
+    subtype_to_coef_of_variation: dict,
+    out_fn: str,
+    font_scale: float = FONT_SCALE,
+    figsize: tuple = (12, 3),
+) -> None:
+    """TODO: Add docstring."""
+    plt.rcParams["font.serif"] = FONT_FAMILY
+    fig = plt.figure(figsize=figsize)
+    sorted_subtypes = sorted(
+        subtype_to_coef_of_variation.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    subtypes, coef_of_variations = zip(*sorted_subtypes)
+    plt.scatter(
+        x=subtypes,
+        y=coef_of_variations,
+        color="black",
+        s=font_scale * 40,
+    )
+    plt.ylim(0, 23)
+    plt.xlabel("Subtype", fontsize=font_scale * 10)
+    plt.ylabel("Mutation Count\nCoefficient of Variation", fontsize=font_scale * 10)
+    plt.xticks(fontsize=font_scale * 8, rotation=45)
+    plt.yticks(fontsize=font_scale * 8)
+    plt.gca().tick_params(
+        axis="both",
+        direction="in",
+        length=font_scale * 4,
+        width=font_scale,
+    )
+    plt.minorticks_on()
+    plt.gca().tick_params(axis="x", which="minor", top=False, bottom=False)
+    plt.gca().tick_params(axis="y", which="minor", left=True, right=True)
+    plt.gca().tick_params(axis="x", which="major", top=True, bottom=True)
+    plt.gca().tick_params(axis="y", which="major", left=True, right=True)
     plt.tight_layout()
     fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)
     fig.savefig(f"{out_fn}.svg", dpi=300, transparent=True)
