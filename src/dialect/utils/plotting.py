@@ -971,9 +971,12 @@ def draw_single_subtype_background_mutation_distribution(
     plt.close(fig)
 
 
-def draw_all_subtypes_background_mutation_distribution(
-    exp_bkgd_muts: list,
+def draw_all_subtypes_mutation_distribution(
+    mutation_counts: list,
     out_fn: str,
+    xlabel: str,
+    ylabel: str,
+    xlim: tuple,
     font_scale: float = FONT_SCALE,
     figsize: type = (6, 4),
 ) -> None:
@@ -981,17 +984,15 @@ def draw_all_subtypes_background_mutation_distribution(
     plt.rcParams["font.serif"] = FONT_FAMILY
     fig = plt.figure(figsize=figsize)
     plt.hist(
-        exp_bkgd_muts,
+        np.array(mutation_counts),
         color="lightslategray",
         alpha=0.8,
         edgecolor="black",
-        log=True,
+        bins=25,
     )
-    plt.xlabel(
-        "Expected Per Sample Passenger\nMutations of a Gene",
-        fontsize=font_scale * 10,
-    )
-    plt.ylabel("Number of Genes", fontsize=font_scale * 10)
+    plt.xlabel(xlabel, fontsize=font_scale * 10)
+    plt.ylabel(ylabel, fontsize=font_scale * 10)
+    plt.xlim(xlim)
 
     plt.tight_layout()
     fig.savefig(f"{out_fn}.png", dpi=300, transparent=True)

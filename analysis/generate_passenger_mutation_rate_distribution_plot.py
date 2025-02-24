@@ -6,7 +6,7 @@ from dialect.models.gene import Gene
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.helpers import load_bmr_pmfs
 from dialect.utils.plotting import (
-    draw_all_subtypes_background_mutation_distribution,
+    draw_all_subtypes_mutation_distribution,
     draw_single_subtype_background_mutation_distribution,
 )
 
@@ -68,9 +68,12 @@ def main() -> None:
             out_fn=args.out_dir / f"{subtype}_bkgd_mutation_distribution",
        )
     all_subtype_exp_bkgd_muts = get_all_subtype_exp_bkgd_muts(args.results_dir)
-    draw_all_subtypes_background_mutation_distribution(
+    draw_all_subtypes_mutation_distribution(
         all_subtype_exp_bkgd_muts,
         out_fn=args.out_dir / "all_subtypes_bkgd_mutation_distribution",
+        xlabel="Expected per Sample Passenger\nMutations of a Gene",
+        ylabel="Number of Genes",
+        xlim=(0, 4.25),
     )
 
 if __name__ == "__main__":
