@@ -88,6 +88,7 @@ def compute_likely_passenger_proportions_range(
     subtype_to_likely_passengers: dict,
     methods: list,
     generate_top_ranked_interaction_table: callable,
+    dialect_thresholds_fn: Path,
 ) -> tuple:
     """TODO: Add docstring."""
     method_to_subtype_to_proportions = {}
@@ -107,6 +108,7 @@ def compute_likely_passenger_proportions_range(
                 num_pairs=100,
                 num_samples=num_samples,
                 methods=methods,
+                dialect_thresholds_fn=dialect_thresholds_fn,
             )
         )
         for k in range(1, 101):
@@ -146,6 +148,7 @@ def main() -> None:
         add_likely_passenger_dir=True,
         add_subtypes=True,
         add_analysis_type=True,
+        add_dialect_thresholds_fn=True,
     )
     args = parser.parse_args()
     subtype_to_likely_passengers = load_likely_passenger_genes(
@@ -163,6 +166,7 @@ def main() -> None:
             subtype_to_likely_passengers=subtype_to_likely_passengers,
             methods=methods,
             generate_top_ranked_interaction_table=generate_top_ranked_table_function,
+            dialect_thresholds_fn=args.dialect_thresholds_fn,
         )
     )
     figsize = (len(methods) * 1.4, 3)
