@@ -9,11 +9,11 @@ from dialect.utils.argument_parser import build_analysis_argument_parser
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def get_me_threshold(rho_values: pd.Series, fdr:float=0.05) -> float:
+def get_me_threshold(rho_values: pd.Series, fdr: float = 0.01) -> float:
     """TODO: Add docstring."""
     return rho_values.quantile(fdr)
 
-def get_co_threshold(lrt_values: pd.Series, fdr:float=0.05) -> float:
+def get_co_threshold(lrt_values: pd.Series, fdr: float = 0.01) -> float:
     """TODO: Add docstring."""
     return lrt_values.quantile(1 - fdr)
 
@@ -27,6 +27,8 @@ def main() -> None:
     sim_dir = Path("output/simulations")
     sim_type_name = "NS{}/0ME_0CO_200P/1.0DP/0.05TL_0.10TH"
 
+    all_rho_values = []
+    all_lrt_values = []
     subtype_to_significance_thresholds = {}
     for subtype_dir in args.results_dir.iterdir():
         subtype = subtype_dir.name
@@ -49,12 +51,20 @@ def main() -> None:
             co_results_df = results_df[results_df["Rho"] > 0]
             rho_values.extend(me_results_df["Rho"].tolist())
             lrt_values.extend(co_results_df["Likelihood Ratio"].tolist())
+        all_rho_values.extend(rho_values)
+        all_lrt_values.extend(lrt_values)
         me_threshold = get_me_threshold(pd.Series(rho_values))
         co_threshold = get_co_threshold(pd.Series(lrt_values))
         subtype_to_significance_thresholds[subtype] = {
             "ME_Rho_Threshold": me_threshold,
             "CO_LRT_Threshold": co_threshold,
         }
+    total_me_threshold = get_me_threshold(pd.Series(all_rho_values))
+    total_co_threshold = get_co_threshold(pd.Series(all_lrt_values))
+    subtype_to_significance_thresholds["TOTAL"] = {
+        "ME_Rho_Threshold": total_me_threshold,
+        "CO_LRT_Threshold": total_co_threshold,
+    }
     thresholds_df = pd.DataFrame.from_dict(subtype_to_significance_thresholds,
                                            orient="index")
     thresholds_df = thresholds_df.reset_index().rename(columns={"index": "subtype"})

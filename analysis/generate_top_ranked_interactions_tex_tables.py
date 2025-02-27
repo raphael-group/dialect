@@ -115,41 +115,36 @@ def _build_subtable_latex_(
     return "\n".join(lines)
 
 
-def _write_caption(ixn_type: str, method_to_num_sig_pairs: dict) -> str:
+def _write_caption(subtype: str, ixn_type: str, method_to_num_sig_pairs: dict) -> str:
     if ixn_type == "ME":
         ixn_label = "mutually exclusive"
         indicator_text = (
             "More negative $\\rho$ values, lower p-values, and higher likelihood ratio "
-            "test (LRT) scores indicate stronger mutual exclusivity."
+            "test (LRT) values indicate stronger mutual exclusivity."
         )
-    elif ixn_type == "CO":
+    else:  # ixn_type == "CO"
         ixn_label = "co-occurring"
         indicator_text = (
-            "More positive $\\rho$ values, lower p-values, and higher likelihood ratio "
-            "test (LRT) scores indicate stronger co-occurrence."
+            "More positive likelihood ratio test (LRT) values and lower p-values"
+            "scores indicate stronger co-occurrence."
         )
-    else:
-        ixn_label = "interactions"
-        indicator_text = ""
 
     sig_pairs_list = [
-        f"{method}: {num}" for method, num in method_to_num_sig_pairs.items()
+        f"{method}: ${num}$" for method, num in method_to_num_sig_pairs.items()
     ]
     sig_pairs_str = ", ".join(sig_pairs_list)
 
     return (
-        f"\\textbf{{Top ranked {ixn_label} interactions in UCEC across methods.}} "
-        f"$10$ {ixn_label} gene pairs most highly ranked by \\OurMethod{{}}, DISCOVER, "
-        f"Fisher's Exact Test, MEGSA, and WeSME on TCGA endometrial cancer. "
-        f"{indicator_text} "
-        "Significance thresholds applied were: Fisher's Exact Test"
-        " (FDR threshold of 0.01), "
-        "DISCOVER (Benjamini-Hochberg correction with a"
-        " maximum FDR threshold of 0.01), "
-        "MEGSA (p-value threshold of 1 \\times 10$^{-3}$), and WeSME"
-        "(FDR-corrected at 0.01), "
-        "while DIALECT did not threshold by significance. "
-        f"The total number of significant pairs identified were: {sig_pairs_str}."
+        f"\\textbf{{Top ranked {ixn_label} interactions in {subtype} "
+        "across methods.} $10$ dependencies most highly "
+        "ranked by \\OurMethod{{}}, DISCOVER, Fisher's Exact Test, "
+        f"MEGSA, and WeSME on TCGA {subtype}. {indicator_text} "
+        "Bolded pairs indicate signficant interactions. "
+        "Significance thresholds were applied as follows. Fisher's "
+        "Exact Test, DISCOVER, WeSME, and DIALECT used an FDR "
+        "threshold of $0.01$. MEGSA used a p-value threshold of "
+        "$1 \\times 10^{-3}$. The total number of significant "
+        f"pairs identified by each method was {sig_pairs_str}."
     )
 
 
@@ -195,7 +190,7 @@ def create_final_table(
     lines.append(r"\vspace{-0.2cm}")
     lines.append(bottom_subtable)
 
-    caption = _write_caption(ixn_type, method_to_num_sig_pairs)
+    caption = _write_caption(subtype, ixn_type, method_to_num_sig_pairs)
     lines.append(rf"\caption{{{caption}}}")
     lines.append(r"\label{tab:" + subtype + "}")
     lines.append(r"\end{table}")
@@ -211,6 +206,7 @@ def main() -> None:
     parser = build_analysis_argument_parser(
         add_num_pairs=True,
         add_analysis_type=True,
+        add_dialect_thresholds_fn=True,
     )
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +214,7 @@ def main() -> None:
     subtypes = os.listdir(args.results_dir)
     for subtype in subtypes:
         subtype_dir = args.results_dir / subtype
-        results_fn = subtype_dir / "complete_pairwise_ixn_results.csv"
+        results_fn = subtype_dir / "complete_pairwise_interaction_results.csv"
         cnt_mtx_fn = subtype_dir / "count_matrix.csv"
         if not results_fn.exists() or not cnt_mtx_fn.exists():
             continue
@@ -227,21 +223,26 @@ def main() -> None:
         if args.analysis_type == "ME":
             top_tables, method_to_num_sig_pairs = (
                 generate_top_ranked_me_interaction_tables(
+                    subtype=subtype,
                     results_df=results_df,
                     num_pairs=args.num_pairs,
                     num_samples=num_samples,
                     methods=ME_METHODS,
+                    dialect_thresholds_fn=args.dialect_thresholds_fn,
                 )
             )
         else:
             top_tables, method_to_num_sig_pairs = (
                 generate_top_ranked_co_interaction_tables(
+                    subtype=subtype,
                     results_df=results_df,
                     num_pairs=args.num_pairs,
                     num_samples=num_samples,
                     methods=CO_METHODS,
+                    dialect_thresholds_fn=args.dialect_thresholds_fn,
                 )
             )
+
         top_pairs_by_method = {}
         for method_name, method_df in top_tables.items():
             if method_df is None or method_df.empty:

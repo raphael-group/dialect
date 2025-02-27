@@ -45,8 +45,6 @@ def main() -> None:
     subtypes = [subtype.name for subtype in args.results_dir.iterdir()]
     num_edges = args.num_pairs // 2 if args.analysis_type == "BOTH" else args.num_pairs
     for subtype in subtypes:
-        if subtype != "LAML":
-            continue
         results_fn = args.results_dir / subtype / results_basename
         cnt_mtx_fn = args.results_dir / subtype / count_mtx_basename
         likely_passenger_fn = args.likely_passenger_dir / f"{subtype}.txt"
@@ -61,7 +59,6 @@ def main() -> None:
         if args.analysis_type == "ME":
             top_ranked_me_interactions_by_method, method_to_num_significant_me_pairs = (
                 generate_top_ranked_me_interaction_tables(
-                    subtype=subtype,
                     results_df=results_df,
                     num_pairs=num_edges,
                     num_samples=num_samples,
@@ -99,7 +96,6 @@ def main() -> None:
         elif args.analysis_type == "CO":
             top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
                 generate_top_ranked_co_interaction_tables(
-                    subtype=subtype,
                     results_df=results_df,
                     num_pairs=num_edges,
                     num_samples=num_samples,

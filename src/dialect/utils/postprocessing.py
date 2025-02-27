@@ -81,7 +81,6 @@ def compute_epsilon_threshold(num_samples: int, alpha: float = 0.001) -> float:
 
 
 def generate_top_ranked_co_interaction_tables(
-    subtype: str,
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
@@ -102,7 +101,10 @@ def generate_top_ranked_co_interaction_tables(
         )
         if method == "DIALECT (LRT)":
             significance_metric = "Likelihood Ratio"
-            threshold = dialect_thresholds_df.loc[subtype]["CO_LRT_Threshold"]
+            threshold = dialect_thresholds_df.sort_values(
+                by="CO_LRT_Threshold",
+                ascending=False,
+            ).iloc[0]["CO_LRT_Threshold"]
         top_ranked_co_interaction_table = results_df.sort_values(
             by=rank_metric,
             ascending=sort_order == "ascending",
@@ -148,7 +150,6 @@ def generate_top_ranked_co_interaction_tables(
     return method_to_top_ranked_co_interaction_table, method_to_num_significant_co_pairs
 
 def generate_top_ranked_me_interaction_tables(
-    subtype: str,
     results_df: pd.DataFrame,
     num_pairs: int,
     num_samples: int,
@@ -169,7 +170,10 @@ def generate_top_ranked_me_interaction_tables(
         )
         if method == "DIALECT (Rho)":
             significance_metric = "Rho"
-            threshold = dialect_thresholds_df.loc[subtype]["ME_Rho_Threshold"]
+            threshold = dialect_thresholds_df.sort_values(
+                by="ME_Rho_Threshold",
+                ascending=True,
+            ).iloc[0]["ME_Rho_Threshold"]
         top_ranked_me_interaction_table = results_df.sort_values(
             by=rank_metric,
             ascending=sort_order == "ascending",
