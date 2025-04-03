@@ -8,26 +8,26 @@ usage() {
 
 while getopts ":d:o:k:s:" opt; do
     case ${opt} in
-        d )
-            DATA_DIR=$OPTARG
-            ;;
-        o )
-            DOUT=$OPTARG
-            ;;
-        k )
-            TOP_GENES=$OPTARG
-            ;;
-        s )
-            STEPS=$OPTARG
-            ;;
-        \? )
-            echo "Invalid option: -$OPTARG" >&2
-            usage
-            ;;
-        : )
-            echo "Option -$OPTARG requires an argument." >&2
-            usage
-            ;;
+    d)
+        DATA_DIR=$OPTARG
+        ;;
+    o)
+        DOUT=$OPTARG
+        ;;
+    k)
+        TOP_GENES=$OPTARG
+        ;;
+    s)
+        STEPS=$OPTARG
+        ;;
+    \?)
+        echo "Invalid option: -$OPTARG" >&2
+        usage
+        ;;
+    :)
+        echo "Option -$OPTARG requires an argument." >&2
+        usage
+        ;;
     esac
 done
 
