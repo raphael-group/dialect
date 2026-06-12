@@ -23,14 +23,22 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from dialect.baselines.runner import run_comparison_methods
 from dialect.bmr import get_provider
 from dialect.data.io import read_cbase_results_file
 from dialect.utils.identify import identify_pairwise_interactions
+from dialect.utils.merge import merge_pairwise_interaction_results
 
 if TYPE_CHECKING:
     from dialect.bmr.base import BMRResult
 
-__all__ = ["IdentifyResult", "estimate_bmr", "identify_interactions"]
+__all__ = [
+    "IdentifyResult",
+    "compare_methods",
+    "estimate_bmr",
+    "identify_interactions",
+    "merge_results",
+]
 
 _DEFAULT_TOP_K = 100
 
@@ -126,3 +134,43 @@ def identify_interactions(
         pairwise=pd.read_csv(out / "pairwise_interaction_results.csv"),
         out_dir=out,
     )
+
+
+def compare_methods(
+    counts: str | Path,
+    out_dir: str | Path,
+    *,
+    top_k: int = _DEFAULT_TOP_K,
+    gene_level: bool = False,
+) -> Path:
+    """Run the baseline ME/CO methods (Fisher/DISCOVER/MEGSA/WeSME) on a cohort.
+
+    Each method runs independently; any that is unavailable (e.g. DISCOVER not
+    installed, no R for MEGSA) is skipped with a warning. Writes the merged
+    comparison table under ``out_dir`` and returns that directory.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    run_comparison_methods(
+        cnt_mtx=str(counts),
+        out=str(out),
+        k=top_k,
+        is_gene_level=gene_level,
+    )
+    return out
+
+
+def merge_results(
+    dialect_results: str | Path,
+    alt_results: str | Path,
+    out_dir: str | Path,
+) -> Path:
+    """Merge DIALECT's pairwise results with an alternative method's results."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    merge_pairwise_interaction_results(
+        dialect_results=str(dialect_results),
+        alt_results=str(alt_results),
+        out=str(out),
+    )
+    return out

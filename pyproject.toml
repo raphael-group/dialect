@@ -39,6 +39,7 @@ dependencies = [
     "matplotlib",
     "upsetplot",
     "tqdm",
+    "typer",
 ]
 
 [project.optional-dependencies]
@@ -106,6 +107,10 @@ ignore = ["D203", "D213", "FIX002"]
 "src/dialect/bmr/_cbase_run.py" = ["S603"]
 "src/dialect/utils/identify.py" = ["FBT001"]
 "src/dialect/utils/argument_parser.py" = ["FBT001", "FBT002", "PLR0913", "C901"]
+# Typer needs call-in-default (B008) for Option(...); CLI commands are boolean-
+# flagged and parameter-heavy by nature.
+"src/dialect/cli/app.py" = ["B008", "FBT001", "FBT002", "FBT003", "PLR0913"]
+"src/dialect/cli/simulate.py" = ["B008", "FBT001", "FBT002", "PLR0913"]
 "src/dialect/baselines/runner.py" = ["FBT001"]
 
 [tool.ruff.lint.pydocstyle]
