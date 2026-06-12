@@ -31,6 +31,8 @@ ALLOWED_INTERNAL_PREFIXES = {
     "baselines": {"dialect.baselines", "dialect.data", "dialect.models"},
     # stats is pure statistics over result frames + models; never bmr/baselines/viz.
     "stats": {"dialect.stats", "dialect.data", "dialect.models"},
+    # viz renders figures from cohort data + stats result frames; never bmr/baselines.
+    "viz": {"dialect.viz", "dialect.data", "dialect.stats"},
 }
 
 
