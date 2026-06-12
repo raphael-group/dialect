@@ -1,9 +1,13 @@
 """TODO: Add docstring."""
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def run_wesme_analysis(
