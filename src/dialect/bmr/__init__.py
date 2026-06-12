@@ -6,6 +6,7 @@ DIALECT conditions every likelihood on a per-gene, per-effect background count P
 to reviewers asking how robust the ME/CO calls are to the choice of BMR model.
 """
 
+from dialect.bmr._dig_pmf import dig_results_to_bmr_pmfs
 from dialect.bmr.base import BMRProvider, BMRResult
 from dialect.bmr.cbase import CBaSEProvider
 from dialect.bmr.dig import DIGProvider
@@ -17,5 +18,6 @@ __all__ = [
     "CBaSEProvider",
     "DIGProvider",
     "available",
+    "dig_results_to_bmr_pmfs",
     "get_provider",
 ]

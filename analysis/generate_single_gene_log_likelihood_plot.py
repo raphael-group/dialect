@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from dialect.data.io import load_cnt_mtx_and_bmr_pmfs
 from dialect.models.gene import Gene
-from dialect.utils.helpers import load_cnt_mtx_and_bmr_pmfs
 
 
 # ------------------------------------------------------------------------------------ #

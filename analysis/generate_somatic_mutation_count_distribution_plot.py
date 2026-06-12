@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.plotting import draw_all_subtypes_mutation_distribution
+from dialect.viz.plotting import draw_all_subtypes_mutation_distribution
 
 
 def get_all_subtype_somatic_mutation_counts(results_dir: Path) -> list:

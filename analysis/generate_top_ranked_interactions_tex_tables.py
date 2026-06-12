@@ -3,11 +3,11 @@
 import numpy as np
 import pandas as pd
 
-from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.postprocessing import (
+from dialect.stats.ranking import (
     generate_top_ranked_co_interaction_tables,
     generate_top_ranked_me_interaction_tables,
 )
+from dialect.utils.argument_parser import build_analysis_argument_parser
 
 FLOAT_LOW_THRESHOLD = 0.01
 MANTISSA_MAX_THRESHOLD = 10

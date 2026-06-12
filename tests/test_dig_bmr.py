@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from dialect.utils.dig_bmr import dig_results_to_bmr_pmfs
+from dialect.bmr import dig_results_to_bmr_pmfs
 
 
 def _write_dig(tmp_path, **cols) -> str:

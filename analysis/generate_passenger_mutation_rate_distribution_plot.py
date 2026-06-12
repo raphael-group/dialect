@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
+from dialect.data.io import load_bmr_pmfs
 from dialect.models.gene import Gene
 from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.helpers import load_bmr_pmfs
-from dialect.utils.plotting import (
+from dialect.viz.plotting import (
     draw_all_subtypes_mutation_distribution,
     draw_single_subtype_background_mutation_distribution,
 )

@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.plotting import (
-    draw_single_me_or_co_interaction_network,
-)
-from dialect.utils.postprocessing import (
+from dialect.stats.ranking import (
     generate_top_ranked_co_interaction_tables,
     generate_top_ranked_me_interaction_tables,
+)
+from dialect.utils.argument_parser import build_analysis_argument_parser
+from dialect.viz.plotting import (
+    draw_single_me_or_co_interaction_network,
 )
 
 RESULTS_BASENAME = "pairwise_interaction_results.csv"

@@ -1,7 +1,7 @@
 """TODO: Add docstring."""
 import matplotlib.pyplot as plt
 
-from dialect.utils.postprocessing import compute_epsilon_threshold
+from dialect.stats.thresholds import compute_epsilon_threshold
 
 
 def main() -> None:

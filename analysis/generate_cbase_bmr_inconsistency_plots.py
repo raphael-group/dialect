@@ -4,12 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from dialect.data.io import load_likely_passenger_genes, load_putative_driver_genes
 from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.helpers import (
-    load_likely_passenger_genes,
-    load_putative_driver_genes,
-)
-from dialect.utils.plotting import (
+from dialect.viz.plotting import (
     draw_cbase_likely_passenger_proportion_barplot,
     draw_cbase_top_likely_passenger_upset,
     draw_gene_expected_and_observed_mutations_barplot,

@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.plotting import draw_sample_mutation_count_subtype_histograms
+from dialect.viz.plotting import draw_sample_mutation_count_subtype_histograms
 
 
 # ------------------------------------------------------------------------------------ #

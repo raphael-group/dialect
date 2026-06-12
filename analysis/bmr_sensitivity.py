@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from dialect.utils.dig_bmr import dig_results_to_bmr_pmfs
+from dialect.bmr import dig_results_to_bmr_pmfs
 
 # Known long / recurrently-mutated passenger genes (the classic BMR false positives).
 LONG_PASSENGERS = {

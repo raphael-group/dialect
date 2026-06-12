@@ -5,15 +5,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from dialect.utils.argument_parser import build_analysis_argument_parser
-from dialect.utils.helpers import load_likely_passenger_genes
-from dialect.utils.plotting import (
-    draw_likely_passenger_gene_proportion_violinplot,
-    draw_likely_passenger_proportion_hit_curve,
-)
-from dialect.utils.postprocessing import (
+from dialect.data.io import load_likely_passenger_genes
+from dialect.stats.ranking import (
     generate_top_ranked_co_interaction_tables,
     generate_top_ranked_me_interaction_tables,
+)
+from dialect.utils.argument_parser import build_analysis_argument_parser
+from dialect.viz.plotting import (
+    draw_likely_passenger_gene_proportion_violinplot,
+    draw_likely_passenger_proportion_hit_curve,
 )
 
 # ------------------------------------------------------------------------------------ #
