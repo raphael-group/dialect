@@ -3,7 +3,7 @@
 from argparse import Namespace
 from pathlib import Path
 
-from dialect.bmr import get_provider
+from dialect.api import estimate_bmr, identify_interactions
 from dialect.utils import (
     build_dialect_argument_parser,
     configure_logging,
@@ -13,9 +13,7 @@ from dialect.utils import (
     evaluate_matrix_simulation,
     evaluate_pair_gene_simulation,
     evaluate_single_gene_simulation,
-    identify_pairwise_interactions,
     merge_pairwise_interaction_results,
-    read_cbase_results_file,
     run_comparison_methods,
 )
 
@@ -87,29 +85,30 @@ def main() -> None:
     configure_logging(args.verbose)
 
     if args.command == "generate":
-        Path(args.out).mkdir(parents=True, exist_ok=True)
         if args.bmr == "dig":
             if not args.dig_results or not args.dig_samples:
                 parser.error("--bmr dig requires --dig-results and --dig-samples")
-            provider = get_provider(
-                "dig",
-                dig_results=args.dig_results,
-                n_samples=args.dig_samples,
-            )
+            provider_kwargs = {
+                "dig_results": args.dig_results,
+                "n_samples": args.dig_samples,
+            }
         else:
-            provider = get_provider("cbase", threshold=args.threshold)
-        provider.estimate(str(args.maf), str(args.out), reference=args.reference)
+            provider_kwargs = {"threshold": args.threshold}
+        estimate_bmr(
+            args.maf,
+            args.out,
+            provider=args.bmr,
+            reference=args.reference,
+            **provider_kwargs,
+        )
 
     elif args.command == "identify":
-        dout = Path(args.out)
-        dout.mkdir(parents=True, exist_ok=True)
-        cbase_stats = read_cbase_results_file(args.cbase_stats)
-        identify_pairwise_interactions(
-            cnt_mtx=args.cnt,
+        identify_interactions(
+            counts=args.cnt,
             bmr_pmfs=args.bmr,
-            out=args.out,
-            k=args.top_k,
-            cbase_stats=cbase_stats,
+            out_dir=args.out,
+            top_k=args.top_k,
+            cbase_stats=args.cbase_stats,
         )
 
     elif args.command == "compare":
