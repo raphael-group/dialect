@@ -26,6 +26,9 @@ ALLOWED_INTERNAL_PREFIXES = {
     # models may build on the data layer and depend on the BMRProvider *port*
     # (dialect.bmr.base), but never on concrete providers or higher layers.
     "models": {"dialect.models", "dialect.data", "dialect.bmr.base"},
+    # baselines wrap external tools / reference stats; they consume cohort data
+    # and model value objects, but never bmr/stats/viz/api/cli.
+    "baselines": {"dialect.baselines", "dialect.data", "dialect.models"},
 }
 
 
