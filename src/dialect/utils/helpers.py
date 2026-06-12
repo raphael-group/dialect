@@ -12,6 +12,9 @@ import pandas as pd
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 
+logger = logging.getLogger(__name__)
+_PMF_SUM_TOL = 1e-6
+
 
 def load_likely_passenger_genes(likely_passenger_dir: Path) -> set:
     """TODO: Add docstring."""
@@ -64,12 +67,12 @@ def load_bmr_pmfs(bmr_pmfs: str) -> dict:
         if total <= 0:
             msg = f"BMR PMF for {key} sums to {total}; cannot normalize."
             raise ValueError(msg)
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > _PMF_SUM_TOL:
             pmf = [x / total for x in pmf]
             n_renormalized += 1
         pmfs[key] = pmf
     if n_renormalized:
-        logging.warning(
+        logger.warning(
             "Renormalized %d/%d BMR PMFs that did not sum to 1 "
             "(likely tail truncation); check the BMR threshold.",
             n_renormalized,
@@ -108,7 +111,7 @@ def initialize_gene_objects(cnt_df: pd.DataFrame, bmr_dict: dict) -> dict:
             bmr_pmf=bmr_pmf,
         )
     if missing:
-        logging.warning(
+        logger.warning(
             "Dropped %d/%d genes with no background PMF from the BMR provider "
             "(e.g. %s).",
             len(missing),

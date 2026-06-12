@@ -6,6 +6,7 @@ whole comparison step.
 """
 
 import logging
+from collections.abc import Callable
 
 import pandas as pd
 
@@ -18,6 +19,8 @@ from dialect.utils.helpers import (
 )
 from dialect.utils.megsa import run_megsa_analysis
 from dialect.utils.wesme import run_wesme_analysis
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------------ #
@@ -76,12 +79,12 @@ def run_comparison_methods(
 
     method_dfs = []
 
-    def _run(label: str, fn) -> None:
+    def _run(label: str, fn: Callable[[], pd.DataFrame]) -> None:
         try:
             method_dfs.append(fn())
-            logging.info("Comparison method '%s' completed.", label)
-        except Exception:  # noqa: BLE001 - one method failing must not sink the rest
-            logging.exception(
+            logger.info("Comparison method '%s' completed.", label)
+        except Exception:  # defensive: a failed method must not sink the others
+            logger.exception(
                 "Comparison method '%s' skipped (unavailable/failed).",
                 label,
             )
@@ -123,7 +126,7 @@ def run_comparison_methods(
             f"{out}/gene_level_comparison_pairwise_interaction_results.csv"
         )
     merged_df.to_csv(comparison_interaction_fout, index=False)
-    logging.info(
+    logger.info(
         "Wrote comparison results (%d methods) to %s",
         len(method_dfs),
         comparison_interaction_fout,

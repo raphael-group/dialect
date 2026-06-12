@@ -6,6 +6,11 @@ import logging
 import numpy as np
 from scipy.optimize import minimize
 
+logger = logging.getLogger(__name__)
+
+# Warn when more than this fraction of a gene's samples is excluded from the EM.
+_HYPERMUTATOR_DROP_FRACTION = 0.05
+
 
 class Gene:
     """TODO: Add docstring."""
@@ -237,8 +242,8 @@ class Gene:
         # typically driven by hypermutators under a cohort-level BMR. Surface it
         # instead of dropping silently (see the hypermutator-handling workstream).
         n_excluded = len(self.counts) - len(nonzero_probability_counts)
-        if n_excluded and n_excluded / len(self.counts) > 0.05:
-            logging.warning(
+        if n_excluded and n_excluded / len(self.counts) > _HYPERMUTATOR_DROP_FRACTION:
+            logger.warning(
                 "Gene %s: %d/%d samples excluded from EM (no background support; "
                 "likely hypermutators); pi may be biased.",
                 self.name,

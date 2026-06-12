@@ -11,6 +11,11 @@ from sklearn.metrics import confusion_matrix
 
 from dialect.models.gene import Gene
 
+logger = logging.getLogger(__name__)
+
+# Warn when more than this fraction of samples is excluded from the EM.
+_HYPERMUTATOR_DROP_FRACTION = 0.05
+
 
 class Interaction:
     """TODO: Add docstring."""
@@ -142,12 +147,13 @@ class Interaction:
                 return min_val
             return pmf.get(c, 0)
 
+        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
         return np.array(
             [
                 tau
                 * safe_get(self.gene_a.bmr_pmf, c_a - u, 0)
                 * safe_get(self.gene_b.bmr_pmf, c_b - v, 0)
-                for c_a, c_b in zip(self.gene_a.counts, self.gene_b.counts)
+                for c_a, c_b in zip(a_counts, b_counts, strict=False)
             ],
         )
 
@@ -167,6 +173,7 @@ class Interaction:
                 return min_val
             return pmf.get(c, 0)
 
+        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
         return np.array(
             [
                 sum(
@@ -185,7 +192,7 @@ class Interaction:
                         * safe_get(self.gene_b.bmr_pmf, c_b - 1, 0),
                     ),
                 )
-                for c_a, c_b in zip(self.gene_a.counts, self.gene_b.counts)
+                for c_a, c_b in zip(a_counts, b_counts, strict=False)
             ],
         )
 
@@ -256,7 +263,7 @@ class Interaction:
                 * safe_get_with_default(b_bmr_pmf, c_b - 1)
                 * tau_11,
             )
-            for c_a, c_b in zip(a_counts, b_counts)
+            for c_a, c_b in zip(a_counts, b_counts, strict=False)
         )
 
     def compute_likelihood_ratio(self, taus: list) -> float:
@@ -497,8 +504,8 @@ class Interaction:
         init_total = np.asarray(self.compute_total_probability(*tau_init))
         n_degenerate = int(np.sum(init_total == 0))
         n_samples = len(self.gene_a.counts)
-        if n_degenerate and n_degenerate / n_samples > 0.05:
-            logging.warning(
+        if n_degenerate and n_degenerate / n_samples > _HYPERMUTATOR_DROP_FRACTION:
+            logger.warning(
                 "Interaction %s: %d/%d samples have no background support and are "
                 "effectively excluded from EM (likely hypermutators); tau may be "
                 "biased.",
