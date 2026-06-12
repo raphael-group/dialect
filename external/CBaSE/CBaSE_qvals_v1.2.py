@@ -722,7 +722,7 @@ def export_pofxigivens_table(pvals_array, x_ind) -> None:
         fout.write(f"{gene[0]}_pof{label}i\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > THRESHOLD:
-                fout.write(f"{gene[x_ind][i][1]:.6e}\t")
+                fout.write(f"{float(gene[x_ind][i][1]):.6e}\t")
         fout.write("\n")
     fout.close()
 
@@ -739,7 +739,7 @@ def export_pofxgivens_table(pvals_array, x_ind, outfile) -> None:
         fout.write(f"{gene[0]}_pof{label}\t")
         for i in range(len(gene[x_ind])):
             if gene[x_ind][i][1] > 9e-7:
-                fout.write(f"{gene[x_ind][i][1]:.6f}\t")
+                fout.write(f"{float(gene[x_ind][i][1]):.6f}\t")
         fout.write("\n")
     fout.close()
 
