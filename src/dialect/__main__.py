@@ -3,6 +3,7 @@
 from argparse import Namespace
 from pathlib import Path
 
+from dialect.bmr import get_provider
 from dialect.utils import (
     build_dialect_argument_parser,
     configure_logging,
@@ -12,7 +13,6 @@ from dialect.utils import (
     evaluate_matrix_simulation,
     evaluate_pair_gene_simulation,
     evaluate_single_gene_simulation,
-    generate_bmr_and_counts,
     identify_pairwise_interactions,
     merge_pairwise_interaction_results,
     read_cbase_results_file,
@@ -87,14 +87,18 @@ def main() -> None:
     configure_logging(args.verbose)
 
     if args.command == "generate":
-        dout = Path(args.out)
-        dout.mkdir(parents=True, exist_ok=True)
-        generate_bmr_and_counts(
-            maf=args.maf,
-            out=args.out,
-            reference=args.reference,
-            threshold=args.threshold,
-        )
+        Path(args.out).mkdir(parents=True, exist_ok=True)
+        if args.bmr == "dig":
+            if not args.dig_results or not args.dig_samples:
+                parser.error("--bmr dig requires --dig-results and --dig-samples")
+            provider = get_provider(
+                "dig",
+                dig_results=args.dig_results,
+                n_samples=args.dig_samples,
+            )
+        else:
+            provider = get_provider("cbase", threshold=args.threshold)
+        provider.estimate(str(args.maf), str(args.out), reference=args.reference)
 
     elif args.command == "identify":
         dout = Path(args.out)

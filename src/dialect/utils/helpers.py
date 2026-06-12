@@ -86,20 +86,34 @@ def load_cnt_mtx_and_bmr_pmfs(cnt_mtx: str, bmr_pmfs: str) -> tuple:
 
 
 def initialize_gene_objects(cnt_df: pd.DataFrame, bmr_dict: dict) -> dict:
-    """TODO: Add docstring."""
+    """Build Gene objects, skipping genes the BMR provider does not cover.
+
+    Different BMR providers model slightly different gene sets (e.g. DIG cannot fit
+    a few genes that CBaSE can). Genes present in the count matrix but absent from
+    the background model are dropped with a warning rather than hard-failing, so
+    DIALECT is robust to the choice of BMR provider.
+    """
     genes = {}
+    missing = []
     for gene_name in cnt_df.columns:
-        counts = cnt_df[gene_name].to_numpy()
         bmr_pmf_arr = bmr_dict.get(gene_name)
         if bmr_pmf_arr is None:
-            msg = f"No BMR PMF found for gene {gene_name}"
-            raise ValueError(msg)
+            missing.append(gene_name)
+            continue
         bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
         genes[gene_name] = Gene(
             name=gene_name,
             samples=cnt_df.index,
-            counts=counts,
+            counts=cnt_df[gene_name].to_numpy(),
             bmr_pmf=bmr_pmf,
+        )
+    if missing:
+        logging.warning(
+            "Dropped %d/%d genes with no background PMF from the BMR provider "
+            "(e.g. %s).",
+            len(missing),
+            len(cnt_df.columns),
+            ", ".join(missing[:5]),
         )
     return genes
 

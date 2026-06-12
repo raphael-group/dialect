@@ -35,6 +35,23 @@ def add_generate_parser(subparsers: _SubParsersAction) -> None:
         default="1e-100",
         help="Threshold for generation of BMR distributions (default: 1e-100)",
     )
+    generate_parser.add_argument(
+        "--bmr",
+        default="cbase",
+        choices=["cbase", "dig"],
+        help="Background mutation rate provider (default: cbase)",
+    )
+    generate_parser.add_argument(
+        "--dig-results",
+        default=None,
+        help="DIG geneDriver *.results.txt (required when --bmr dig)",
+    )
+    generate_parser.add_argument(
+        "--dig-samples",
+        type=int,
+        default=None,
+        help="Number of cohort samples (required when --bmr dig)",
+    )
 
 
 def add_identify_parser(subparsers: _SubParsersAction) -> None:
