@@ -6,7 +6,7 @@ import typer
 
 from dialect import api
 from dialect.cli.simulate import simulate_app
-from dialect.utils.logger import configure_logging
+from dialect.config import configure_logging
 
 app = typer.Typer(
     add_completion=False,
