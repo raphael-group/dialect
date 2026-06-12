@@ -13,27 +13,36 @@ likelihood ratio. The **background mutation rate (BMR)** is the load-bearing inp
 
 ## Repo map
 
-The re-layout (`research/notes/09`) is migrating `utils/` into a one-way layered DAG:
-`cli → api → (models | stats) → (bmr | baselines) → data`. Done so far: the `data/` base
-layer and the de-inverted `bmr/` provider package, plus the public `api.py` seam.
+The re-layout (`research/notes/09`) is **complete**: `utils/` was split into a one-way
+layered DAG `cli → api → (models | stats) → (bmr | baselines) → data` (with `viz` +
+`experiments` as top-of-stack orchestration). `tests/test_architecture.py` AST-enforces it.
+The remaining `utils/*` files are re-export shims; new code should import the real homes.
 
-- `src/dialect/api.py` — **the public seam.** `estimate_bmr(...) -> BMRResult` and
-  `identify_interactions(...) -> IdentifyResult`; both re-exported from the package root
-  (`from dialect import estimate_bmr, identify_interactions`). The CLI and any agent/web
+- `src/dialect/api.py` — **the public seam.** `estimate_bmr`, `identify_interactions`,
+  `compare_methods`, `merge_results` (the first two re-exported from the package root:
+  `from dialect import estimate_bmr, identify_interactions`). The CLI and any agent/web
   backend call into this, not the internals.
+- `src/dialect/cli/` — the **Typer** CLI. `app.py` = generate/identify/compare/merge +
+  `--verbose`; `simulate.py` = the nested `simulate create|evaluate {single,pair,matrix}`.
+  Thin wrappers over `api` (+ `experiments`). `__main__.py` delegates to `cli.app:main`.
 - `src/dialect/models/` — the EM core (the science). `gene.py` = single-gene `π` EM;
-  `interaction.py` = pairwise `τ` EM + `ρ`/LRT/Wald. Pure math; treat with care.
-- `src/dialect/bmr/` — the pluggable `BMRProvider` abstraction (de-inverted: imports only
-  `data` + `bmr`). `base.py` = `BMRProvider` Protocol + `BMRResult`; `registry.py` =
-  name→provider (`get_provider`/`available`); `cbase.py`/`dig.py` = providers;
-  `_cbase_run.py` = vendored-CBaSE subprocess + count/PMF extraction; `_dig_pmf.py` =
-  DIG NB → per-sample PMF math.
-- `src/dialect/data/` — the dependency-free **base layer**. `io.py` = the data contract
-  (`load_bmr_pmfs`, `read_cbase_results_file`, count-matrix I/O). Imports nothing internal.
-- `src/dialect/utils/` — legacy pipeline glue, being migrated. `identify.py` runs the EM;
-  `compare.py` benchmarks vs Fisher/DISCOVER/MEGSA/WeSME. **`generate.py` and `dig_bmr.py`
-  are now thin re-export shims** → the real code lives in `bmr/`. `helpers.py` keeps
-  `initialize_gene_objects`/`initialize_interaction_objects` and re-exports I/O from `data.io`.
+  `interaction.py` = pairwise `τ` EM + `ρ`/LRT/Wald; `assembly.py` = build Gene/Interaction
+  from a cohort (the data→models boundary). Pure math; treat with care.
+- `src/dialect/bmr/` — the pluggable `BMRProvider` abstraction (imports only `data` + `bmr`).
+  `base.py` = Protocol + `BMRResult`; `registry.py` = `get_provider`/`available`;
+  `cbase.py`/`dig.py` = providers; `_cbase_run.py` = CBaSE subprocess; `_dig_pmf.py` = DIG math.
+- `src/dialect/data/` — the dependency-free **base layer** (raw cancer data only). `io.py` =
+  the data contract (PMF/count-matrix I/O); `cohort.py` = `MutationCohort` (counts + bmr_pmfs).
+- `src/dialect/baselines/` — alternative ME/CO methods (`fishers`/`discover`/`megsa`/`wesme`)
+  + `runner.py` (the `compare` dispatcher). Wrap `external/` via subprocess / guarded sys.path.
+- `src/dialect/stats/` — `thresholds.py` (epsilon), `ranking.py` (top-ranked tables),
+  `constants.py`. Pure statistics over result frames; never imports `viz`.
+- `src/dialect/viz/` — `plotting.py` (all figures). `src/dialect/experiments/` — `simulate.py`
+  (generation + evaluation + plotting orchestration; sits above `stats`+`viz`).
+- `src/dialect/utils/` — **legacy shims only**: `identify.py` (EM orchestration, still here);
+  `helpers.py`/`generate.py`/`dig_bmr.py`/`compare.py`/`fishers.py`/`discover.py`/`megsa.py`/
+  `wesme.py`/`plotting.py`/`postprocessing.py`/`simulate.py` re-export their new homes.
+  `argument_parser.py` still hosts `build_analysis_argument_parser` for `analysis/`.
 - `external/` — vendored third-party tools (CBaSE, MEGSA, WeSME, DIGDriver). Invoked via wrappers,
   NOT shipped as an importable package. `external/CBaSE/auxiliary/` is gitignored (583 MB).
 - `analysis/` — paper figure/table + `bmr_sensitivity.py` (CBaSE vs DIG). `tests/` — pytest
