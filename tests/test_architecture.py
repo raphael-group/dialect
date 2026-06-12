@@ -23,6 +23,9 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "dialect"
 ALLOWED_INTERNAL_PREFIXES = {
     "data": {"dialect.data"},
     "bmr": {"dialect.bmr", "dialect.data"},
+    # models may build on the data layer and depend on the BMRProvider *port*
+    # (dialect.bmr.base), but never on concrete providers or higher layers.
+    "models": {"dialect.models", "dialect.data", "dialect.bmr.base"},
 }
 
 

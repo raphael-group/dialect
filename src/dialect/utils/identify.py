@@ -7,59 +7,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from dialect.utils.helpers import (
+from dialect.data.cohort import MutationCohort
+from dialect.models.assembly import (
     initialize_gene_objects,
     initialize_interaction_objects,
-    load_cnt_mtx_and_bmr_pmfs,
-    verify_cnt_mtx_and_bmr_pmfs,
+    save_cbase_stats_to_gene_objects,
 )
 
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
 # ------------------------------------------------------------------------------------ #
-def save_cbase_stats_to_gene_objects(genes: dict, cbase_stats: pd.DataFrame) -> bool:
-    """TODO: Add docstring."""
-    if cbase_stats is None or cbase_stats.empty:
-        return False
-
-    missense_gene_to_positive_selection_phi = {
-        f"{row['gene']}_M": row["phi_m_pos_or_p(m=0|s)"]
-        for _, row in cbase_stats.iterrows()
-    }
-    missense_gene_to_positive_selection_p = {
-        f"{row['gene']}_M": row["p_phi_m_pos"] for _, row in cbase_stats.iterrows()
-    }
-
-    nonsense_gene_to_positive_selection_phi = {
-        f"{row['gene']}_N": row["phi_k_pos_or_p(k=0|s)"]
-        for _, row in cbase_stats.iterrows()
-    }
-    nonsense_gene_to_positive_selection_p = {
-        f"{row['gene']}_N": row["p_phi_k_pos"] for _, row in cbase_stats.iterrows()
-    }
-
-    gene_to_positive_selection_phi = {
-        **missense_gene_to_positive_selection_phi,
-        **nonsense_gene_to_positive_selection_phi,
-    }
-    gene_to_positive_select_p = {
-        **missense_gene_to_positive_selection_p,
-        **nonsense_gene_to_positive_selection_p,
-    }
-
-    for name, gene in genes.items():
-        if name not in gene_to_positive_selection_phi:
-            msg = f"Gene {name} not found in the CBaSE results file."
-            raise ValueError(
-                msg,
-            )
-        gene.cbase_phi = gene_to_positive_selection_phi[name]
-        gene.cbase_p = gene_to_positive_select_p[name]
-
-    return True
-
-
 def create_single_gene_results(
     genes: list,
     output_path: str,
@@ -176,8 +134,7 @@ def identify_pairwise_interactions(
     cbase_stats: pd.DataFrame | None,
 ) -> None:
     """TODO: Add docstring."""
-    verify_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
-    cnt_df, bmr_dict = load_cnt_mtx_and_bmr_pmfs(cnt_mtx, bmr_pmfs)
+    cohort = MutationCohort.from_files(cnt_mtx, bmr_pmfs)
 
     if k <= 0:
         msg = "k must be a positive integer"
@@ -186,7 +143,7 @@ def identify_pairwise_interactions(
     single_gene_fout = f"{out}/single_gene_results.csv"
     pairwise_interaction_fout = f"{out}/pairwise_interaction_results.csv"
 
-    genes = initialize_gene_objects(cnt_df, bmr_dict)
+    genes = initialize_gene_objects(cohort.counts, cohort.bmr_pmfs)
     estimate_pi_for_each_gene(genes.values(), single_gene_fout)
     _, interactions = initialize_interaction_objects(k, genes.values())
     estimate_taus_for_each_interaction(interactions)
