@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pandas as pd
+
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import draw_all_subtypes_mutation_distribution
 

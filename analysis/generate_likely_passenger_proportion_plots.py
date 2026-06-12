@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.helpers import load_likely_passenger_genes
 from dialect.utils.plotting import (
@@ -57,7 +59,7 @@ def compute_likely_passenger_proportions(
         )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
-        method_to_top_ranked_interaction_table, method_to_num_sig_pairs = (
+        method_to_top_ranked_interaction_table, _method_to_num_sig_pairs = (
             generate_top_ranked_interaction_table(
                 results_df=results_df,
                 num_pairs=num_pairs,
@@ -102,7 +104,7 @@ def compute_likely_passenger_proportions_range(
         )
         likely_passengers = subtype_to_likely_passengers[subtype]
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
-        method_to_top_ranked_interaction_table, method_to_num_sig_pairs = (
+        method_to_top_ranked_interaction_table, _method_to_num_sig_pairs = (
             generate_top_ranked_interaction_table(
                 results_df=results_df,
                 num_pairs=100,
@@ -126,7 +128,6 @@ def compute_likely_passenger_proportions_range(
                 )
                 method_to_subtype_to_proportions[method][subtype][k] = prop
     method_to_subtype_to_auc = {}
-    import numpy as np
 
     for method, subtype_dict in method_to_subtype_to_proportions.items():
         if method not in method_to_subtype_to_auc:

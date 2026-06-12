@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pandas as pd
+
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.plotting import (
     draw_single_me_or_co_interaction_network,
@@ -57,7 +58,7 @@ def main() -> None:
         num_samples = pd.read_csv(cnt_mtx_fn, index_col=0).shape[0]
 
         if args.analysis_type == "ME":
-            top_ranked_me_interactions_by_method, method_to_num_significant_me_pairs = (
+            top_ranked_me_interactions_by_method, _ = (
                 generate_top_ranked_me_interaction_tables(
                     results_df=results_df,
                     num_pairs=num_edges,
@@ -94,7 +95,7 @@ def main() -> None:
                     fout=fout,
                 )
         elif args.analysis_type == "CO":
-            top_ranked_co_interactions_by_method, method_to_num_significant_co_pairs = (
+            top_ranked_co_interactions_by_method, _ = (
                 generate_top_ranked_co_interaction_tables(
                     results_df=results_df,
                     num_pairs=num_edges,

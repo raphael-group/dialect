@@ -1,8 +1,7 @@
 """TODO: Add docstring."""
 
-import os
-
 import pandas as pd
+
 from dialect.utils.argument_parser import build_analysis_argument_parser
 
 
@@ -64,7 +63,7 @@ def main() -> None:
     pancancer_df["Number of Samples"] = pancancer_df["Number of Samples"].astype(int)
     abbrev_df_renamed = abbrev_df.rename(columns={"Study Abbreviation": "Subtype"})
     ref_df = abbrev_df_renamed.merge(pancancer_df, on="Subtype", how="inner")
-    subtypes = sorted(os.listdir(args.results_dir))
+    subtypes = sorted(p.name for p in args.results_dir.iterdir())
     results_list = []
 
     for stype in subtypes:

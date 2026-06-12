@@ -1,9 +1,8 @@
 """TODO: Add docstring."""
 
-import os
-
 import numpy as np
 import pandas as pd
+
 from dialect.utils.argument_parser import build_analysis_argument_parser
 from dialect.utils.postprocessing import (
     generate_top_ranked_co_interaction_tables,
@@ -211,7 +210,7 @@ def main() -> None:
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    subtypes = os.listdir(args.results_dir)
+    subtypes = [p.name for p in args.results_dir.iterdir()]
     for subtype in subtypes:
         subtype_dir = args.results_dir / subtype
         results_fn = subtype_dir / "complete_pairwise_interaction_results.csv"

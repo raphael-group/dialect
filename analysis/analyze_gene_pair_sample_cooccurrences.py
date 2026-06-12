@@ -9,6 +9,8 @@ from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
 from dialect.utils.helpers import initialize_gene_objects, load_cnt_mtx_and_bmr_pmfs
 
+logger = logging.getLogger(__name__)
+
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -46,7 +48,7 @@ def main() -> None:
         gene_a = gene_objects[gene_a_name]
         gene_b = gene_objects[gene_b_name]
         cooccurring_samples = get_cooccurring_samples(gene_a, gene_b)
-        logging.info(
+        logger.info(
             "Gene A: %s\nGene B: %s\nCo-occurring samples: %s",
             gene_a_name,
             gene_b_name,
