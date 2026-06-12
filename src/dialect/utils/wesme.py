@@ -5,18 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 
-current_dir = Path(__file__).parent
-project_root = (current_dir / "../../../").resolve()
-external_dir = project_root / "external"
-sys.path.append(str(external_dir))
-
-from WeSME.WeSME import (
-    compute_pairwise_pvalues,
-    compute_sample_weights,
-    convert_cnt_mtx_to_mut_list,
-    run_weighted_sampling,
-)
-
 
 def run_wesme_analysis(
     cnt_df: pd.DataFrame,
@@ -24,6 +12,16 @@ def run_wesme_analysis(
     interactions: list,
 ) -> pd.DataFrame:
     """TODO: Add docstring."""
+    external_dir = (Path(__file__).parent / "../../../external").resolve()
+    if str(external_dir) not in sys.path:
+        sys.path.append(str(external_dir))
+    from WeSME.WeSME import (
+        compute_pairwise_pvalues,
+        compute_sample_weights,
+        convert_cnt_mtx_to_mut_list,
+        run_weighted_sampling,
+    )
+
     cnt_df = cnt_df.T
     wesme_dout = Path(out) / "WeSME_output"
     wesme_dout.mkdir(parents=True, exist_ok=True)

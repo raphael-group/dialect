@@ -1187,7 +1187,7 @@ abundances = import_two_columns(
 )  # 	Were computed for the set used_genes in create_aux_info.py
 # 	Format: [context_ind, alternate_ind, effect_ind]
 effects_by_gene = import_effects_by_gene(
-    f"{REFERENCE_DIR}/context_alt_effect_by_gene_{BUILD}_{used_pname}.txt.gz",
+    f"{REFERENCE_DIR}/context_alt_effect_by_gene_new_encoding_{BUILD}_{used_pname}.txt.gz",
 )  # 	Were computed for the set used_genes in create_aux_info.py
 # 	effects: [0: "missense", 1: "nonsense", 2: "coding-synon"]
 sys.stderr.write("Derive selection predictions for %i genes.\n" % len(used_genes))

@@ -1,8 +1,14 @@
 """TODO: Add docstring."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pandas as pd
-from discover import DiscoverMatrix, pairwise_discover_test
-from discover.pairwise import PairwiseDiscoverResult
+
+if TYPE_CHECKING:
+    from discover import DiscoverMatrix
+    from discover.pairwise import PairwiseDiscoverResult
 
 
 def create_mutation_matrix_from_cnt_df(
@@ -20,6 +26,8 @@ def run_discover_for_interaction(
     interaction_type: str,
 ) -> PairwiseDiscoverResult:
     """TODO: Add docstring."""
+    from discover import pairwise_discover_test
+
     if interaction_type not in {"me", "co"}:
         msg = "interaction_type must be 'me' or 'co'"
         raise ValueError(msg)
@@ -76,6 +84,8 @@ def run_discover_analysis(
     interactions: list,
 ) -> dict:
     """TODO: Add docstring."""
+    from discover import DiscoverMatrix
+
     mutation_matrix = create_mutation_matrix_from_cnt_df(
         cnt_df,
         top_genes,

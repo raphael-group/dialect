@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import os
+from pathlib import Path
 
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
@@ -17,10 +19,14 @@ from upsetplot import UpSet, from_contents
 # ------------------------------------------------------------------------------------ #
 #                                   MODULE CONSTANTS                                   #
 # ------------------------------------------------------------------------------------ #
-font_path = "/u/ashuaibi/.fonts/cmuserif.ttf"
-font_prop = fm.FontProperties(fname=font_path)
-fm.fontManager.addfont(font_path)
-FONT_FAMILY = font_prop.get_name()
+# Optional custom font (CMU Serif). Fall back to a default serif when the bundled
+# font is absent so the package imports on any machine. Override via DIALECT_FONT_PATH.
+font_path = os.environ.get("DIALECT_FONT_PATH", "/u/ashuaibi/.fonts/cmuserif.ttf")
+if Path(font_path).is_file():
+    fm.fontManager.addfont(font_path)
+    FONT_FAMILY = fm.FontProperties(fname=font_path).get_name()
+else:
+    FONT_FAMILY = "serif"
 plt.rcParams["font.family"] = FONT_FAMILY
 FONT_SCALE = 1.5
 

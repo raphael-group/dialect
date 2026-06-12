@@ -41,45 +41,48 @@ def generate_bmr_using_cbase(
     cbase_input_fn = convert_maf_to_cbase_input_file(maf, out)
 
     cbase_output_dir = Path(out) / "CBaSE_output"
-    cbase_output_dir.mkdir(exist_ok=True)
+    cbase_output_dir.mkdir(parents=True, exist_ok=True)
 
-    cbase_params_script = Path("external") / "CBaSE" / "CBaSE_params_v1.2.py"
-    cbase_params_script = cbase_params_script.resolve()
+    # Anchor the vendored CBaSE to the repo root (parents[3] of this file) so the
+    # invocation does not depend on the current working directory.
+    cbase_dir = Path(__file__).resolve().parents[3] / "external" / "CBaSE"
+    cbase_params_script = cbase_dir / "CBaSE_params_v1.2.py"
+    cbase_qvals_script = cbase_dir / "CBaSE_qvals_v1.2.py"
+    cbase_auxiliary_dir = cbase_dir / "auxiliary"
 
-    cbase_qvals_script = Path("external") / "CBaSE" / "CBaSE_qvals_v1.2.py"
-    cbase_qvals_script = cbase_qvals_script.resolve()
-
-    cbase_auxiliary_dir = Path("external") / "CBaSE" / "auxiliary"
-    cbase_auxiliary_dir = cbase_auxiliary_dir.resolve()
-
-    try:
-        cbase_params_cmd = [
-            "python",
-            str(cbase_params_script),
-            str(cbase_input_fn),
-            "1",
-            str(reference),
-            "3",
-            "0",
-            str(out),
-            str(cbase_auxiliary_dir),
-            str(cbase_output_dir),
-        ]
-        subprocess.run(cbase_params_cmd, check=True)
-    except subprocess.CalledProcessError:
-        sys.exit(1)
-
-    try:
-        cbase_qvals_cmd = [
-            "python",
-            cbase_qvals_script,
-            out,
-            cbase_output_dir,
-            threshold,
-        ]
-        subprocess.run(cbase_qvals_cmd, check=True)
-    except subprocess.CalledProcessError:
-        sys.exit(1)
+    # Use the interpreter running DIALECT (which has numpy/scipy) rather than a
+    # bare "python" resolved from PATH.
+    cbase_params_cmd = [
+        sys.executable,
+        str(cbase_params_script),
+        str(cbase_input_fn),
+        "1",
+        str(reference),
+        "3",
+        "0",
+        str(out),
+        str(cbase_auxiliary_dir),
+        str(cbase_output_dir),
+    ]
+    cbase_qvals_cmd = [
+        sys.executable,
+        str(cbase_qvals_script),
+        str(out),
+        str(cbase_output_dir),
+        str(threshold),
+    ]
+    for label, cmd in (
+        ("CBaSE params", cbase_params_cmd),
+        ("CBaSE qvals", cbase_qvals_cmd),
+    ):
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as err:
+            msg = (
+                f"{label} step failed (exit {err.returncode}).\n"
+                f"Command: {' '.join(cmd)}"
+            )
+            raise RuntimeError(msg) from err
 
 
 def generate_counts_from_cbase_output(out: str) -> None:
