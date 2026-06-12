@@ -29,6 +29,8 @@ ALLOWED_INTERNAL_PREFIXES = {
     # baselines wrap external tools / reference stats; they consume cohort data
     # and model value objects, but never bmr/stats/viz/api/cli.
     "baselines": {"dialect.baselines", "dialect.data", "dialect.models"},
+    # stats is pure statistics over result frames + models; never bmr/baselines/viz.
+    "stats": {"dialect.stats", "dialect.data", "dialect.models"},
 }
 
 
