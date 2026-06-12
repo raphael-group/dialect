@@ -1,6 +1,94 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dialect"
+dynamic = ["version"]
+description = "An EM latent-variable model for mutual exclusivity and co-occurrence between cancer driver mutations, accounting for the background mutation rate."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Ahmed Shuaibi", email = "ashuaibi@princeton.edu" }]
+keywords = [
+    "cancer-genomics",
+    "driver-mutations",
+    "mutual-exclusivity",
+    "co-occurrence",
+    "background-mutation-rate",
+    "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "networkx",
+    "scikit-learn",
+    "statsmodels",
+    "matplotlib",
+    "upsetplot",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-regressions",
+    "hypothesis",
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
+docs = [
+    "sphinx",
+    "furo",
+    "myst-nb",
+    "sphinx-autodoc-typehints",
+    "sphinxcontrib-bibtex",
+    "sphinx-copybutton",
+]
+
+[project.scripts]
+dialect = "dialect.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/raphael-group/dialect"
+Repository = "https://github.com/raphael-group/dialect"
+Preprint = "https://www.biorxiv.org/content/10.1101/2024.04.24.590995v1"
+
+# --------------------------------------------------------------------------- #
+#                              BUILD (hatchling)                               #
+# --------------------------------------------------------------------------- #
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/dialect/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dialect"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/dialect", "tests", "README.md", "LICENSE"]
+
+# --------------------------------------------------------------------------- #
+#                                   TOOLING                                    #
+# --------------------------------------------------------------------------- #
 [tool.ruff]
 line-length = 88
-exclude = ["external/"]
+exclude = ["external/", "src/dialect/_version.py"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -8,6 +96,7 @@ ignore = ["D203", "D213", "FIX002"]
 
 [tool.ruff.lint.per-file-ignores]
 "docs/source/conf.py" = ["INP001", "D100", "A001"]
+"tests/*" = ["S101", "INP001", "D100", "D103", "ANN", "PLR2004"]
 "src/dialect/utils/simulate.py" = ["PLR0913"]
 "src/dialect/utils/plotting.py" = ["PLR0913", "FBT001"]
 "src/dialect/utils/postprocessing.py" = ["FBT001", "PLR0913"]
@@ -17,7 +106,10 @@ ignore = ["D203", "D213", "FIX002"]
 "src/dialect/utils/identify.py" = ["FBT001"]
 "src/dialect/utils/argument_parser.py" = ["FBT001", "FBT002", "PLR0913", "C901"]
 "src/dialect/utils/compare.py" = ["FBT001"]
-"setup.py" = ["D100"]
 
-[lint.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

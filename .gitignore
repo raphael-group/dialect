@@ -10,6 +10,10 @@ docs/source/*.DS_Store
 *.pyc
 *__pycache__/
 *.egg-info/
+src/dialect/_version.py
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Logs
 *.log
@@ -30,3 +34,11 @@ figures/
 tables/
 external/CBaSE/auxiliary
 external/DISCOVER
+external/DIGDriver/
+external/MutSig2CV/
+external/MutSig2CV.tar.gz
+external/*.tar.gz
+external/*.zip
+
+# Research Artifacts (paper, dissertation, references) — NEVER commit
+research/
