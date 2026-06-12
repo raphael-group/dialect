@@ -27,11 +27,12 @@ dist/
 .vscode/
 *.code-workspace
 
-# Data, Methods, & Output
-data/
-output/
-figures/
-tables/
+# Data, Methods, & Output (top-level artifact dirs only; anchored so they do not
+# shadow the src/dialect/data package).
+/data/
+/output/
+/figures/
+/tables/
 external/CBaSE/auxiliary
 external/DISCOVER
 external/DIGDriver/

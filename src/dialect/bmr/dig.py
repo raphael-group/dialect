@@ -1,9 +1,9 @@
 """DIG (DIGDriver) background-mutation-rate provider.
 
-Promotes :func:`dialect.utils.dig_bmr.dig_results_to_bmr_pmfs` to the
+Promotes :func:`dialect.bmr._dig_pmf.dig_results_to_bmr_pmfs` to the
 :class:`~dialect.bmr.base.BMRProvider` contract. DIG's gene model emits per-gene
 negative-binomial parameters; we convert them to DIALECT's per-sample PMFs (see
-``dialect.utils.dig_bmr`` for the Gamma-Poisson derivation).
+``dialect.bmr._dig_pmf`` for the Gamma-Poisson derivation).
 
 The provider is configured with a pre-computed DIG ``geneDriver`` results file
 (DIG runs in its own conda env). Running DIG end-to-end from a raw MAF additionally
@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from dialect.bmr._dig_pmf import dig_results_to_bmr_pmfs
 from dialect.bmr.base import BMRResult
-from dialect.utils.dig_bmr import dig_results_to_bmr_pmfs
-from dialect.utils.helpers import check_file_exists, load_bmr_pmfs
+from dialect.data.io import check_file_exists, load_bmr_pmfs
 
 
 class DIGProvider:

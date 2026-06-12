@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from dialect.bmr._cbase_run import generate_bmr_and_counts
 from dialect.bmr.base import BMRResult
-from dialect.utils.generate import generate_bmr_and_counts
-from dialect.utils.helpers import load_bmr_pmfs, read_cbase_results_file
+from dialect.data.io import load_bmr_pmfs, read_cbase_results_file
 
 
 class CBaSEProvider:
