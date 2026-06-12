@@ -51,7 +51,7 @@ def evaluate(cohort: str, n_samples: int, dig_results: str, dialect: str) -> lis
     out = Path("output") / cohort
     counts = out / "count_matrix.csv"
     if not (out / "bmr_pmfs.csv").exists():
-        print(f"{cohort}: no CBaSE output ({out}/bmr_pmfs.csv); run `dialect generate` first.")
+        print(f"{cohort}: no CBaSE bmr_pmfs.csv in {out}; run dialect generate first.")
         return []
 
     # DIG background: per-sample PMFs with support up to the cohort's max observed
@@ -83,6 +83,7 @@ def evaluate(cohort: str, n_samples: int, dig_results: str, dialect: str) -> lis
 
 
 def main() -> None:
+    """Run the BMR-sensitivity benchmark from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohorts", nargs="+", required=True)
     parser.add_argument("--dig-results", required=True)
@@ -107,7 +108,12 @@ def main() -> None:
     if not rows:
         sys.exit("No results; check that `dialect generate` was run per cohort.")
     df = pd.DataFrame(rows)
-    table = df.pivot(index="cohort", columns="bmr", values=["TTN_pi", "long_passengers_top20"])
+    table = df.pivot_table(
+        index="cohort",
+        columns="bmr",
+        values=["TTN_pi", "long_passengers_top20"],
+        aggfunc="first",
+    )
     print(table.reindex(args.cohorts).to_string())
     df.to_csv("output/bmr_sensitivity_summary.csv", index=False)
     print("\nsaved output/bmr_sensitivity_summary.csv")
