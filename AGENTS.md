@@ -13,20 +13,33 @@ likelihood ratio. The **background mutation rate (BMR)** is the load-bearing inp
 
 ## Repo map
 
+The re-layout (`research/notes/09`) is migrating `utils/` into a one-way layered DAG:
+`cli → api → (models | stats) → (bmr | baselines) → data`. Done so far: the `data/` base
+layer and the de-inverted `bmr/` provider package, plus the public `api.py` seam.
+
+- `src/dialect/api.py` — **the public seam.** `estimate_bmr(...) -> BMRResult` and
+  `identify_interactions(...) -> IdentifyResult`; both re-exported from the package root
+  (`from dialect import estimate_bmr, identify_interactions`). The CLI and any agent/web
+  backend call into this, not the internals.
 - `src/dialect/models/` — the EM core (the science). `gene.py` = single-gene `π` EM;
   `interaction.py` = pairwise `τ` EM + `ρ`/LRT/Wald. Pure math; treat with care.
-- `src/dialect/utils/` — pipeline glue (being re-laid-out into `data/ bmr/ baselines/ stats/
-  viz/ cli/` — see `research/notes/08_repo_reinvention_blueprint.md`). Notable:
-  - `generate.py` — MAF → CBaSE → `bmr_pmfs.csv` + count matrix.
-  - `identify.py` — runs the EM, writes `single_gene_results.csv` / `pairwise_interaction_results.csv`.
-  - `dig_bmr.py` — DIG → DIALECT BMR adapter (prototype for the `BMRProvider` abstraction).
-  - `compare.py` — benchmark vs Fisher/DISCOVER/MEGSA/WeSME (each method isolated; missing deps skip).
-  - `helpers.py` — `load_bmr_pmfs`, `initialize_gene_objects`, etc.
+- `src/dialect/bmr/` — the pluggable `BMRProvider` abstraction (de-inverted: imports only
+  `data` + `bmr`). `base.py` = `BMRProvider` Protocol + `BMRResult`; `registry.py` =
+  name→provider (`get_provider`/`available`); `cbase.py`/`dig.py` = providers;
+  `_cbase_run.py` = vendored-CBaSE subprocess + count/PMF extraction; `_dig_pmf.py` =
+  DIG NB → per-sample PMF math.
+- `src/dialect/data/` — the dependency-free **base layer**. `io.py` = the data contract
+  (`load_bmr_pmfs`, `read_cbase_results_file`, count-matrix I/O). Imports nothing internal.
+- `src/dialect/utils/` — legacy pipeline glue, being migrated. `identify.py` runs the EM;
+  `compare.py` benchmarks vs Fisher/DISCOVER/MEGSA/WeSME. **`generate.py` and `dig_bmr.py`
+  are now thin re-export shims** → the real code lives in `bmr/`. `helpers.py` keeps
+  `initialize_gene_objects`/`initialize_interaction_objects` and re-exports I/O from `data.io`.
 - `external/` — vendored third-party tools (CBaSE, MEGSA, WeSME, DIGDriver). Invoked via wrappers,
   NOT shipped as an importable package. `external/CBaSE/auxiliary/` is gitignored (583 MB).
-- `analysis/` — paper figure/table scripts. `tests/` — pytest. `docs/` — Sphinx.
+- `analysis/` — paper figure/table + `bmr_sensitivity.py` (CBaSE vs DIG). `tests/` — pytest
+  (incl. `test_architecture.py`, which fails CI if the layering regresses). `docs/` — Sphinx.
 - `research/` — **gitignored**; paper, dissertation, reviewer notes, and Claude context dossiers
-  (`research/notes/00`–`08`). Never commit.
+  (`research/notes/00`–`10`). Never commit.
 
 ## The data contract
 
@@ -40,10 +53,18 @@ likelihood ratio. The **background mutation rate (BMR)** is the load-bearing inp
 - Dev env is the conda env **`dialect`** (Python 3.12): `/opt/anaconda3/envs/dialect/bin/python`.
   (Canonical reproducible env via **pixi** is planned — see blueprint.)
 - Install: `pip install -e ".[dev]"`  ·  Tests: `pytest`  ·  Lint: `ruff check .`
-- Run on the bundled CHOL test cohort:
+- Run on the bundled CHOL test cohort, via the CLI:
   ```bash
   dialect generate -m data/mafs/CHOL.maf -o output/CHOL          # needs external/CBaSE/auxiliary
   dialect identify -c output/CHOL/count_matrix.csv -b output/CHOL/bmr_pmfs.csv -o output/CHOL -k 100
+  ```
+  …or as a library (the same code path the CLI uses):
+  ```python
+  from dialect import estimate_bmr, identify_interactions
+  estimate_bmr("data/mafs/CHOL.maf", "output/CHOL", provider="cbase")
+  res = identify_interactions("output/CHOL/count_matrix.csv",
+                              "output/CHOL/bmr_pmfs.csv", "output/CHOL", top_k=100)
+  res.pairwise.sort_values("Rho").head()   # strongest mutual exclusivity
   ```
 
 ## Invariants & gotchas
@@ -59,5 +80,7 @@ likelihood ratio. The **background mutation rate (BMR)** is the load-bearing inp
 
 ## Style
 
-src-layout, type hints, NumPy-style docstrings, `ruff` (`select = ["ALL"]`). Keep CLI handlers thin
-(logic lives in the API/core). Prefer pure functions in `models/`. Add a test with every change.
+src-layout, type hints, Google-style docstrings, `ruff` (`select = ["ALL"]`). Keep CLI handlers
+thin — logic lives in `api.py` and the layers below it. Respect the one-way DAG (`test_architecture.py`
+enforces `bmr → data`; extend its `ALLOWED_INTERNAL_PREFIXES` as each layer is cleaned). Prefer pure
+functions in `models/`. Add a test with every change; verify `ruff check` is clean **before** committing.
