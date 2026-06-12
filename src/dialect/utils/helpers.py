@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from itertools import combinations
 from pathlib import Path
 
@@ -46,10 +47,35 @@ def check_file_exists(fn: str) -> None:
 
 
 def load_bmr_pmfs(bmr_pmfs: str) -> dict:
-    """TODO: Add docstring."""
+    """Load per-gene background PMFs, stripping NaN padding and renormalizing.
+
+    Each row is expected to be a proper PMF summing to 1. Aggressive tail
+    truncation (e.g. a coarse CBaSE THRESHOLD) can leave a row summing to < 1;
+    such rows are renormalized and a warning is logged, because every downstream
+    likelihood/EM step assumes a normalized P(B).
+    """
     bmr_df = pd.read_csv(bmr_pmfs, index_col=0)
     bmr_dict = bmr_df.T.to_dict(orient="list")
-    return {key: [x for x in bmr_dict[key] if not np.isnan(x)] for key in bmr_dict}
+    pmfs = {}
+    n_renormalized = 0
+    for key, raw in bmr_dict.items():
+        pmf = [x for x in raw if not np.isnan(x)]
+        total = sum(pmf)
+        if total <= 0:
+            msg = f"BMR PMF for {key} sums to {total}; cannot normalize."
+            raise ValueError(msg)
+        if abs(total - 1.0) > 1e-6:
+            pmf = [x / total for x in pmf]
+            n_renormalized += 1
+        pmfs[key] = pmf
+    if n_renormalized:
+        logging.warning(
+            "Renormalized %d/%d BMR PMFs that did not sum to 1 "
+            "(likely tail truncation); check the BMR threshold.",
+            n_renormalized,
+            len(bmr_dict),
+        )
+    return pmfs
 
 
 def load_cnt_mtx_and_bmr_pmfs(cnt_mtx: str, bmr_pmfs: str) -> tuple:

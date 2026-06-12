@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import fisher_exact
@@ -224,7 +226,7 @@ class Interaction:
         def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
-            return pmf.get(c)
+            return pmf.get(c, min_val)
 
         # TODO @ashuaibi7: move function to helper module
         # https://linear.app/princeton-phd-research/issue/DEV-77
@@ -487,6 +489,23 @@ class Interaction:
             tau_init = [0.25, 0.25, 0.25, 0.25]
 
         self.verify_bmr_pmf_and_counts_exist()
+
+        # Samples with no background support for either gene yield 0/0 (NaN)
+        # responsibilities that get floored below, effectively excluding them --
+        # typically hypermutators under a cohort-level BMR. Surface it rather than
+        # dropping silently (see the hypermutator-handling workstream).
+        init_total = np.asarray(self.compute_total_probability(*tau_init))
+        n_degenerate = int(np.sum(init_total == 0))
+        n_samples = len(self.gene_a.counts)
+        if n_degenerate and n_degenerate / n_samples > 0.05:
+            logging.warning(
+                "Interaction %s: %d/%d samples have no background support and are "
+                "effectively excluded from EM (likely hypermutators); tau may be "
+                "biased.",
+                self.name,
+                n_degenerate,
+                n_samples,
+            )
 
         tau_00, tau_01, tau_10, tau_11 = tau_init
         for _ in range(max_iter):

@@ -1,6 +1,7 @@
 """TODO: Add docstring."""
 
 import itertools
+import logging
 
 import numpy as np
 from scipy.optimize import minimize
@@ -38,8 +39,8 @@ class Gene:
     #                                 UTILITY FUNCTIONS                                #
     # -------------------------------------------------------------------------------- #
     def calculate_expected_mutations(self) -> float:
-        """TODO: Add docstring."""
-        return sum(k * prob for k, prob in enumerate(self.bmr_pmf))
+        """Return E[B] = sum_k k * P(B=k) over the background PMF."""
+        return sum(count * prob for count, prob in self.bmr_pmf.items())
 
     # -------------------------------------------------------------------------------- #
     #                            DATA VALIDATION AND LOGGING                           #
@@ -105,7 +106,7 @@ class Gene:
         def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
             if c > max(pmf.keys()):
                 return min_val
-            return pmf.get(c)
+            return pmf.get(c, min_val)
 
         # TODO @ashuaibi7: move function to helper module
         # https://linear.app/princeton-phd-research/issue/DEV-77
@@ -231,6 +232,19 @@ class Gene:
         nonzero_probability_counts = [
             c for c in self.counts if c in self.bmr_pmf and self.bmr_pmf[c] > 0
         ]
+        # Samples whose observed count has no background support (out-of-range or
+        # zero probability) are excluded to avoid 0/0 responsibilities -- this is
+        # typically driven by hypermutators under a cohort-level BMR. Surface it
+        # instead of dropping silently (see the hypermutator-handling workstream).
+        n_excluded = len(self.counts) - len(nonzero_probability_counts)
+        if n_excluded and n_excluded / len(self.counts) > 0.05:
+            logging.warning(
+                "Gene %s: %d/%d samples excluded from EM (no background support; "
+                "likely hypermutators); pi may be biased.",
+                self.name,
+                n_excluded,
+                len(self.counts),
+            )
 
         pi = pi_init
         for _it in range(max_iter):
