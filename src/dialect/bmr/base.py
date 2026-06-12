@@ -45,5 +45,5 @@ class BMRProvider(Protocol):
         *,
         reference: str = "hg19",
     ) -> BMRResult:
-        """Estimate the background model for ``maf_path``, writing artifacts to ``out_dir``."""
+        """Estimate the cohort background model from ``maf_path`` into ``out_dir``."""
         ...

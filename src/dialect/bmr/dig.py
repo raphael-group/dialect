@@ -37,7 +37,7 @@ class DIGProvider:
         maf_path: str,
         out_dir: str,
         *,
-        reference: str = "hg19",  # noqa: ARG002 - baked into DIG's pretrained model
+        reference: str = "hg19",  # noqa: ARG002 (baked into DIG model)
     ) -> BMRResult:
         """Convert the configured DIG results into a :class:`BMRResult`.
 

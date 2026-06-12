@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from dialect.bmr.base import BMRResult
+from dialect.utils.generate import generate_bmr_and_counts
 from dialect.utils.helpers import load_bmr_pmfs, read_cbase_results_file
 
 
@@ -33,13 +34,11 @@ class CBaSEProvider:
         reference: str = "hg19",
     ) -> BMRResult:
         """Run CBaSE on ``maf_path`` and return the background model."""
-        from dialect.utils.generate import generate_bmr_and_counts
-
         generate_bmr_and_counts(maf_path, out_dir, reference, self.threshold)
         return self.load(out_dir)
 
     def load(self, out_dir: str) -> BMRResult:
-        """Build a :class:`BMRResult` from an existing CBaSE/``generate`` output dir."""
+        """Build a :class:`BMRResult` from an existing ``generate`` output dir."""
         out = Path(out_dir)
         pmf_arrays = load_bmr_pmfs(str(out / "bmr_pmfs.csv"))
         pmfs = {gene: dict(enumerate(arr)) for gene, arr in pmf_arrays.items()}
