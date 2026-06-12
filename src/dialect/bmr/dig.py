@@ -28,7 +28,7 @@ class DIGProvider:
     name = "dig"
 
     def __init__(self, dig_results: str, n_samples: int) -> None:
-        """`dig_results` is a ``DigDriver.py geneDriver`` ``*.results.txt`` for the cohort."""
+        """``dig_results`` is a DIG geneDriver ``*.results.txt`` file."""
         self.dig_results = dig_results
         self.n_samples = n_samples
 

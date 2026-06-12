@@ -44,7 +44,9 @@ class CBaSEProvider:
         pmfs = {gene: dict(enumerate(arr)) for gene, arr in pmf_arrays.items()}
         counts = pd.read_csv(out / "count_matrix.csv", index_col=0)
         q_values = out / "CBaSE_output" / "q_values.txt"
-        selection = read_cbase_results_file(str(q_values)) if q_values.exists() else None
+        selection = (
+            read_cbase_results_file(str(q_values)) if q_values.exists() else None
+        )
         return BMRResult(
             pmfs=pmfs,
             counts=counts,
