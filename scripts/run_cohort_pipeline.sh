@@ -39,17 +39,7 @@ if [ ! -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ] && [ "$N" -gt 0 ]; then
     --dig-results "$DIG_RESULTS" --dig-samples "$N" -r hg19 || log "STAGE-FAIL dig"
 else log "skip dig"; fi
 
-# 3. MutSig2CV (Docker) -----------------------------------------------------
-if [ ! -f "${ROOT}/${C}_mutsig/results.mat" ]; then
-  log "MutSig2CV (Docker, emulated)"
-  mkdir -p "${ROOT}/${C}_mutsig"
-  docker run --rm -v "${PWD}:/work" -w /work/external/MutSig2CV/mutsig2cv \
-    -e LD_LIBRARY_PATH="$LDP" -e MCR_CACHE_ROOT="/tmp/mcr_${C}" \
-    flywheel/matlab-mcr:v81 \
-    ./MutSig2CV "/work/${MAF}" "/work/${ROOT}/${C}_mutsig" || log "STAGE-FAIL mutsig"
-else log "skip mutsig"; fi
-
-# 4. DIALECT identify (cbase, dig, mutsig) ----------------------------------
+# 3. DIALECT identify -- CBaSE + DIG (fast; run before the slow MutSig) ------
 CB_Q="${ROOT}/${C}/CBaSE_output/q_values.txt"
 if [ ! -f "${ROOT}/${C}/id_cbase/pairwise_interaction_results.csv" ] \
    && [ -f "${ROOT}/${C}/bmr_pmfs.csv" ]; then
@@ -66,10 +56,24 @@ if [ ! -f "${ROOT}/${C}/id_dig/pairwise_interaction_results.csv" ] \
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.dig.csv" \
     -o "${ROOT}/${C}/id_dig" -k 100 || log "STAGE-FAIL id_dig"
 fi
-if [ ! -f "${ROOT}/${C}/id_mutsig/pairwise_interaction_results.csv" ] \
-   && [ -f "${ROOT}/${C}_mutsig/results.mat" ]; then
-  log "identify mutsig (per-sample extractor)"
-  "$PY" -m analysis.mutsig_persample_co --cohort "$C" --results-root "$ROOT" -k 100 \
-    || log "STAGE-FAIL id_mutsig"
+
+# 4. MutSig2CV (Docker, slow) + its identify -- skipped when SKIP_MUTSIG set --
+if [ -n "${SKIP_MUTSIG:-}" ]; then
+  log "skip mutsig (SKIP_MUTSIG set)"
+else
+  if [ ! -f "${ROOT}/${C}_mutsig/results.mat" ]; then
+    log "MutSig2CV (Docker, emulated)"
+    mkdir -p "${ROOT}/${C}_mutsig"
+    docker run --rm -v "${PWD}:/work" -w /work/external/MutSig2CV/mutsig2cv \
+      -e LD_LIBRARY_PATH="$LDP" -e MCR_CACHE_ROOT="/tmp/mcr_${C}" \
+      flywheel/matlab-mcr:v81 \
+      ./MutSig2CV "/work/${MAF}" "/work/${ROOT}/${C}_mutsig" || log "STAGE-FAIL mutsig"
+  else log "skip mutsig (done)"; fi
+  if [ ! -f "${ROOT}/${C}/id_mutsig/pairwise_interaction_results.csv" ] \
+     && [ -f "${ROOT}/${C}_mutsig/results.mat" ]; then
+    log "identify mutsig (per-sample extractor)"
+    "$PY" -m analysis.mutsig_persample_co --cohort "$C" --results-root "$ROOT" -k 100 \
+      || log "STAGE-FAIL id_mutsig"
+  fi
 fi
 log "cohort pipeline DONE"
