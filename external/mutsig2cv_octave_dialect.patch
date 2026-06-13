@@ -1,0 +1,223 @@
+diff --git a/run_mutsig_persample.m b/run_mutsig_persample.m
+new file mode 100644
+index 0000000..49b1d48
+--- /dev/null
++++ b/run_mutsig_persample.m
+@@ -0,0 +1,26 @@
++function run_mutsig_persample(maf, outdir)
++% Run the (DIALECT-patched) MutSig2CV v3.11 source on a MAF, dumping the
++% per-(gene,patient,effect) expected background to <outdir>/persample_bmr.mat.
++% Uses the reference files vendored with the compiled bundle.
++%
++%   matlab -batch "run_mutsig_persample('/abs/cohort.maf','/abs/outdir')"
++
++here   = fileparts(mfilename('fullpath'));        % .../external/MutSig2CV_src
++repo   = fileparts(fileparts(here));              % repo root
++refdir = fullfile(repo, 'external', 'MutSig2CV', 'mutsig2cv', 'reference');
++
++addpath(genpath(fullfile(here, 'src')));
++javaaddpath(fullfile(refdir, 'FixedWidthBinary.jar'));
++if exist('OCTAVE_VERSION', 'builtin')
++  pkg load statistics    % binofit, binopdf, hygepdf, ... used throughout MutSig
++end
++
++% the source's reference paths default to 'reference/...', resolved from the
++% compiled bundle dir, so run with that as the working directory.
++oldcd = cd(fullfile(repo, 'external', 'MutSig2CV', 'mutsig2cv'));
++cleanupObj = onCleanup(@() cd(oldcd)); %#ok<NASGU>
++
++if ~exist(outdir, 'dir'), mkdir(outdir); end
++MutSig2CV(maf, outdir);   % 2-arg: leave P unset so the wrapper uses its defaults
++fprintf('DIALECT: wrote %s/persample_bmr.mat\n', outdir);
++end
+diff --git a/src/MutSig_2CV_v3_11_core.m b/src/MutSig_2CV_v3_11_core.m
+index b4b4433..8fc8c94 100755
+--- a/src/MutSig_2CV_v3_11_core.m
++++ b/src/MutSig_2CV_v3_11_core.m
+@@ -23,8 +23,8 @@ demand_file(covariates_file);
+ demand_file(conservation_fwb_file);
+ demand_file(FixedWidthBinary_jar_file);
+ 
+-% add jar to java classpath
+-javaclasspath(FixedWidthBinary_jar_file);
++% add jar to java classpath (javaaddpath works in both MATLAB and Octave)
++javaaddpath(FixedWidthBinary_jar_file);
+ 
+ % ensure output directory is ok
+ ede(output_dir);
+@@ -60,7 +60,7 @@ if P.permutations_min_effect_size<1, error('permutations_min_effect_size must be
+ P = impose_default_value(P,'max_coverage_bins',10);
+ P = impose_default_value(P,'clustering_metric',204);
+ P = impose_default_value(P,'randseed',6789);
+-P = impose_default_value(P,'skip_permutations',false);
++P = impose_default_value(P,'skip_permutations',true);  % [DIALECT] persample_lambda is computed pre-permutation; skip for speed
+ P = impose_default_value(P,'maxperm',1e5); %to speedup initial screens; need to reset to 1e6 later.
+ P = impose_default_value(P,'theta',1);
+ P = impose_default_value(P,'keyboard_before_begin',false);
+@@ -81,13 +81,13 @@ M=[];
+ 
+ % open FWB tracks
+ M.FWB = [];
+-M.FWB.conservation = org.broadinstitute.cga.tools.seq.FixedWidthBinary(conservation_fwb_file);
++M.FWB.conservation = javaObject('org.broadinstitute.cga.tools.seq.FixedWidthBinary', conservation_fwb_file);
+ M.FWB.conservation.setNullVal(200);
+-M.FWB.context_and_effect = org.broadinstitute.cga.tools.seq.FixedWidthBinary(context_and_effect_fwb_file);
++M.FWB.context_and_effect = javaObject('org.broadinstitute.cga.tools.seq.FixedWidthBinary', context_and_effect_fwb_file);
+ M.context_and_effect = load_struct(context_and_effect_categs_file);
+ M.context_and_effect.context65 = map_categories_to_65(context_and_effect_categs_file);
+ if ~strcmpi(basewise_coverage_fwb_file,'IMPUTE_FULL_COVERAGE')
+-  M.FWB.basewise_coverage = org.broadinstitute.cga.tools.seq.FixedWidthBinary(basewise_coverage_fwb_file);
++  M.FWB.basewise_coverage = javaObject('org.broadinstitute.cga.tools.seq.FixedWidthBinary', basewise_coverage_fwb_file);
+   M.FWB.basewise_coverage.setNullVal(0);
+ end
+ 
+@@ -195,7 +195,7 @@ end
+ 
+ % remove duplicate patients
+ fprintf('Scanning for duplicate patients...\n');
+-X = new_find_duplicate_samples(M.mut);
++X = []; X.drop = {};   % [DIALECT/Octave] skip MEX count_overlaps_fast2 (cohorts are pre-deduplicated)
+ if ~isempty(X.drop)
+   fprintf('Removing the following %d duplicate patients:\n',length(X.drop));
+   disp(X.drop);
+@@ -606,6 +606,9 @@ fprintf('now       eta                # gene        nmut   nperm  CV          CL
+ 
+ if P.keyboard_before_begin, keyboard; end
+ 
++% [DIALECT] per-(gene,patient,effect) expected background count (d=1 missense, d=2 nonsense)
++persample_lambda = zeros(M.ng, M.np, 2, 'single');
++
+ for g=1:M.ng
+  gene_status_reported=false;
+  pCVmax = 1; pclust=1; pcons=1; nperm=0; nm=0;
+@@ -813,6 +816,10 @@ for g=1:M.ng
+     p = my_hygepdf(0,N_total,n_total,N_signal);  % (2D vectorization was being screwed up by all the error checking in hygepdf.m)
+     P0(:,d) = prod(p,2);
+     has_mutation(:,d) = sum(n_signal,2)>0;
++    if d<=2  % [DIALECT] expected bg count = sum_c hypergeometric mean (sample- AND context-specific)
++      Nt_safe = N_total; Nt_safe(Nt_safe<=0) = inf;
++      persample_lambda(g,:,d) = single(sum(n_total .* N_signal ./ Nt_safe, 2))';
++    end
+   end
+   P0(isnan(P0))=1;
+   P0(P0>1)=1;
+@@ -1107,6 +1114,24 @@ fprintf('%d genes with q<=0.1\n',sum(M.gene.q<=0.1));
+ 
+ fprintf('Saving results... ');
+ 
++% [DIALECT] per-(gene,patient,effect) expected background -> robust raw dump for Python.
++% lambda: single, ng x np x 2 (page 1 = missense, page 2 = nonsense), column-major order.
++fid = fopen([output_dir '/persample_lambda.f32'], 'w');
++fwrite(fid, single(persample_lambda), 'single');
++fclose(fid);
++fid = fopen([output_dir '/persample_meta.txt'], 'w');
++fprintf(fid, 'ng\t%d\nnp\t%d\nneff\t%d\n', ...
++        size(persample_lambda,1), size(persample_lambda,2), size(persample_lambda,3));
++fclose(fid);
++fid = fopen([output_dir '/persample_genes.txt'], 'w');
++for ii = 1:numel(M.gene.name), fprintf(fid, '%s\n', M.gene.name{ii}); end
++fclose(fid);
++fid = fopen([output_dir '/persample_patients.txt'], 'w');
++for ii = 1:numel(M.pat.name), fprintf(fid, '%s\n', M.pat.name{ii}); end
++fclose(fid);
++fprintf('[DIALECT] wrote persample_lambda.f32 %dx%dx%d\n', ...
++        size(persample_lambda,1), size(persample_lambda,2), size(persample_lambda,3));
++
+ % save categories file
+ save_struct(M.categ,[output_dir '/mutcategs.txt']);
+ 
+diff --git a/src/fields.m b/src/fields.m
+new file mode 100644
+index 0000000..90ffbf7
+--- /dev/null
++++ b/src/fields.m
+@@ -0,0 +1,5 @@
++function f = fields(s)
++% Octave shadow of MATLAB's `fields` (a synonym for fieldnames), used throughout
++% the MutSig source. Octave only provides `fieldnames`.
++f = fieldnames(s);
++end
+diff --git a/src/genvarname.m b/src/genvarname.m
+index 63e93ee..522bbdb 100644
+--- a/src/genvarname.m
++++ b/src/genvarname.m
+@@ -90,14 +90,14 @@ for k = 1:numel(varnameCell)
+             varname = 'x';
+         end
+         % Replace non-word character with its HEXADECIMAL equivalent
+-        illegalChars = unique(varname(regexp(varname,'[^A-Za-z_0-9]')));
++        illegalChars = char(unique(double(varname(regexp(varname,'[^A-Za-z_0-9]')))));  % Octave: unique on char codes
+         for illegalChar=illegalChars
+-            if illegalChar <= intmax('uint8')
++            if double(illegalChar) <= 255
+                 width = 2;
+             else
+                 width = 4;
+             end
+-            replace = ['0x' dec2hex(illegalChar,width)];
++            replace = ['0x' dec2hex(double(illegalChar),width)];
+             varname = strrep(varname, illegalChar, replace);
+         end
+ 
+diff --git a/src/hist2d_fast.m b/src/hist2d_fast.m
+new file mode 100644
+index 0000000..51f768a
+--- /dev/null
++++ b/src/hist2d_fast.m
+@@ -0,0 +1,9 @@
++function h = hist2d_fast(x, y, xlo, xhi, ylo, yhi)
++% Octave fallback for MutSig's hist2d_fast MEX: 2D histogram of integer (x,y)
++% pairs into an (xhi-xlo+1) x (yhi-ylo+1) count matrix. Exact via accumarray.
++x = round(x(:));
++y = round(y(:));
++keep = x >= xlo & x <= xhi & y >= ylo & y <= yhi;
++h = accumarray([x(keep) - xlo + 1, y(keep) - ylo + 1], 1, ...
++               [xhi - xlo + 1, yhi - ylo + 1]);
++end
+diff --git a/src/projection_1d_convolutions_fast.m b/src/projection_1d_convolutions_fast.m
+new file mode 100644
+index 0000000..c54e49d
+--- /dev/null
++++ b/src/projection_1d_convolutions_fast.m
+@@ -0,0 +1,8 @@
++function [pmax, pmin] = projection_1d_convolutions_fast(Sdeg, Pdeg, score_obs, numbins, H, newH)  %#ok<INUSD>
++% Octave stub for MutSig's CV-significance MEX. It computes a gene's CV p-value,
++% which DIALECT does NOT use -- we only need persample_lambda (the per-(gene,
++% patient,effect) background), which is computed earlier in the gene loop. Return
++% a neutral p=1 so the loop completes cleanly and our dump is saved.
++pmax = 1;
++pmin = 1;
++end
+diff --git a/src/str2doubleq_wrapper.m b/src/str2doubleq_wrapper.m
+index cb7db0f..e8c0509 100644
+--- a/src/str2doubleq_wrapper.m
++++ b/src/str2doubleq_wrapper.m
+@@ -1,3 +1,8 @@
+ function out = str2doubleq_wrapper(in)
+-
+-out = real(str2doubleq(in));
++% str2doubleq is a MATLAB-only MEX; fall back to the built-in str2double under
++% Octave (it vectorizes over cellstr the same way).
++if exist('str2doubleq', 'file') == 3
++  out = real(str2doubleq(in));
++else
++  out = str2double(in);
++end
+diff --git a/src/verLessThan.m b/src/verLessThan.m
+new file mode 100644
+index 0000000..9b0b325
+--- /dev/null
++++ b/src/verLessThan.m
+@@ -0,0 +1,12 @@
++function tf = verLessThan(pkg, verstr)
++% Octave-safe shadow of MATLAB's verLessThan.
++% MutSig calls verLessThan('matlab', X) to branch on the MATLAB version; under
++% Octave there is no 'matlab' package, so treat it as a modern MATLAB (>= the
++% query) -> return false, selecting the new-style code paths (no deprecated
++% 'bufSize' textscan arg, etc.).
++if nargin >= 1 && ischar(pkg) && strcmpi(pkg, 'matlab')
++  tf = false;
++  return;
++end
++tf = false;  %#ok<NASGU>  (no other packages are queried on our code path)
++end
