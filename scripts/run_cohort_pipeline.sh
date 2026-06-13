@@ -22,11 +22,13 @@ log() { echo "[$(date +%H:%M:%S)] ${C}: $*"; }
 
 [ -f "$MAF" ] || { log "no MAF at ${MAF}; skipping cohort"; exit 0; }
 mkdir -p "${ROOT}/${C}"
+LOGF="${ROOT}/${C}/pipeline.log"; : > "$LOGF"  # per-cohort verbose log (keeps main log small)
 
 # 1. CBaSE ------------------------------------------------------------------
 if [ ! -f "${ROOT}/${C}/bmr_pmfs.csv" ]; then
   log "CBaSE generate"
-  "$DIALECT" generate -m "$MAF" -o "${ROOT}/${C}" --bmr cbase -r hg19 || log "STAGE-FAIL cbase"
+  "$DIALECT" generate -m "$MAF" -o "${ROOT}/${C}" --bmr cbase -r hg19 >>"$LOGF" 2>&1 \
+    || log "STAGE-FAIL cbase"
 else log "skip cbase"; fi
 
 N=0
@@ -36,7 +38,8 @@ N=0
 if [ ! -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ] && [ "$N" -gt 0 ]; then
   log "DIG generate (N=${N})"
   "$DIALECT" generate -m "$MAF" -o "${ROOT}/${C}" --bmr dig \
-    --dig-results "$DIG_RESULTS" --dig-samples "$N" -r hg19 || log "STAGE-FAIL dig"
+    --dig-results "$DIG_RESULTS" --dig-samples "$N" -r hg19 >>"$LOGF" 2>&1 \
+    || log "STAGE-FAIL dig"
 else log "skip dig"; fi
 
 # 3. DIALECT identify -- CBaSE + DIG (fast; run before the slow MutSig) ------
@@ -47,14 +50,14 @@ if [ ! -f "${ROOT}/${C}/id_cbase/pairwise_interaction_results.csv" ] \
   mkdir -p "${ROOT}/${C}/id_cbase"
   cb_arg=(); [ -f "$CB_Q" ] && cb_arg=(-cb "$CB_Q")
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.csv" \
-    -o "${ROOT}/${C}/id_cbase" -k 100 "${cb_arg[@]}" || log "STAGE-FAIL id_cbase"
+    -o "${ROOT}/${C}/id_cbase" -k 100 "${cb_arg[@]}" >>"$LOGF" 2>&1 || log "STAGE-FAIL id_cbase"
 fi
 if [ ! -f "${ROOT}/${C}/id_dig/pairwise_interaction_results.csv" ] \
    && [ -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ]; then
   log "identify dig"
   mkdir -p "${ROOT}/${C}/id_dig"
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.dig.csv" \
-    -o "${ROOT}/${C}/id_dig" -k 100 || log "STAGE-FAIL id_dig"
+    -o "${ROOT}/${C}/id_dig" -k 100 >>"$LOGF" 2>&1 || log "STAGE-FAIL id_dig"
 fi
 
 # 4. MutSig2CV (Docker, slow) + its identify -- skipped when SKIP_MUTSIG set --
@@ -67,13 +70,14 @@ else
     docker run --rm -v "${PWD}:/work" -w /work/external/MutSig2CV/mutsig2cv \
       -e LD_LIBRARY_PATH="$LDP" -e MCR_CACHE_ROOT="/tmp/mcr_${C}" \
       flywheel/matlab-mcr:v81 \
-      ./MutSig2CV "/work/${MAF}" "/work/${ROOT}/${C}_mutsig" || log "STAGE-FAIL mutsig"
+      ./MutSig2CV "/work/${MAF}" "/work/${ROOT}/${C}_mutsig" >>"$LOGF" 2>&1 \
+      || log "STAGE-FAIL mutsig"
   else log "skip mutsig (done)"; fi
   if [ ! -f "${ROOT}/${C}/id_mutsig/pairwise_interaction_results.csv" ] \
      && [ -f "${ROOT}/${C}_mutsig/results.mat" ]; then
     log "identify mutsig (per-sample extractor)"
     "$PY" -m analysis.mutsig_persample_co --cohort "$C" --results-root "$ROOT" -k 100 \
-      || log "STAGE-FAIL id_mutsig"
+      >>"$LOGF" 2>&1 || log "STAGE-FAIL id_mutsig"
   fi
 fi
 log "cohort pipeline DONE"
