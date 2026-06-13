@@ -79,7 +79,11 @@ def download(cohort: str) -> tuple[str, str]:
     src = "tarball" if from_local_tarball(cohort, out) else None
     if src is None:
         proc = subprocess.run(  # noqa: S603
-            ["curl", "-sf", "-m", "900", study_url(cohort), "-o", str(out)],  # noqa: S607
+            [  # noqa: S607
+                "curl", "-sf", "--retry", "6", "--retry-delay", "5",
+                "--retry-all-errors", "-m", "1200",
+                study_url(cohort), "-o", str(out),
+            ],
             capture_output=True,
             check=False,
         )
