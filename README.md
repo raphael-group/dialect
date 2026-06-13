@@ -11,8 +11,8 @@ DIALECT identifies **mutually exclusive (ME)** and **co-occurring (CO)** pairs o
 mutations in cancer. Unlike methods that binarize the mutation matrix, DIALECT models each
 observed somatic count as a latent sum of a **passenger background** (`B`) plus a **driver
 indicator** (`D`), and fits the joint driver state of each gene pair by EM. By conditioning on a
-per-gene **background mutation rate (BMR)**, it suppresses the spurious dependencies that long or
-highly-mutated genes (e.g. *TTN*) induce in binarization-based tests.
+per-gene, per-sample **background mutation rate (BMR)** distribution, it accounts for the spurious
+dependencies that long or highly-mutated genes (e.g. *TTN*) induce in binarization-based tests.
 
 ## Quickstart
 
@@ -28,13 +28,30 @@ dialect identify -c out/cohort/count_matrix.csv -b out/cohort/bmr_pmfs.csv -o ou
 
 # 3. (optional) benchmark against Fisher / DISCOVER / MEGSA / WeSME
 dialect compare -c out/cohort/count_matrix.csv -o out/cohort -k 100
+
+# 4. (optional) merge DIALECT's calls with the comparison methods' results
+dialect merge -d out/cohort/pairwise_interaction_results.csv -a out/cohort/comparison_pairwise_interaction_results.csv -o out/cohort
 ```
 
+`dialect generate --bmr dig` swaps CBaSE for DIGDriver (pass `--dig-results` + `--dig-samples`);
+`dialect simulate` generates and evaluates synthetic single-gene / pairwise / matrix data. Run
+any command with `--help` for its options.
+
 ```python
-# the same logic is available as a typed Python API (notebooks, pipelines, web)
-import dialect as dl
-cohort  = dl.read_maf("cohort.maf", bmr="cbase", reference="hg19")
-results = dl.identify(cohort, top_k=100)   # -> pandas.DataFrame of ME/CO pairs
+# the same operations are available as a typed Python API
+import dialect
+
+# 1. estimate the background mutation rate + count matrix from a MAF
+dialect.estimate_bmr("cohort.maf", "out/cohort", provider="cbase", reference="hg19")
+
+# 2. identify ME / CO driver pairs (the EM)
+result = dialect.identify_interactions(
+    counts="out/cohort/count_matrix.csv",
+    bmr_pmfs="out/cohort/bmr_pmfs.csv",
+    out_dir="out/cohort",
+    top_k=100,
+)
+result.pairwise.sort_values("Rho").head()   # -> DataFrame; strongest mutual exclusivity
 ```
 
 > **Background mutation rate is pluggable.** DIALECT supports multiple BMR providers
