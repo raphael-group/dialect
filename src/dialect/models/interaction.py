@@ -148,12 +148,15 @@ class Interaction:
             return pmf.get(c, 0)
 
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
+        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
         return np.array(
             [
                 tau
-                * safe_get(self.gene_a.bmr_pmf, c_a - u, 0)
-                * safe_get(self.gene_b.bmr_pmf, c_b - v, 0)
-                for c_a, c_b in zip(a_counts, b_counts, strict=False)
+                * safe_get(a_pmf, c_a - u, 0)
+                * safe_get(b_pmf, c_b - v, 0)
+                for c_a, c_b, a_pmf, b_pmf in zip(
+                    a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
+                )
             ],
         )
 
@@ -174,25 +177,22 @@ class Interaction:
             return pmf.get(c, 0)
 
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
+        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
         return np.array(
             [
                 sum(
                     (
-                        tau_00
-                        * safe_get(self.gene_a.bmr_pmf, c_a, 0)
-                        * safe_get(self.gene_b.bmr_pmf, c_b, 0),
-                        tau_01
-                        * safe_get(self.gene_a.bmr_pmf, c_a, 0)
-                        * safe_get(self.gene_b.bmr_pmf, c_b - 1, 0),
-                        tau_10
-                        * safe_get(self.gene_a.bmr_pmf, c_a - 1, 0)
-                        * safe_get(self.gene_b.bmr_pmf, c_b, 0),
+                        tau_00 * safe_get(a_pmf, c_a, 0) * safe_get(b_pmf, c_b, 0),
+                        tau_01 * safe_get(a_pmf, c_a, 0) * safe_get(b_pmf, c_b - 1, 0),
+                        tau_10 * safe_get(a_pmf, c_a - 1, 0) * safe_get(b_pmf, c_b, 0),
                         tau_11
-                        * safe_get(self.gene_a.bmr_pmf, c_a - 1, 0)
-                        * safe_get(self.gene_b.bmr_pmf, c_b - 1, 0),
+                        * safe_get(a_pmf, c_a - 1, 0)
+                        * safe_get(b_pmf, c_b - 1, 0),
                     ),
                 )
-                for c_a, c_b in zip(a_counts, b_counts, strict=False)
+                for c_a, c_b, a_pmf, b_pmf in zip(
+                    a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
+                )
             ],
         )
 
@@ -246,24 +246,26 @@ class Interaction:
         self.verify_taus_are_valid(taus)
 
         a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
-        a_bmr_pmf, b_bmr_pmf = self.gene_a.bmr_pmf, self.gene_b.bmr_pmf
+        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
         tau_00, tau_01, tau_10, tau_11 = taus
         return sum(
             np.log(
-                safe_get_no_default(a_bmr_pmf, c_a)
-                * safe_get_no_default(b_bmr_pmf, c_b)
+                safe_get_no_default(a_pmf, c_a)
+                * safe_get_no_default(b_pmf, c_b)
                 * tau_00
-                + safe_get_no_default(a_bmr_pmf, c_a)
-                * safe_get_with_default(b_bmr_pmf, c_b - 1)
+                + safe_get_no_default(a_pmf, c_a)
+                * safe_get_with_default(b_pmf, c_b - 1)
                 * tau_01
-                + safe_get_with_default(a_bmr_pmf, c_a - 1)
-                * safe_get_no_default(b_bmr_pmf, c_b)
+                + safe_get_with_default(a_pmf, c_a - 1)
+                * safe_get_no_default(b_pmf, c_b)
                 * tau_10
-                + safe_get_with_default(a_bmr_pmf, c_a - 1)
-                * safe_get_with_default(b_bmr_pmf, c_b - 1)
+                + safe_get_with_default(a_pmf, c_a - 1)
+                * safe_get_with_default(b_pmf, c_b - 1)
                 * tau_11,
             )
-            for c_a, c_b in zip(a_counts, b_counts, strict=False)
+            for c_a, c_b, a_pmf, b_pmf in zip(
+                a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
+            )
         )
 
     def compute_likelihood_ratio(self, taus: list) -> float:

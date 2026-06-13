@@ -15,8 +15,22 @@ _HYPERMUTATOR_DROP_FRACTION = 0.05
 class Gene:
     """TODO: Add docstring."""
 
-    def __init__(self, name: str, samples: list, counts: list, bmr_pmf: list) -> None:
-        """TODO: Add docstring."""
+    def __init__(
+        self,
+        name: str,
+        samples: list,
+        counts: list,
+        bmr_pmf: dict | list,
+    ) -> None:
+        """Build a gene's observed counts and its background model.
+
+        ``bmr_pmf`` is either a single background count PMF ``{k: P(B=k)}`` shared by
+        every sample, or a per-sample list of such PMFs (one per sample, aligned with
+        ``counts``). The per-sample form lets the background depend on each sample's
+        mutation burden; the shared form is broadcast to every sample. All likelihood
+        and EM evaluation indexes through :attr:`bmr_pmfs`, so the model is
+        sample-indexed either way.
+        """
         self.name = name
         self.samples = samples
         self.counts = counts
@@ -26,10 +40,23 @@ class Gene:
         self.cbase_phi = None
         self.cbase_p = None
 
+    @property
+    def bmr_pmfs(self) -> list:
+        """Per-sample background PMFs, one per sample (aligned with ``counts``).
+
+        A single shared ``bmr_pmf`` dict is broadcast to every sample; a per-sample
+        list is returned as-is. Every likelihood/EM path reads the background through
+        here, so a single cohort-level BMR and per-sample BMRs use the same code.
+        """
+        if isinstance(self.bmr_pmf, list):
+            return self.bmr_pmf
+        return [self.bmr_pmf] * len(self.counts)
+
     def __str__(self) -> str:
         """TODO: Add docstring."""
+        representative = self.bmr_pmfs[0] if self.bmr_pmfs else {}
         bmr_preview = ", ".join(
-            f"{k}: {v:.3e}" for k, v in itertools.islice(self.bmr_pmf.items(), 3)
+            f"{k}: {v:.3e}" for k, v in itertools.islice(representative.items(), 3)
         )
         pi_info = f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
         total_mutations = np.sum(self.counts)
@@ -44,8 +71,14 @@ class Gene:
     #                                 UTILITY FUNCTIONS                                #
     # -------------------------------------------------------------------------------- #
     def calculate_expected_mutations(self) -> float:
-        """Return E[B] = sum_k k * P(B=k) over the background PMF."""
-        return sum(count * prob for count, prob in self.bmr_pmf.items())
+        """Return the mean per-sample E[B] = sum_k k * P(B=k) over the background PMFs.
+
+        For a single shared background this is the usual E[B]; for per-sample
+        backgrounds it averages each sample's expected passenger count.
+        """
+        return float(
+            np.mean([sum(k * p for k, p in pmf.items()) for pmf in self.bmr_pmfs]),
+        )
 
     # -------------------------------------------------------------------------------- #
     #                            DATA VALIDATION AND LOGGING                           #
@@ -60,8 +93,12 @@ class Gene:
             raise ValueError(msg)
 
     def verify_bmr_pmf_contains_all_count_keys(self) -> None:
-        """TODO: Add docstring."""
-        missing_bmr_pmf_counts = [c for c in self.counts if c not in self.bmr_pmf]
+        """Verify every sample's observed count is a key in that sample's PMF."""
+        missing_bmr_pmf_counts = [
+            c
+            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
+            if c not in pmf
+        ]
         if missing_bmr_pmf_counts:
             msg = "BMR PMF does not contain all counts in distribution."
             raise ValueError(msg)
@@ -125,10 +162,10 @@ class Gene:
 
         return sum(
             np.log(
-                safe_get_no_default(self.bmr_pmf, c) * (1 - pi)
-                + safe_get_with_default(self.bmr_pmf, c - 1) * pi,
+                safe_get_no_default(pmf, c) * (1 - pi)
+                + safe_get_with_default(pmf, c - 1) * pi,
             )
-            for c in self.counts
+            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
         )
 
     def compute_likelihood_ratio(self, pi: float) -> float:
@@ -234,14 +271,16 @@ class Gene:
         """
         self.verify_bmr_pmf_and_counts_exist()
 
-        nonzero_probability_counts = [
-            c for c in self.counts if c in self.bmr_pmf and self.bmr_pmf[c] > 0
+        nonzero_count_pmf_pairs = [
+            (c, pmf)
+            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
+            if c in pmf and pmf[c] > 0
         ]
         # Samples whose observed count has no background support (out-of-range or
         # zero probability) are excluded to avoid 0/0 responsibilities -- this is
         # typically driven by hypermutators under a cohort-level BMR. Surface it
         # instead of dropping silently (see the hypermutator-handling workstream).
-        n_excluded = len(self.counts) - len(nonzero_probability_counts)
+        n_excluded = len(self.counts) - len(nonzero_count_pmf_pairs)
         if n_excluded and n_excluded / len(self.counts) > _HYPERMUTATOR_DROP_FRACTION:
             logger.warning(
                 "Gene %s: %d/%d samples excluded from EM (no background support; "
@@ -254,9 +293,9 @@ class Gene:
         pi = pi_init
         for _it in range(max_iter):
             z_i = [
-                (pi * self.bmr_pmf.get(c - 1, 0))
-                / (pi * self.bmr_pmf.get(c - 1, 0) + (1 - pi) * self.bmr_pmf.get(c, 0))
-                for c in nonzero_probability_counts
+                (pi * pmf.get(c - 1, 0))
+                / (pi * pmf.get(c - 1, 0) + (1 - pi) * pmf.get(c, 0))
+                for c, pmf in nonzero_count_pmf_pairs
             ]
 
             curr_pi = np.mean(z_i)

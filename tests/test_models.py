@@ -51,3 +51,33 @@ def test_compute_log_likelihood_missing_support_is_finite() -> None:
     """
     gene = make_gene({0: 0.5, 2: 0.5}, counts=[1])  # count 1 absent from PMF
     assert math.isfinite(gene.compute_log_likelihood(0.5))
+
+
+def test_bmr_pmfs_broadcasts_a_shared_dict() -> None:
+    """A single shared PMF is broadcast to one PMF per sample."""
+    pmf = {0: 0.8, 1: 0.2}
+    gene = make_gene(pmf, counts=[0, 1, 2])
+    assert gene.bmr_pmfs == [pmf, pmf, pmf]
+    assert all(p is pmf for p in gene.bmr_pmfs)
+
+
+def test_bmr_pmfs_passes_through_a_per_sample_list() -> None:
+    """A per-sample list of PMFs is used as-is (one per sample)."""
+    pmfs = [{0: 0.9, 1: 0.1}, {0: 0.5, 1: 0.5}]
+    gene = Gene(name="G_M", samples=[0, 1], counts=[0, 1], bmr_pmf=pmfs)
+    assert gene.bmr_pmfs is pmfs
+
+
+def test_per_sample_backgrounds_are_used_in_log_likelihood() -> None:
+    """The likelihood evaluates each sample's count against *its own* PMF."""
+    pmf0 = {0: 0.9, 1: 0.1}
+    pmf1 = {0: 0.5, 1: 0.5}
+    gene = Gene(name="G_M", samples=[0, 1], counts=[0, 0], bmr_pmf=[pmf0, pmf1])
+    # c=0 under pmf0 -> 0.9*(1-pi); c=0 under pmf1 -> 0.5*(1-pi); pi=0.3
+    expected = math.log(0.9 * 0.7) + math.log(0.5 * 0.7)
+    assert gene.compute_log_likelihood(0.3) == pytest.approx(expected)
+    # Broadcasting pmf0 to both samples gives a different value, proving per-sample use.
+    shared = make_gene(pmf0, counts=[0, 0])
+    assert gene.compute_log_likelihood(0.3) != pytest.approx(
+        shared.compute_log_likelihood(0.3),
+    )
