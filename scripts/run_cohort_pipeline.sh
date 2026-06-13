@@ -32,14 +32,11 @@ else log "skip cbase"; fi
 N=0
 [ -f "${ROOT}/${C}/count_matrix.csv" ] && N=$(( $(wc -l < "${ROOT}/${C}/count_matrix.csv") - 1 ))
 
-# 2. DIG --------------------------------------------------------------------
+# 2. DIG (writes bmr_pmfs.dig.csv directly; does not clobber CBaSE's bmr_pmfs.csv) ---
 if [ ! -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ] && [ "$N" -gt 0 ]; then
   log "DIG generate (N=${N})"
-  rm -rf "/tmp/dig_${C}"
-  if "$DIALECT" generate -m "$MAF" -o "/tmp/dig_${C}" --bmr dig \
-       --dig-results "$DIG_RESULTS" --dig-samples "$N" -r hg19; then
-    cp "/tmp/dig_${C}/bmr_pmfs.csv" "${ROOT}/${C}/bmr_pmfs.dig.csv"
-  else log "STAGE-FAIL dig"; fi
+  "$DIALECT" generate -m "$MAF" -o "${ROOT}/${C}" --bmr dig \
+    --dig-results "$DIG_RESULTS" --dig-samples "$N" -r hg19 || log "STAGE-FAIL dig"
 else log "skip dig"; fi
 
 # 3. MutSig2CV (Docker) -----------------------------------------------------
