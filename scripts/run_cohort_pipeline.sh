@@ -10,8 +10,10 @@
 # A failed stage is logged and the rest continue. Usage: run_cohort_pipeline.sh ACC
 set -u
 C="$1"
-ROOT="output/pancan"
-MAF="data/mafs_pancan/${C}.maf"
+# Parameterized (defaults = TCGA pancan); MSK runs set MAF_DIR + ROOT in the environment.
+ROOT="${ROOT:-output/pancan}"
+MAF_DIR="${MAF_DIR:-data/mafs_pancan}"
+MAF="${MAF_DIR}/${C}.maf"
 DIG_RESULTS="external/DIGDriver/run/Pancan.genes.results.txt"
 DIALECT="/opt/anaconda3/envs/dialect/bin/dialect"
 PY="/opt/anaconda3/envs/dialect/bin/python"
