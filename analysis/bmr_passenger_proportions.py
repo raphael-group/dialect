@@ -12,7 +12,7 @@ fraction of genes that are likely passengers -- lower is better.
 
 Usage::
 
-    python analysis/bmr_passenger_proportions.py                # every cohort in output/
+    python analysis/bmr_passenger_proportions.py            # every cohort in output/
     python analysis/bmr_passenger_proportions.py --cohort BRCA   # one cohort
     python analysis/bmr_passenger_proportions.py --csv out.csv   # also dump tidy rows
 """
