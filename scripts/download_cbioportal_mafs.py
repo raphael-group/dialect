@@ -52,23 +52,27 @@ def is_valid_maf(path: Path) -> bool:
 
 
 def from_local_tarball(cohort: str, out: Path) -> bool:
-    """Extract data_mutations.txt from a cohort's tarball in ~/Downloads, if present."""
+    """Extract data_mutations.txt from a cohort's tarball in ~/Downloads, if present.
+
+    Matches browser duplicate-download names too (e.g. ``luad_..._2018 (1).tar.gz``);
+    the member path inside is always the un-suffixed study directory.
+    """
     code = STUDY_CODE_OVERRIDE.get(cohort, cohort.lower())
-    tarball = DOWNLOADS / f"{code}_tcga_pan_can_atlas_2018.tar.gz"
-    if not tarball.exists():
-        return False
-    member = f"{code}_tcga_pan_can_atlas_2018/data_mutations.txt"
-    with out.open("wb") as fh:
-        proc = subprocess.run(
-            ["tar", "-xzf", str(tarball), "-O", member],
-            stdout=fh,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    if proc.returncode != 0 or not is_valid_maf(out):
-        out.unlink(missing_ok=True)
-        return False
-    return True
+    study = f"{code}_tcga_pan_can_atlas_2018"
+    candidates = sorted(DOWNLOADS.glob(f"{study}*.tar.gz"))
+    member = f"{study}/data_mutations.txt"
+    for tarball in candidates:
+        with out.open("wb") as fh:
+            proc = subprocess.run(
+                ["tar", "-xzf", str(tarball), "-O", member],
+                stdout=fh,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        if proc.returncode == 0 and is_valid_maf(out):
+            return True
+    out.unlink(missing_ok=True)
+    return False
 
 
 def download(cohort: str) -> tuple[str, str]:
