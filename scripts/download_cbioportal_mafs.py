@@ -59,8 +59,8 @@ def from_local_tarball(cohort: str, out: Path) -> bool:
         return False
     member = f"{code}_tcga_pan_can_atlas_2018/data_mutations.txt"
     with out.open("wb") as fh:
-        proc = subprocess.run(  # noqa: S603
-            ["tar", "-xzf", str(tarball), "-O", member],  # noqa: S607
+        proc = subprocess.run(
+            ["tar", "-xzf", str(tarball), "-O", member],
             stdout=fh,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -78,8 +78,8 @@ def download(cohort: str) -> tuple[str, str]:
         return cohort, f"skip (exists, {out.stat().st_size // 1_000_000} MB)"
     src = "tarball" if from_local_tarball(cohort, out) else None
     if src is None:
-        proc = subprocess.run(  # noqa: S603
-            [  # noqa: S607
+        proc = subprocess.run(
+            [
                 "curl", "-sf", "--retry", "6", "--retry-delay", "5",
                 "--retry-all-errors", "-m", "1200",
                 study_url(cohort), "-o", str(out),
