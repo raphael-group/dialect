@@ -55,7 +55,7 @@ def fit_discover_background(binary: np.ndarray) -> np.ndarray:
     b = np.zeros(n_samples)
 
     def _solve_axis(other: np.ndarray, target: np.ndarray, n: int) -> np.ndarray:
-        # For each i, find x_i s.t. sum_j 1/(1+exp(x_i + other_j)) = target_i (monotone).
+        # For each i, root-find x_i s.t. sum_j sigmoid(-(x_i+other_j)) = target_i.
         out = np.zeros(n)
         for i in range(n):
             t = target[i]
