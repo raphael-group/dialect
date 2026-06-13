@@ -62,24 +62,24 @@ if [ ! -f "${ROOT}/${C}/id_dig/pairwise_interaction_results.csv" ] \
     -o "${ROOT}/${C}/id_dig" -k 100 >>"$LOGF" 2>&1 || log "STAGE-FAIL id_dig"
 fi
 
-# 4. MutSig2CV (Docker, slow) + its identify -- skipped when SKIP_MUTSIG set --
+# 4. MutSig2CV (Octave-patched source -> PROPER per-sample lambda) + identify --
+#    Replaces the old Docker compiled binary + scalar-f_p reconstruction. Skipped
+#    when SKIP_MUTSIG is set. MUTSIG_ROOT holds the per-cohort lambda dumps.
+MUTSIG_ROOT="${MUTSIG_ROOT:-output/mutsigsrc}"
 if [ -n "${SKIP_MUTSIG:-}" ]; then
   log "skip mutsig (SKIP_MUTSIG set)"
 else
-  if [ ! -f "${ROOT}/${C}_mutsig/results.mat" ]; then
-    log "MutSig2CV (Docker, emulated)"
-    mkdir -p "${ROOT}/${C}_mutsig"
-    docker run --rm -v "${PWD}:/work" -w /work/external/MutSig2CV/mutsig2cv \
-      -e LD_LIBRARY_PATH="$LDP" -e MCR_CACHE_ROOT="/tmp/mcr_${C}" \
-      flywheel/matlab-mcr:v81 \
-      ./MutSig2CV "/work/${MAF}" "/work/${ROOT}/${C}_mutsig" >>"$LOGF" 2>&1 \
+  if [ ! -f "${MUTSIG_ROOT}/${C}/persample_lambda.f32" ]; then
+    log "MutSig2CV (Octave-patched, per-sample lambda)"
+    bash scripts/run_mutsig_octave.sh "$C" "$MAF_DIR" "$MUTSIG_ROOT" >>"$LOGF" 2>&1 \
       || log "STAGE-FAIL mutsig"
-  else log "skip mutsig (done)"; fi
+  else log "skip mutsig (lambda done)"; fi
   if [ ! -f "${ROOT}/${C}/id_mutsig/pairwise_interaction_results.csv" ] \
-     && [ -f "${ROOT}/${C}_mutsig/results.mat" ]; then
-    log "identify mutsig (per-sample extractor)"
-    "$PY" -m analysis.mutsig_persample_co --cohort "$C" --results-root "$ROOT" -k 100 \
-      >>"$LOGF" 2>&1 || log "STAGE-FAIL id_mutsig"
+     && [ -f "${MUTSIG_ROOT}/${C}/persample_lambda.f32" ]; then
+    log "identify mutsig (proper per-sample lambda)"
+    "$PY" -m analysis.mutsig_lambda_co --cohort "$C" --results-root "$ROOT" \
+      --mutsig-root "$MUTSIG_ROOT" --suffix mutsig -k 100 >>"$LOGF" 2>&1 \
+      || log "STAGE-FAIL id_mutsig"
   fi
 fi
 log "cohort pipeline DONE"
