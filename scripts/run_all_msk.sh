@@ -10,18 +10,19 @@ set -u
 
 run_study() {
   local split_dir="$1" out_root="$2"
+  local msroot="output/mutsigsrc_msk/$(basename "$out_root")"  # per-study lambda dumps (no NSCLC collision)
   local mafs; mafs=$(ls "${split_dir}"/*.maf 2>/dev/null)
   echo "##### MSK STUDY ${out_root} ($(echo "$mafs" | wc -w) cohorts) $(date) #####"
   for maf in $mafs; do
     C=$(basename "$maf" .maf)
     echo "----- passA ${out_root} ${C} $(date +%H:%M:%S) -----"
-    MAF_DIR="$split_dir" ROOT="$out_root" SKIP_MUTSIG=1 \
+    MAF_DIR="$split_dir" ROOT="$out_root" MUTSIG_ROOT="$msroot" SKIP_MUTSIG=1 \
       bash scripts/run_cohort_pipeline.sh "$C"
   done
   for maf in $mafs; do
     C=$(basename "$maf" .maf)
     echo "----- passB ${out_root} ${C} $(date +%H:%M:%S) -----"
-    MAF_DIR="$split_dir" ROOT="$out_root" \
+    MAF_DIR="$split_dir" ROOT="$out_root" MUTSIG_ROOT="$msroot" \
       bash scripts/run_cohort_pipeline.sh "$C"
   done
 }
