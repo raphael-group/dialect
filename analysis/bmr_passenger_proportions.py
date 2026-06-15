@@ -72,7 +72,7 @@ def proportion_auc(ranked: pd.DataFrame, passengers: set, horizon: int = _K) -> 
     return float(np.trapezoid(props, dx=1) / horizon)
 
 
-def load_passengers(cohort: str, root: Path) -> set:
+def load_passengers(cohort: str) -> set:
     """Per-cohort event-level likely-passenger set (top non-OncoKB genes)."""
     fn = Path("data") / "event_level_likely_passengers" / f"{cohort}.txt"
     if not fn.exists():
@@ -88,7 +88,7 @@ def evaluate_cohort(cohort: str, root: Path) -> list[dict]:
         return []
     n_samples = pd.read_csv(cnt_fn, index_col=0).shape[0]
     eps = compute_epsilon_threshold(n_samples)
-    passengers = load_passengers(cohort, root)
+    passengers = load_passengers(cohort)
 
     rows = []
     for bmr in _BMRS:
