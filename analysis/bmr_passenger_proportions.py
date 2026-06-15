@@ -74,7 +74,7 @@ def proportion_auc(ranked: pd.DataFrame, passengers: set, horizon: int = _K) -> 
 
 def load_passengers(cohort: str, root: Path) -> set:
     """Per-cohort event-level likely-passenger set (top non-OncoKB genes)."""
-    fn = root.parent / "data" / "event_level_likely_passengers" / f"{cohort}.txt"
+    fn = Path("data") / "event_level_likely_passengers" / f"{cohort}.txt"
     if not fn.exists():
         return set()
     return {line.strip() for line in fn.read_text().splitlines() if line.strip()}
