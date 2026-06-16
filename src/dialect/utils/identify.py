@@ -118,9 +118,30 @@ def estimate_pi_for_each_gene(
 
 
 def estimate_taus_for_each_interaction(interactions: list) -> None:
-    """TODO: Add docstring."""
+    """Estimate each pair's taus; fall back to independence if the EM diverges.
+
+    The bivariate-Bernoulli EM can occasionally converge to invalid taus (outside
+    [0,1] or not summing to 1) for a degenerate pair, which would otherwise raise
+    and abort the whole cohort. Such a pair is treated as independent (no
+    interaction, rho=0), so one bad pair never blocks the rest.
+    """
     for interaction in interactions:
-        interaction.estimate_tau_with_em_from_scratch()
+        try:  # noqa: PERF203 -- per-pair guard; zero-cost on 3.12 when not raised
+            interaction.estimate_tau_with_em_from_scratch()
+            interaction.verify_taus_are_valid(
+                [
+                    interaction.tau_00,
+                    interaction.tau_01,
+                    interaction.tau_10,
+                    interaction.tau_11,
+                ],
+            )
+        except ValueError:
+            pi_a, pi_b = interaction.gene_a.pi, interaction.gene_b.pi
+            interaction.tau_00 = (1 - pi_a) * (1 - pi_b)
+            interaction.tau_01 = (1 - pi_a) * pi_b
+            interaction.tau_10 = pi_a * (1 - pi_b)
+            interaction.tau_11 = pi_a * pi_b
 
 
 # ------------------------------------------------------------------------------------ #
