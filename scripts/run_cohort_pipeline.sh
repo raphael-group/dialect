@@ -52,7 +52,8 @@ if [ ! -f "${ROOT}/${C}/id_cbase/pairwise_interaction_results.csv" ] \
   mkdir -p "${ROOT}/${C}/id_cbase"
   cb_arg=(); [ -f "$CB_Q" ] && cb_arg=(-cb "$CB_Q")
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.csv" \
-    -o "${ROOT}/${C}/id_cbase" -k 100 "${cb_arg[@]}" >>"$LOGF" 2>&1 || log "STAGE-FAIL id_cbase"
+    -o "${ROOT}/${C}/id_cbase" -k 100 "${cb_arg[@]+"${cb_arg[@]}"}" >>"$LOGF" 2>&1 \
+    || log "STAGE-FAIL id_cbase"
 fi
 if [ ! -f "${ROOT}/${C}/id_dig/pairwise_interaction_results.csv" ] \
    && [ -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ]; then
