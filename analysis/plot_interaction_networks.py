@@ -8,7 +8,7 @@ ME edges red, CO edges teal -- with bold prominent nodes and thick clear edges.
 Usage::
 
     python analysis/plot_interaction_networks.py --cohort BRCA --bmr mutsig
-    python analysis/plot_interaction_networks.py --cohort BRCA LUAD --bmr mutsig --top-k 10
+    python analysis/plot_interaction_networks.py --cohort BRCA LUAD --bmr cbase
 """
 
 from __future__ import annotations
