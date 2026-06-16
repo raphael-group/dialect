@@ -16,9 +16,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 import pandas as pd
@@ -72,8 +72,10 @@ def draw(cohort: str, bmr: str, root: Path, out_dir: Path, top_k: int) -> Path |
     nx.draw_networkx_edges(graph, pos, edgelist=co_edges, edge_color=CO_COLOR,
                            width=5.0, alpha=0.9, ax=ax)
     nx.draw_networkx_labels(graph, pos, font_size=11, font_weight="bold", ax=ax)
-    ax.plot([], [], color=ME_COLOR, lw=5, label=f"Mutual exclusivity (top {len(me_edges)})")
-    ax.plot([], [], color=CO_COLOR, lw=5, label=f"Co-occurrence (top {len(co_edges)})")
+    ax.plot([], [], color=ME_COLOR, lw=5,
+            label=f"Mutually exclusive ({len(me_edges)})")
+    ax.plot([], [], color=CO_COLOR, lw=5,
+            label=f"Co-occurring ({len(co_edges)})")
     ax.legend(loc="upper left", fontsize=12, frameon=True)
     ax.set_title(f"{cohort} — DIALECT driver interactions ({bmr} BMR, N={n})",
                  fontsize=15, fontweight="bold")
