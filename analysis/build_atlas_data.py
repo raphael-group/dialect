@@ -70,10 +70,14 @@ def cohort_payload(study: str, cohort: str, cdir: Path, k: int,
     cm = pd.read_csv(cm_fn, index_col=0)
     n = cm.shape[0]
     eps = compute_epsilon_threshold(n)
+    cbio = ""
+    if study == "TCGA":
+        sid = "coadread" if cohort == "CRAD" else cohort.lower()
+        cbio = f"https://www.cbioportal.org/study/summary?id={sid}_tcga_pan_can_atlas_2018"
     rec = {
         "id": f"{study}__{cohort}", "study": study, "cohort": cohort,
         "n_samples": n, "median_tmb": round(float(cm.sum(axis=1).median()), 1),
-        "eps": round(eps, 5), "bmrs": {},
+        "eps": round(eps, 5), "cbio": cbio, "bmrs": {},
     }
     for bmr in BMRS:
         fn = cdir / f"id_{bmr}" / "pairwise_interaction_results.csv"
