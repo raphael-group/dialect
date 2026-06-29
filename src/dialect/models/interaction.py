@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Warn when more than this fraction of samples is excluded from the EM.
 _HYPERMUTATOR_DROP_FRACTION = 0.05
+# EM random restarts: stop once this many extra inits in a row fail to improve the
+# log-likelihood, so a well-behaved (often unimodal) fit needs far fewer than n_inits.
+_EM_RESTART_PATIENCE = 3
 
 
 class Interaction:
@@ -443,6 +446,8 @@ class Interaction:
         max_iter: int = 1000,
         tol: float = 1e-3,
         tau_init: list | None = None,
+        n_inits: int = 10,
+        seed: int = 0,
     ) -> None:
         r"""Estimate the tau parameters for interaction using EM algorithm.
 
@@ -516,64 +521,57 @@ class Interaction:
                 n_samples,
             )
 
+        rng = np.random.default_rng(seed)
+        # init #0 is the informed symmetric default; the rest are Dirichlet random
+        # restarts that guard against local optima (Reviewer 3). Keep the best fit.
+        inits = [
+            list(tau_init),
+            *(rng.dirichlet([1, 1, 1, 1]).tolist() for _ in range(max(n_inits - 1, 0))),
+        ]
+        best_tau = tuple(tau_init)
+        best_log_likelihood, stale, n_used = -np.inf, 0, 0
+        for init in inits:
+            n_used += 1
+            tau = self._run_tau_em(init, max_iter, tol)
+            log_likelihood = self.compute_log_likelihood(list(tau))
+            if log_likelihood > best_log_likelihood + tol:
+                best_tau, best_log_likelihood, stale = tau, log_likelihood, 0
+            else:
+                stale += 1
+                if stale >= _EM_RESTART_PATIENCE:
+                    break
+
+        self.tau_00, self.tau_01, self.tau_10, self.tau_11 = best_tau
+        self.em_n_inits_used = n_used
+
+    def _run_tau_em(self, tau_init: list, max_iter: int, tol: float) -> tuple:
+        """Run one EM trajectory from a single tau_init and return the fitted taus."""
         tau_00, tau_01, tau_10, tau_11 = tau_init
         for _ in range(max_iter):
             total_probabilities = self.compute_total_probability(
-                tau_00,
-                tau_01,
-                tau_10,
-                tau_11,
+                tau_00, tau_01, tau_10, tau_11,
             )
-            z_i_00 = (
-                self.compute_joint_probability(tau_00, 0, 0)
-                / total_probabilities
-            )
-            z_i_01 = (
-                self.compute_joint_probability(tau_01, 0, 1)
-                / total_probabilities
-            )
-            z_i_10 = (
-                self.compute_joint_probability(tau_10, 1, 0)
-                / total_probabilities
-            )
-            z_i_11 = (
-                self.compute_joint_probability(tau_11, 1, 1)
-                / total_probabilities
-            )
-
+            z_i_00 = self.compute_joint_probability(tau_00, 0, 0) / total_probabilities
+            z_i_01 = self.compute_joint_probability(tau_01, 0, 1) / total_probabilities
+            z_i_10 = self.compute_joint_probability(tau_10, 1, 0) / total_probabilities
+            z_i_11 = self.compute_joint_probability(tau_11, 1, 1) / total_probabilities
             # TODO @ashuaibi7: standardize handling of nan values
             # https://linear.app/princeton-phd-research/issue/DEV-79
-            z_i_00_no_nan = np.nan_to_num(z_i_00, nan=2e-100)
-            z_i_01_no_nan = np.nan_to_num(z_i_01, nan=2e-100)
-            z_i_10_no_nan = np.nan_to_num(z_i_10, nan=2e-100)
-            z_i_11_no_nan = np.nan_to_num(z_i_11, nan=2e-100)
-            curr_tau_00 = np.mean(z_i_00_no_nan)
-            curr_tau_01 = np.mean(z_i_01_no_nan)
-            curr_tau_10 = np.mean(z_i_10_no_nan)
-            curr_tau_11 = np.mean(z_i_11_no_nan)
-
-            prev_log_likelihood = self.compute_log_likelihood(
-                (tau_00, tau_01, tau_10, tau_11),
-            )
-            curr_log_likelihood = self.compute_log_likelihood(
-                (curr_tau_00, curr_tau_01, curr_tau_10, curr_tau_11),
-            )
-            if abs(curr_log_likelihood - prev_log_likelihood) < tol:
+            curr_tau_00 = np.mean(np.nan_to_num(z_i_00, nan=2e-100))
+            curr_tau_01 = np.mean(np.nan_to_num(z_i_01, nan=2e-100))
+            curr_tau_10 = np.mean(np.nan_to_num(z_i_10, nan=2e-100))
+            curr_tau_11 = np.mean(np.nan_to_num(z_i_11, nan=2e-100))
+            if abs(
+                self.compute_log_likelihood(
+                    (curr_tau_00, curr_tau_01, curr_tau_10, curr_tau_11),
+                )
+                - self.compute_log_likelihood((tau_00, tau_01, tau_10, tau_11)),
+            ) < tol:
                 break
-
             tau_00, tau_01, tau_10, tau_11 = (
-                curr_tau_00,
-                curr_tau_01,
-                curr_tau_10,
-                curr_tau_11,
+                curr_tau_00, curr_tau_01, curr_tau_10, curr_tau_11,
             )
-
-        self.tau_00, self.tau_01, self.tau_10, self.tau_11 = (
-            tau_00,
-            tau_01,
-            tau_10,
-            tau_11,
-        )
+        return tau_00, tau_01, tau_10, tau_11
 
     # TODO @ashuaibi7: implement em w/ pomegranate
     # https://linear.app/princeton-phd-research/issue/DEV-76

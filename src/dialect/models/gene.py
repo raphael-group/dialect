@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 # Warn when more than this fraction of a gene's samples is excluded from the EM.
 _HYPERMUTATOR_DROP_FRACTION = 0.05
+# EM random restarts: stop once this many extra inits in a row fail to improve the
+# log-likelihood, so a well-behaved (often unimodal) fit needs far fewer than n_inits.
+_EM_RESTART_PATIENCE = 3
 
 
 class Gene:
@@ -239,6 +242,8 @@ class Gene:
         max_iter: int = 1000,
         tol: float = 1e-3,
         pi_init: float = 0.5,
+        n_inits: int = 10,
+        seed: int = 0,
     ) -> None:
         r"""Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
 
@@ -290,6 +295,33 @@ class Gene:
                 len(self.counts),
             )
 
+        rng = np.random.default_rng(seed)
+        # init #0 is the informed default (0.5); the rest are random restarts that
+        # guard against local optima (Reviewer 3). Keep the highest-likelihood fit.
+        inits = [pi_init, *rng.uniform(0.01, 0.99, max(n_inits - 1, 0)).tolist()]
+        best_pi, best_log_likelihood, stale, n_used = pi_init, -np.inf, 0, 0
+        for init in inits:
+            n_used += 1
+            pi = self._run_pi_em(nonzero_count_pmf_pairs, init, max_iter, tol)
+            log_likelihood = self.compute_log_likelihood(pi)
+            if log_likelihood > best_log_likelihood + tol:
+                best_pi, best_log_likelihood, stale = pi, log_likelihood, 0
+            else:
+                stale += 1
+                if stale >= _EM_RESTART_PATIENCE:
+                    break
+
+        self.pi = best_pi
+        self.em_n_inits_used = n_used
+
+    def _run_pi_em(
+        self,
+        nonzero_count_pmf_pairs: list,
+        pi_init: float,
+        max_iter: int,
+        tol: float,
+    ) -> float:
+        """Run one EM trajectory from a single pi_init and return the fitted pi."""
         pi = pi_init
         for _it in range(max_iter):
             z_i = [
@@ -297,17 +329,12 @@ class Gene:
                 / (pi * pmf.get(c - 1, 0) + (1 - pi) * pmf.get(c, 0))
                 for c, pmf in nonzero_count_pmf_pairs
             ]
-
             curr_pi = np.mean(z_i)
-
-            prev_log_likelihood = self.compute_log_likelihood(pi)
-            curr_log_likelihood = self.compute_log_likelihood(curr_pi)
-            if abs(curr_log_likelihood - prev_log_likelihood) < tol:
+            if abs(self.compute_log_likelihood(curr_pi)
+                   - self.compute_log_likelihood(pi)) < tol:
                 break
-
             pi = curr_pi
-
-        self.pi = pi
+        return pi
 
     # TODO @ashuaibi7: implement em w/ pomegranate
     # https://linear.app/princeton-phd-research/issue/DEV-76
