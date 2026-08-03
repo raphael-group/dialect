@@ -43,3 +43,8 @@ external/*.zip
 
 # Research Artifacts (paper, dissertation, references) — NEVER commit
 research/
+
+# Nested repos with their own remotes — backed up independently, never gitlinked here.
+# atlas -> ahmed-shuaibi/dialect-atlas · MutSig2CV_src -> upstream getzlab/MutSig2CV
+atlas/
+external/MutSig2CV_src/
