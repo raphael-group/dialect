@@ -58,8 +58,16 @@ res = identify_interactions(
 res.pairwise.sort_values("Rho").head()
 ```
 
-Atlas data export (into sibling repo):
-`python -m analysis.build_atlas_data --out atlas/public/data --k 50`
+Atlas release export (after deterministic baseline generation):
+
+```bash
+PYTHONPATH=/path/to/DISCOVER/python python -m analysis.build_atlas_baselines --jobs 4
+python -m analysis.build_atlas_data \
+  --out atlas/public/data/releases/k100-2026-08-26 \
+  --baseline-root output/atlas_baselines/k100 \
+  --generated-at 2026-08-26T00:00:00Z
+node atlas/scripts/validate-release.mjs
+```
 
 ## Gotchas
 

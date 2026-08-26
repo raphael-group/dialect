@@ -126,7 +126,7 @@ def estimate_taus_for_each_interaction(interactions: list) -> None:
     interaction, rho=0), so one bad pair never blocks the rest.
     """
     for interaction in interactions:
-        try:  # noqa: PERF203 -- per-pair guard; zero-cost on 3.12 when not raised
+        try:
             interaction.estimate_tau_with_em_from_scratch()
             interaction.verify_taus_are_valid(
                 [
@@ -136,7 +136,7 @@ def estimate_taus_for_each_interaction(interactions: list) -> None:
                     interaction.tau_11,
                 ],
             )
-        except ValueError:
+        except ValueError:  # noqa: PERF203 -- one invalid pair must not abort a cohort
             pi_a, pi_b = interaction.gene_a.pi, interaction.gene_b.pi
             interaction.tau_00 = (1 - pi_a) * (1 - pi_b)
             interaction.tau_01 = (1 - pi_a) * pi_b
