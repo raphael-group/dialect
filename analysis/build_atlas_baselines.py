@@ -475,7 +475,7 @@ def _discover_provenance() -> dict[str, Any]:
     if spec is None or spec.origin is None:
         msg = (
             "DISCOVER is required for the immutable baseline release but is not "
-            "importable. Supply the documented v0.9.5 Python package through "
+            "importable. Supply the official Python package through "
             "PYTHONPATH before running this generator."
         )
         raise RuntimeError(msg)
