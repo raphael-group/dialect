@@ -8,12 +8,18 @@
 #   4. DIALECT identify  -> output/pancan/<C>/id_{cbase,dig,mutsig}/pairwise...csv
 #
 # A failed stage is logged and the rest continue. Usage: run_cohort_pipeline.sh ACC
+# This is the historical provider-specific workflow, not the frozen revision
+# analysis. Use analysis.run_tcga_revision_k500 for the common-universe K=500 grid.
 set -u
 C="$1"
 # Parameterized (defaults = TCGA pancan); MSK runs set MAF_DIR + ROOT in the environment.
 ROOT="${ROOT:-output/pancan}"
 MAF_DIR="${MAF_DIR:-data/mafs_pancan}"
 MAF="${MAF_DIR}/${C}.maf"
+# Top-K genes for the identify stage. K=100 keeps the historical id_{cbase,dig,mutsig}
+# directory names; any other K writes to id_<bmr>_k<K> so runs at different K coexist.
+TOP_K="${TOP_K:-100}"
+if [ "$TOP_K" = "100" ]; then IDSUF=""; else IDSUF="_k${TOP_K}"; fi
 DIG_RESULTS="external/DIGDriver/run/Pancan.genes.results.txt"
 DIALECT="/opt/anaconda3/envs/dialect/bin/dialect"
 PY="/opt/anaconda3/envs/dialect/bin/python"
@@ -46,21 +52,21 @@ else log "skip dig"; fi
 
 # 3. DIALECT identify -- CBaSE + DIG (fast; run before the slow MutSig) ------
 CB_Q="${ROOT}/${C}/CBaSE_output/q_values.txt"
-if [ ! -f "${ROOT}/${C}/id_cbase/pairwise_interaction_results.csv" ] \
+if [ ! -f "${ROOT}/${C}/id_cbase${IDSUF}/pairwise_interaction_results.csv" ] \
    && [ -f "${ROOT}/${C}/bmr_pmfs.csv" ]; then
   log "identify cbase"
-  mkdir -p "${ROOT}/${C}/id_cbase"
+  mkdir -p "${ROOT}/${C}/id_cbase${IDSUF}"
   cb_arg=(); [ -f "$CB_Q" ] && cb_arg=(-cb "$CB_Q")
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.csv" \
-    -o "${ROOT}/${C}/id_cbase" -k 100 "${cb_arg[@]+"${cb_arg[@]}"}" >>"$LOGF" 2>&1 \
-    || log "STAGE-FAIL id_cbase"
+    -o "${ROOT}/${C}/id_cbase${IDSUF}" -k "$TOP_K" "${cb_arg[@]+"${cb_arg[@]}"}" >>"$LOGF" 2>&1 \
+    || log "STAGE-FAIL id_cbase${IDSUF}"
 fi
-if [ ! -f "${ROOT}/${C}/id_dig/pairwise_interaction_results.csv" ] \
+if [ ! -f "${ROOT}/${C}/id_dig${IDSUF}/pairwise_interaction_results.csv" ] \
    && [ -f "${ROOT}/${C}/bmr_pmfs.dig.csv" ]; then
   log "identify dig"
-  mkdir -p "${ROOT}/${C}/id_dig"
+  mkdir -p "${ROOT}/${C}/id_dig${IDSUF}"
   "$DIALECT" identify -c "${ROOT}/${C}/count_matrix.csv" -b "${ROOT}/${C}/bmr_pmfs.dig.csv" \
-    -o "${ROOT}/${C}/id_dig" -k 100 >>"$LOGF" 2>&1 || log "STAGE-FAIL id_dig"
+    -o "${ROOT}/${C}/id_dig${IDSUF}" -k "$TOP_K" >>"$LOGF" 2>&1 || log "STAGE-FAIL id_dig${IDSUF}"
 fi
 
 # 4. MutSig2CV (Octave-patched source -> PROPER per-sample lambda) + identify --
@@ -75,12 +81,12 @@ else
     bash scripts/run_mutsig_octave.sh "$C" "$MAF_DIR" "$MUTSIG_ROOT" >>"$LOGF" 2>&1 \
       || log "STAGE-FAIL mutsig"
   else log "skip mutsig (lambda done)"; fi
-  if [ ! -f "${ROOT}/${C}/id_mutsig/pairwise_interaction_results.csv" ] \
+  if [ ! -f "${ROOT}/${C}/id_mutsig${IDSUF}/pairwise_interaction_results.csv" ] \
      && [ -f "${MUTSIG_ROOT}/${C}/persample_lambda.f32" ]; then
     log "identify mutsig (proper per-sample lambda)"
     "$PY" -m analysis.mutsig_lambda_co --cohort "$C" --results-root "$ROOT" \
-      --mutsig-root "$MUTSIG_ROOT" --suffix mutsig -k 100 >>"$LOGF" 2>&1 \
-      || log "STAGE-FAIL id_mutsig"
+      --mutsig-root "$MUTSIG_ROOT" --suffix "mutsig${IDSUF}" -k "$TOP_K" >>"$LOGF" 2>&1 \
+      || log "STAGE-FAIL id_mutsig${IDSUF}"
   fi
 fi
 log "cohort pipeline DONE"

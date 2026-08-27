@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pandas as pd
 
 from dialect.data.cohort import MutationCohort
@@ -13,6 +10,7 @@ from dialect.models.assembly import (
     initialize_interaction_objects,
     save_cbase_stats_to_gene_objects,
 )
+from dialect.models.interaction import LRT_CONTRACT, PAIR_FIT_CONTRACT
 
 
 # ------------------------------------------------------------------------------------ #
@@ -45,6 +43,11 @@ def create_single_gene_results(
                 "Obs. - Exp. Mutations": obs_minus_exp_mutations,
                 "CBaSE Pos. Sel. Phi": cbase_phi,
                 "CBaSE Pos. Sel. P-Val": cbase_p,
+                "MLE Converged": gene.mle_converged,
+                "MLE Iterations": gene.mle_iterations,
+                "MLE Log Likelihood": gene.mle_log_likelihood,
+                "Single-Gene LRT Status": gene.likelihood_ratio_status,
+                "LRT Contract": LRT_CONTRACT,
             },
         )
     results_df = pd.DataFrame(results)
@@ -63,10 +66,12 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
             interaction.tau_10,
             interaction.tau_11,
         )
-        rho = interaction.compute_rho(taus)
         log_odds_ratio = interaction.compute_log_odds_ratio(taus)
         wald_statistic = interaction.compute_wald_statistic(taus)
-        likelihood_ratio = interaction.compute_likelihood_ratio(taus)
+        likelihood_ratio = interaction.likelihood_ratio
+        if likelihood_ratio is None:
+            likelihood_ratio = interaction.compute_likelihood_ratio(taus)
+        rho = interaction.compute_rho_for_direction(taus, likelihood_ratio)
         cm = interaction.compute_contingency_table()
 
         results.append(
@@ -87,6 +92,16 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,
                 "Wald Statistic": wald_statistic,
+                "Fit Algorithm": interaction.fit_algorithm,
+                "Fit Converged": interaction.fit_converged,
+                "Fit Iterations": interaction.fit_iterations,
+                "Fit Last LL Gain": interaction.fit_last_log_likelihood_gain,
+                "Fit Fixed-Point Residual": interaction.fit_fixed_point_residual,
+                "Fit KKT Residual": interaction.fit_kkt_residual,
+                "Pair Fit Contract": PAIR_FIT_CONTRACT,
+                "Null Log Likelihood": interaction.null_log_likelihood,
+                "Alternative Log Likelihood": interaction.alternative_log_likelihood,
+                "LRT Contract": LRT_CONTRACT,
             },
         )
 
@@ -98,50 +113,28 @@ def estimate_pi_for_each_gene(
     genes: list,
     single_gene_output_file: str | None = None,
 ) -> None:
-    """TODO: Add docstring."""
-    pi_from_file = {}
-    if single_gene_output_file and Path(single_gene_output_file).exists():
-        try:
-            pi_from_file = (
-                pd.read_csv(single_gene_output_file)
-                .set_index("Gene Name")["Pi"]
-                .to_dict()
-            )
-        except FileNotFoundError:
-            sys.exit(1)
+    """Fit every constrained-null marginal MLE against the current inputs.
 
+    Historical CSV values cannot be reused safely because they do not identify the
+    likelihood/support contract or the count/BMR inputs that produced them.
+    """
+    del single_gene_output_file
     for gene in genes:
-        if gene.name in pi_from_file:
-            gene.pi = pi_from_file[gene.name]
-        else:
-            gene.estimate_pi_with_em_from_scratch()
+        gene.estimate_pi_with_mle()
 
 
 def estimate_taus_for_each_interaction(interactions: list) -> None:
-    """Estimate each pair's taus; fall back to independence if the EM diverges.
-
-    The bivariate-Bernoulli EM can occasionally converge to invalid taus (outside
-    [0,1] or not summing to 1) for a degenerate pair, which would otherwise raise
-    and abort the whole cohort. Such a pair is treated as independent (no
-    interaction, rho=0), so one bad pair never blocks the rest.
-    """
+    """Fit each alternative and propagate every support/convergence failure."""
     for interaction in interactions:
-        try:
-            interaction.estimate_tau_with_em_from_scratch()
-            interaction.verify_taus_are_valid(
-                [
-                    interaction.tau_00,
-                    interaction.tau_01,
-                    interaction.tau_10,
-                    interaction.tau_11,
-                ],
-            )
-        except ValueError:  # noqa: PERF203 -- one invalid pair must not abort a cohort
-            pi_a, pi_b = interaction.gene_a.pi, interaction.gene_b.pi
-            interaction.tau_00 = (1 - pi_a) * (1 - pi_b)
-            interaction.tau_01 = (1 - pi_a) * pi_b
-            interaction.tau_10 = pi_a * (1 - pi_b)
-            interaction.tau_11 = pi_a * pi_b
+        interaction.estimate_tau_with_coordinate_ascent()
+        interaction.verify_taus_are_valid(
+            [
+                interaction.tau_00,
+                interaction.tau_01,
+                interaction.tau_10,
+                interaction.tau_11,
+            ],
+        )
 
 
 # ------------------------------------------------------------------------------------ #

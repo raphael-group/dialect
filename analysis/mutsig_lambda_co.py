@@ -53,35 +53,83 @@ def load_lambda(mutsig_dir: Path) -> tuple:
     return lam, genes, patients
 
 
-def build_lambda_pmfs(
+def build_lambda_pmfs(  # noqa: PLR0913
     gene_effects: list,
     samples: pd.Index,
     mutsig_dir: Path,
-    cbase_pmfs: dict,
+    cbase_pmfs: dict | None,
     kmax: int,
+    *,
+    allow_cbase_fallback: bool = True,
+    require_all_features: bool = False,
+    require_all_samples: bool = False,
+    lambda_floor: float | None = 1e-12,
 ) -> dict:
-    """Per-(gene_effect, sample) Poisson PMFs from lambda; CBaSE-fallback if absent."""
+    """Build per-sample Poisson PMFs from native MutSig lambda values.
+
+    The historical analysis allowed two conveniences: a feature absent from the
+    MutSig gene axis could borrow its CBaSE PMF, and a sample absent from the MutSig
+    patient axis could use the feature's cohort-mean lambda.  They remain the
+    defaults for backward compatibility.  Frozen analyses can disable both and
+    require complete native support with ``allow_cbase_fallback=False``,
+    ``require_all_features=True``, and ``require_all_samples=True``. Set
+    ``lambda_floor=None`` to preserve exact native zero rates; the historical
+    default floor remains available only for backward compatibility.
+    """
     lam, genes, patients = load_lambda(mutsig_dir)
+    if len(genes) != len(set(genes)):
+        msg = "MutSig gene axis contains duplicate identifiers."
+        raise ValueError(msg)
+    if len(patients) != len(set(patients)):
+        msg = "MutSig patient axis contains duplicate identifiers."
+        raise ValueError(msg)
     gidx = {g: i for i, g in enumerate(genes)}
     pidx = {p: i for i, p in enumerate(patients)}
     col = [pidx.get(str(s), -1) for s in samples]  # mutsig patient column per sample
+    missing_samples = [
+        str(sample)
+        for sample, position in zip(samples, col, strict=True)
+        if position < 0
+    ]
+    if require_all_samples and missing_samples:
+        msg = (
+            "MutSig patient axis does not natively cover every count-matrix sample: "
+            f"{missing_samples[:5]}"
+        )
+        raise ValueError(msg)
     ks = np.arange(kmax + 1)
 
     out = {}
+    missing_features = []
     for ge in gene_effects:
         base, eff = ge.rsplit("_", 1)
         gi = gidx.get(base)
         if gi is None or eff not in _EFF:
-            if ge in cbase_pmfs:  # gene/effect not modelled by MutSig -> cohort CBaSE
+            if allow_cbase_fallback and cbase_pmfs is not None and ge in cbase_pmfs:
                 out[ge] = dict(enumerate(cbase_pmfs[ge]))
+            else:
+                missing_features.append(ge)
             continue
         lam_g = lam[gi, :, _EFF[eff]]
         gene_mean = float(lam_g.mean()) if lam_g.size else 0.0
         lam_s = np.array([lam_g[c] if c >= 0 else gene_mean for c in col], dtype=float)
-        lam_s = np.clip(lam_s, 1e-12, None)
+        if not np.isfinite(lam_s).all() or (lam_s < 0).any():
+            msg = f"MutSig lambda contains an invalid native rate for {ge}."
+            raise ValueError(msg)
+        if lambda_floor is not None:
+            if lambda_floor < 0:
+                msg = "MutSig lambda floor must be nonnegative or None."
+                raise ValueError(msg)
+            lam_s = np.maximum(lam_s, lambda_floor)
         pmf = poisson.pmf(ks[None, :], lam_s[:, None])
         pmf /= pmf.sum(axis=1, keepdims=True)
         out[ge] = [dict(enumerate(row)) for row in pmf]
+    if require_all_features and missing_features:
+        msg = (
+            "MutSig lambda does not natively cover every requested feature: "
+            f"{missing_features[:5]}"
+        )
+        raise ValueError(msg)
     return out
 
 

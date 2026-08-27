@@ -1,22 +1,20 @@
-"""TODO: Add docstring."""
+"""Single-gene latent-driver model."""
+
+from __future__ import annotations
 
 import itertools
-import logging
+import math
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import minimize_scalar
 
-logger = logging.getLogger(__name__)
+OBSERVATION_SUPPORT_CONTRACT = "latent-state-union-v1"
 
-# Warn when more than this fraction of a gene's samples is excluded from the EM.
-_HYPERMUTATOR_DROP_FRACTION = 0.05
-# EM random restarts: stop once this many extra inits in a row fail to improve the
-# log-likelihood, so a well-behaved (often unimodal) fit needs far fewer than n_inits.
-_EM_RESTART_PATIENCE = 3
+_NESTED_LIKELIHOOD_TOL = 1e-8
 
 
 class Gene:
-    """TODO: Add docstring."""
+    """Observed mutation counts and their passenger background distribution."""
 
     def __init__(
         self,
@@ -25,14 +23,10 @@ class Gene:
         counts: list,
         bmr_pmf: dict | list,
     ) -> None:
-        """Build a gene's observed counts and its background model.
+        """Build a gene's observed counts and background model.
 
-        ``bmr_pmf`` is either a single background count PMF ``{k: P(B=k)}`` shared by
-        every sample, or a per-sample list of such PMFs (one per sample, aligned with
-        ``counts``). The per-sample form lets the background depend on each sample's
-        mutation burden; the shared form is broadcast to every sample. All likelihood
-        and EM evaluation indexes through :attr:`bmr_pmfs`, so the model is
-        sample-indexed either way.
+        ``bmr_pmf`` is either one shared ``{count: probability}`` mapping or a
+        sample-aligned list of mappings. The latter supports sample-specific BMRs.
         """
         self.name = name
         self.samples = samples
@@ -43,51 +37,43 @@ class Gene:
         self.cbase_phi = None
         self.cbase_p = None
 
+        self.mle_converged = False
+        self.mle_iterations = 0
+        self.mle_log_likelihood = None
+        self.likelihood_ratio = None
+        self.likelihood_ratio_status = None
+        self._component_probabilities_cache = None
+
     @property
     def bmr_pmfs(self) -> list:
-        """Per-sample background PMFs, one per sample (aligned with ``counts``).
-
-        A single shared ``bmr_pmf`` dict is broadcast to every sample; a per-sample
-        list is returned as-is. Every likelihood/EM path reads the background through
-        here, so a single cohort-level BMR and per-sample BMRs use the same code.
-        """
+        """Return one background PMF per sample."""
         if isinstance(self.bmr_pmf, list):
             return self.bmr_pmf
         return [self.bmr_pmf] * len(self.counts)
 
     def __str__(self) -> str:
-        """TODO: Add docstring."""
+        """Return a compact human-readable summary."""
         representative = self.bmr_pmfs[0] if self.bmr_pmfs else {}
         bmr_preview = ", ".join(
-            f"{k}: {v:.3e}" for k, v in itertools.islice(representative.items(), 3)
+            f"{key}: {value:.3e}"
+            for key, value in itertools.islice(representative.items(), 3)
         )
         pi_info = f"Pi: {self.pi:.3e}" if self.pi is not None else "Pi: Not estimated"
-        total_mutations = np.sum(self.counts)
         return (
             f"Gene: {self.name}\n"
-            f"Total Mutations: {total_mutations}\n"
+            f"Total Mutations: {np.sum(self.counts)}\n"
             f"BMR PMF (preview): {{ {bmr_preview} }}\n"
             f"{pi_info}"
         )
 
-    # -------------------------------------------------------------------------------- #
-    #                                 UTILITY FUNCTIONS                                #
-    # -------------------------------------------------------------------------------- #
     def calculate_expected_mutations(self) -> float:
-        """Return the mean per-sample E[B] = sum_k k * P(B=k) over the background PMFs.
-
-        For a single shared background this is the usual E[B]; for per-sample
-        backgrounds it averages each sample's expected passenger count.
-        """
+        """Return mean per-sample ``E[B]`` across the background PMFs."""
         return float(
             np.mean([sum(k * p for k, p in pmf.items()) for pmf in self.bmr_pmfs]),
         )
 
-    # -------------------------------------------------------------------------------- #
-    #                            DATA VALIDATION AND LOGGING                           #
-    # -------------------------------------------------------------------------------- #
     def verify_bmr_pmf_and_counts_exist(self) -> None:
-        """TODO: Add docstring."""
+        """Require both a background distribution and observed counts."""
         if self.bmr_pmf is None:
             msg = "BMR PMF is not defined for this gene."
             raise ValueError(msg)
@@ -96,249 +82,155 @@ class Gene:
             raise ValueError(msg)
 
     def verify_bmr_pmf_contains_all_count_keys(self) -> None:
-        """Verify every sample's observed count is a key in that sample's PMF."""
-        missing_bmr_pmf_counts = [
-            c
-            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
-            if c not in pmf
-        ]
-        if missing_bmr_pmf_counts:
-            msg = "BMR PMF does not contain all counts in distribution."
-            raise ValueError(msg)
+        """Require every observation to have support under ``C = B + D``."""
+        self.component_probabilities()
 
     def verify_pi_is_valid(self, pi: float) -> None:
-        """TODO: Add docstring."""
-        if pi is None or not 0 <= pi <= 1:
+        """Require a finite Bernoulli probability, including valid boundaries."""
+        if pi is None or not np.isfinite(pi) or not 0 <= pi <= 1:
             msg = f"Invalid pi value: {pi}. Pi must be in the range [0, 1]."
-            raise ValueError(
-                msg,
-            )
-        if pi == 1:
-            msg = "Estimated pi is 1. Please ensure pi is less than 1."
             raise ValueError(msg)
 
-    # -------------------------------------------------------------------------------- #
-    #                         LIKELIHOOD AND METRIC EVALUATION                         #
-    # -------------------------------------------------------------------------------- #
-    def compute_log_likelihood(self, pi: float) -> float:
-        r"""Compute the log-likelihood for gene given the estimated \\( \\pi \\).
+    def component_probabilities(self) -> np.ndarray:
+        """Return exact probabilities for the no-driver and driver components.
 
-        The log-likelihood function is defined as:
-
-        .. math::
-
-            \\ell_C(\\pi) = \\sum_{i=1}^{N} \\log \\Big(
-                \\mathbb{P}(P_i = c_i)(1 - \\pi) +
-                \\mathbb{P}(P_i = c_i - 1) \\pi
-            \\Big)
-
-        where:
-
-        - \\( N \\): Number of samples.
-        - \\( P_i \\): Random variable representing passenger mutations.
-        - \\( c_i \\): Observed count of somatic mutations for sample \\( i \\).
-        - \\( \\pi \\): Estimated driver mutation rate parameter value.
-
-        **Returns**:
-        :return: (float) The computed log-likelihood value.
-
-        **Raises**:
-        :raises ValueError: If `bmr_pmf`, `counts`, or `pi` is not properly defined.
+        The columns are ``P(B=c)`` and ``P(B=c-1)``. Missing PMF keys mean zero
+        probability. No pseudo-floor is introduced. If both probabilities are zero,
+        the feature fails closed so a runner can exclude it from the native universe.
         """
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, min_val)
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get_with_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, 0)
-
-        self.verify_pi_is_valid(pi)
         self.verify_bmr_pmf_and_counts_exist()
+        if self._component_probabilities_cache is not None:
+            return self._component_probabilities_cache
 
-        return sum(
-            np.log(
-                safe_get_no_default(pmf, c) * (1 - pi)
-                + safe_get_with_default(pmf, c - 1) * pi,
+        pmfs = self.bmr_pmfs
+        if len(pmfs) != len(self.counts) or len(self.samples) != len(self.counts):
+            msg = (
+                f"Gene {self.name} has misaligned samples, counts, and background "
+                "PMFs."
             )
-            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
-        )
+            raise ValueError(msg)
+
+        probabilities = []
+        for sample, count, pmf in zip(
+            self.samples,
+            self.counts,
+            pmfs,
+            strict=True,
+        ):
+            if not isinstance(count, (int, np.integer)) or count < 0:
+                msg = (
+                    f"Gene {self.name} has invalid count {count!r} for sample "
+                    f"{sample}."
+                )
+                raise ValueError(msg)
+            p_no_driver = float(pmf.get(int(count), 0.0))
+            p_driver = float(pmf.get(int(count) - 1, 0.0))
+            if (
+                not np.isfinite(p_no_driver)
+                or not np.isfinite(p_driver)
+                or p_no_driver < 0
+                or p_driver < 0
+            ):
+                msg = (
+                    f"Gene {self.name} has an invalid background probability for "
+                    f"sample {sample}."
+                )
+                raise ValueError(msg)
+            if p_no_driver == 0 and p_driver == 0:
+                msg = (
+                    f"Unsupported observation for gene {self.name} at sample "
+                    f"{sample}: count {count} has P(B=c)=P(B=c-1)=0."
+                )
+                raise ValueError(msg)
+            probabilities.append((p_no_driver, p_driver))
+
+        self._component_probabilities_cache = np.asarray(probabilities, dtype=float)
+        return self._component_probabilities_cache
+
+    def compute_log_likelihood(self, pi: float) -> float:
+        r"""Compute ``sum_i log(P(B_i=c_i)(1-pi)+P(B_i=c_i-1)pi)``."""
+        self.verify_pi_is_valid(pi)
+        components = self.component_probabilities()
+        probabilities = (components[:, 0] * (1 - pi)) + (components[:, 1] * pi)
+        if np.any(probabilities <= 0):
+            return -np.inf
+        return float(math.fsum(np.log(probabilities)))
 
     def compute_likelihood_ratio(self, pi: float) -> float:
-        r"""Compute the likelihood ratio test statistic (\\( \\lambda_{LR} \\)).
-
-        The likelihood ratio test statistic is calculated as:
-
-        .. math::
-
-            \\lambda_{LR} = -2 [ \\ell(\\pi_{\\text{null}}) - \\ell(\\hat{\\pi}) ]
-
-        where:
-
-        - \\( \\ell() \\): Log-likelihood function.
-        - \\( \\pi_{\\text{null}} \\): Null hypothesis value.
-        - \\( \\hat{\\pi} \\): Value of the \\( \\pi \\) under the alternative.
-
-        **Returns**:
-        :return: (float) The likelihood ratio test statistic (\\( \\lambda_{LR} \\)).
-        """
+        """Compute the single-gene driver-versus-no-driver LRT."""
         self.verify_pi_is_valid(pi)
-
-        return -2 * (self.compute_log_likelihood(0) - self.compute_log_likelihood(pi))
+        alternative_log_likelihood = self.compute_log_likelihood(pi)
+        null_log_likelihood = self.compute_log_likelihood(0)
+        if not np.isfinite(alternative_log_likelihood):
+            msg = f"Gene {self.name} has a non-finite fitted log-likelihood."
+            raise ValueError(msg)
+        if np.isneginf(null_log_likelihood):
+            self.likelihood_ratio = np.inf
+            self.likelihood_ratio_status = "infinite-passenger-null-zero-probability"
+            return self.likelihood_ratio
+        likelihood_ratio = 2 * (alternative_log_likelihood - null_log_likelihood)
+        if likelihood_ratio < -_NESTED_LIKELIHOOD_TOL:
+            msg = (
+                f"Gene {self.name} alternative log-likelihood is below its null "
+                "log-likelihood."
+            )
+            raise ValueError(msg)
+        self.likelihood_ratio = max(float(likelihood_ratio), 0.0)
+        self.likelihood_ratio_status = "finite"
+        return self.likelihood_ratio
 
     def compute_log_odds_ratio(self, pi: float) -> float:
-        r"""Compute the log odds ratio.
-
-        The log odds ratio is calculated as:
-
-        .. math::
-
-            L = \\log\\left(\\frac{\\tau_{01} \\tau_{10}}{\\tau_{00} \\tau_{11}}\\right)
-
-        **Returns**:
-        :return: (float) The log odds ratio.
-        """
+        """Return the log odds of the fitted driver probability."""
         self.verify_pi_is_valid(pi)
+        if pi == 0:
+            return -np.inf
+        if pi == 1:
+            return np.inf
+        return float(np.log(pi / (1 - pi)))
 
-        return np.log(self.pi / (1 - pi))
-
-    # -------------------------------------------------------------------------------- #
-    #                           PARAMETER ESTIMATION METHODS                           #
-    # -------------------------------------------------------------------------------- #
-    def estimate_pi_with_optimiziation_using_scipy(self, pi_init: float = 0.5) -> None:
-        """TODO: Add docstring."""
-
-        def negative_log_likelihood(pi: float) -> float:
-            return -self.compute_log_likelihood(pi)
-
-        self.verify_bmr_pmf_and_counts_exist()
-
-        alpha = 1e-13
-        bounds = [
-            (alpha, 1 - alpha),
-        ]
-        result = minimize(
-            negative_log_likelihood,
-            x0=[pi_init],
-            bounds=bounds,
-            method="SLSQP",
+    def estimate_pi_with_mle(
+        self,
+        *,
+        max_iter: int = 1000,
+        tol: float = 1e-12,
+    ) -> None:
+        """Fit the constrained-null marginal MLE against the exact likelihood."""
+        self.component_probabilities()
+        result = minimize_scalar(
+            lambda pi: -self.compute_log_likelihood(float(pi)),
+            bounds=(0.0, 1.0),
+            method="bounded",
+            options={"maxiter": max_iter, "xatol": tol},
         )
-
         if not result.success:
-            msg = f"Optimization failed: {result.message}"
+            msg = f"Optimization failed for gene {self.name}: {result.message}"
             raise ValueError(msg)
 
-        self.pi = result.x[0]
+        candidates = (0.0, float(result.x), 1.0)
+        evaluated = [(pi, self.compute_log_likelihood(pi)) for pi in candidates]
+        self.pi, self.mle_log_likelihood = max(evaluated, key=lambda item: item[1])
+        self.mle_converged = True
+        self.mle_iterations = int(result.nfev)
+
+    def estimate_pi_with_optimiziation_using_scipy(self, pi_init: float = 0.5) -> None:
+        """Backward-compatible wrapper for the deterministic scalar MLE."""
+        del pi_init
+        self.estimate_pi_with_mle()
 
     def estimate_pi_with_em_from_scratch(
         self,
         max_iter: int = 1000,
-        tol: float = 1e-3,
+        tol: float = 1e-12,
         pi_init: float = 0.5,
         n_inits: int = 10,
         seed: int = 0,
     ) -> None:
-        r"""Estimate the pi parameter using the Expectation-Maximization (EM) algorithm.
+        """Backward-compatible entry point using the exact deterministic MLE."""
+        del pi_init, n_inits, seed
+        self.estimate_pi_with_mle(max_iter=max_iter, tol=tol)
+        self.em_n_inits_used = 1
 
-        This method iteratively updates the parameter \\( \\pi \\) to maximize
-        the likelihood of the observed data.
-
-        **Algorithm Steps**:
-
-        1. **E-Step**: Compute the responsibilities (\\( z_i^{(t)} \\)) as:
-
-           .. math::
-
-                z_{i}^{(t)} = \\frac{\\pi^{(t)} \\cdot \\mathbb{P}(P_i = c_i - 1)}
-                {\\pi^{(t)} \\cdot \\mathbb{P}(P_i = c_i - 1)
-                    + (1 - \\pi^{(t)}) \\cdot \\mathbb{P}(P_i = c_i)}
-
-        2. **M-Step**: Update the parameter \\( \\pi \\) as:
-
-           .. math::
-
-                \\pi^{(t+1)} = \\frac{1}{N} \\sum_{i=1}^{N} z_{i}^{(t)}
-
-        **Parameters**:
-        :param max_iter: (int) Maximum number of iterations (default: 1000).
-        :param epsilon: (float) Convergence threshold for log-likelihood improvement.
-        :param pi_init: (float) The initialization value for \\( \\pi \\).
-
-        **Returns**:
-        :return: (float) The estimated value of \\( \\pi \\).
-        """
-        self.verify_bmr_pmf_and_counts_exist()
-
-        nonzero_count_pmf_pairs = [
-            (c, pmf)
-            for c, pmf in zip(self.counts, self.bmr_pmfs, strict=False)
-            if c in pmf and pmf[c] > 0
-        ]
-        # Samples whose observed count has no background support (out-of-range or
-        # zero probability) are excluded to avoid 0/0 responsibilities -- this is
-        # typically driven by hypermutators under a cohort-level BMR. Surface it
-        # instead of dropping silently (see the hypermutator-handling workstream).
-        n_excluded = len(self.counts) - len(nonzero_count_pmf_pairs)
-        if n_excluded and n_excluded / len(self.counts) > _HYPERMUTATOR_DROP_FRACTION:
-            logger.warning(
-                "Gene %s: %d/%d samples excluded from EM (no background support; "
-                "likely hypermutators); pi may be biased.",
-                self.name,
-                n_excluded,
-                len(self.counts),
-            )
-
-        rng = np.random.default_rng(seed)
-        # init #0 is the informed default (0.5); the rest are random restarts that
-        # guard against local optima (Reviewer 3). Keep the highest-likelihood fit.
-        inits = [pi_init, *rng.uniform(0.01, 0.99, max(n_inits - 1, 0)).tolist()]
-        best_pi, best_log_likelihood, stale, n_used = pi_init, -np.inf, 0, 0
-        for init in inits:
-            n_used += 1
-            pi = self._run_pi_em(nonzero_count_pmf_pairs, init, max_iter, tol)
-            log_likelihood = self.compute_log_likelihood(pi)
-            if log_likelihood > best_log_likelihood + tol:
-                best_pi, best_log_likelihood, stale = pi, log_likelihood, 0
-            else:
-                stale += 1
-                if stale >= _EM_RESTART_PATIENCE:
-                    break
-
-        self.pi = best_pi
-        self.em_n_inits_used = n_used
-
-    def _run_pi_em(
-        self,
-        nonzero_count_pmf_pairs: list,
-        pi_init: float,
-        max_iter: int,
-        tol: float,
-    ) -> float:
-        """Run one EM trajectory from a single pi_init and return the fitted pi."""
-        pi = pi_init
-        for _it in range(max_iter):
-            z_i = [
-                (pi * pmf.get(c - 1, 0))
-                / (pi * pmf.get(c - 1, 0) + (1 - pi) * pmf.get(c, 0))
-                for c, pmf in nonzero_count_pmf_pairs
-            ]
-            curr_pi = np.mean(z_i)
-            if abs(self.compute_log_likelihood(curr_pi)
-                   - self.compute_log_likelihood(pi)) < tol:
-                break
-            pi = curr_pi
-        return pi
-
-    # TODO @ashuaibi7: implement em w/ pomegranate
-    # https://linear.app/princeton-phd-research/issue/DEV-76
     def estimate_pi_with_em_using_pomegranate(self) -> None:
-        """TODO: Add docstring."""
+        """Raise because the optional pomegranate implementation does not exist."""
         msg = "EM algorithm not implemented yet."
         raise NotImplementedError(msg)

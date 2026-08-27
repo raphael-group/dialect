@@ -1,8 +1,8 @@
-"""TODO: Add docstring."""
+"""Pairwise latent-driver interaction model."""
 
 from __future__ import annotations
 
-import logging
+import math
 
 import numpy as np
 from scipy.optimize import minimize
@@ -11,23 +11,73 @@ from sklearn.metrics import confusion_matrix
 
 from dialect.models.gene import Gene
 
-logger = logging.getLogger(__name__)
+LRT_CONTRACT = "driver-independence-constrained-mle-v1"
+PAIR_FIT_CONTRACT = "deterministic-simplex-coordinate-ascent-v1"
+PAIR_FIT_KKT_TOL = 1e-8
+RHO_CONTRACT = "marshall-olkin-finite-or-degenerate-null-v1"
+UNDEFINED_RHO_LRT_TOL = 1e-8
 
-# Warn when more than this fraction of samples is excluded from the EM.
-_HYPERMUTATOR_DROP_FRACTION = 0.05
-# EM random restarts: stop once this many extra inits in a row fail to improve the
-# log-likelihood, so a well-behaved (often unimodal) fit needs far fewer than n_inits.
-_EM_RESTART_PATIENCE = 3
+_NESTED_LIKELIHOOD_TOL = 1e-8
+_SIMPLEX_TOL = 1e-8
+_LINE_SEARCH_ITERATIONS = 80
+
+
+def compute_marshall_olkin_rho(
+    taus: list | tuple | np.ndarray,
+) -> float | None:
+    """Return a numerically stable Marshall-Olkin correlation for a 2x2 table."""
+    values = np.asarray(taus, dtype=float)
+    if (
+        values.shape != (4,)
+        or not np.all(np.isfinite(values))
+        or np.any(values < 0)
+        or np.any(values > 1)
+        or not np.isclose(values.sum(), 1, atol=_SIMPLEX_TOL)
+    ):
+        msg = "Cannot compute rho from invalid tau simplex weights."
+        raise ValueError(msg)
+    tau_00, tau_01, tau_10, tau_11 = values
+    tau_0x = tau_00 + tau_01
+    tau_1x = tau_10 + tau_11
+    tau_x0 = tau_00 + tau_10
+    tau_x1 = tau_01 + tau_11
+    if any(tau == 0 for tau in (tau_0x, tau_1x, tau_x0, tau_x1)):
+        return None
+
+    # Evaluate an equivalent conditional-probability form. Multiplying all four
+    # marginals first can underflow even when rho itself is representable.
+    log_row_balance = np.log(tau_0x) + np.log(tau_1x)
+    log_column_balance = np.log(tau_x0) + np.log(tau_x1)
+    if log_row_balance <= log_column_balance:
+        scale = np.exp((log_row_balance - log_column_balance) / 2)
+        contrast = (tau_11 / tau_1x) - (tau_01 / tau_0x)
+    else:
+        scale = np.exp((log_column_balance - log_row_balance) / 2)
+        contrast = (tau_11 / tau_x1) - (tau_10 / tau_x0)
+    rho = float(scale * contrast)
+    if not np.isfinite(rho) or abs(rho) > 1 + _SIMPLEX_TOL:
+        msg = "Marshall-Olkin rho is non-finite or outside [-1, 1]."
+        raise ValueError(msg)
+    if rho == 0 and contrast != 0:
+        msg = "Nonzero Marshall-Olkin rho is not representable as a float."
+        raise ValueError(msg)
+    return rho
 
 
 class Interaction:
-    """TODO: Add docstring."""
+    """Joint latent-driver distribution for a pair of mutation features."""
 
     def __init__(self, gene_a: Gene, gene_b: Gene) -> None:
-        """TODO: Add docstring."""
+        """Build an interaction over sample-aligned gene observations."""
         if not isinstance(gene_a, Gene) or not isinstance(gene_b, Gene):
             msg = "Both inputs must be instances of the Gene class."
             raise TypeError(msg)
+        if len(gene_a.samples) != len(gene_b.samples) or not np.array_equal(
+            np.asarray(gene_a.samples),
+            np.asarray(gene_b.samples),
+        ):
+            msg = f"Interaction {gene_a.name}:{gene_b.name} has misaligned samples."
+            raise ValueError(msg)
 
         self.gene_a = gene_a
         self.gene_b = gene_b
@@ -42,126 +92,132 @@ class Interaction:
         self.fishers_me_qval = None
         self.fishers_co_qval = None
 
+        self.fit_algorithm = None
+        self.fit_converged = False
+        self.fit_iterations = 0
+        self.fit_last_log_likelihood_gain = None
+        self.fit_fixed_point_residual = None
+        self.fit_kkt_residual = None
+        # Backward-compatible aliases. New result schemas use the truthful generic
+        # ``fit_*`` metadata because the production optimizer is not EM.
+        self.em_converged = False
+        self.em_iterations = 0
+        self.em_n_inits_used = 0
+        self.em_final_log_likelihood_increment = None
+        self.em_fixed_point_residual = None
+        self.em_kkt_residual = None
+        self.null_log_likelihood = None
+        self.alternative_log_likelihood = None
+        self.likelihood_ratio = None
+        self._component_probabilities_cache = None
+
     def __str__(self) -> str:
-        """TODO: Add docstring."""
+        """Return a compact human-readable summary."""
         taus_info = (
             f"tau_00={self.tau_00:.3e}, tau_01={self.tau_01:.3e}, "
             f"tau_10={self.tau_10:.3e}, tau_11={self.tau_11:.3e}"
             if None not in (self.tau_00, self.tau_01, self.tau_10, self.tau_11)
             else "Tau values not estimated"
         )
-
         pi_a = (
-            f"{self.gene_a.pi:.3e}" if self.gene_a.pi is not None else "Not estimated"
+            f"{self.gene_a.pi:.3e}"
+            if self.gene_a.pi is not None
+            else "Not estimated"
         )
         pi_b = (
-            f"{self.gene_b.pi:.3e}" if self.gene_b.pi is not None else "Not estimated"
+            f"{self.gene_b.pi:.3e}"
+            if self.gene_b.pi is not None
+            else "Not estimated"
         )
-
         cm = self.compute_contingency_table()
-        cm_info = (
-            f"\nContingency Table:\n[[{cm[1, 1]} {cm[1, 0]}]\n [{cm[0, 1]} {cm[0, 0]}]]"
-        )
-
         return (
             f"Interaction: {self.name}\n"
             f"Gene A: {self.gene_a.name} (Pi: {pi_a})\n"
             f"Gene B: {self.gene_b.name} (Pi: {pi_b})\n"
             f"Tau Parameters: {taus_info}\n"
-            f"Contingency Table:{cm_info}"
+            f"Contingency Table:\n[[{cm[1, 1]} {cm[1, 0]}]\n "
+            f"[{cm[0, 1]} {cm[0, 0]}]]"
         )
 
-    # -------------------------------------------------------------------------------- #
-    #                                  UTILITY METHODS                                 #
-    # -------------------------------------------------------------------------------- #
     def compute_contingency_table(self) -> np.ndarray:
-        """TODO: Add docstring."""
-        gene_a_mutations = (self.gene_a.counts > 0).astype(int)
-        gene_b_mutations = (self.gene_b.counts > 0).astype(int)
+        """Return the observed binary mutation contingency table."""
+        gene_a_mutations = (np.asarray(self.gene_a.counts) > 0).astype(int)
+        gene_b_mutations = (np.asarray(self.gene_b.counts) > 0).astype(int)
         return confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[1, 0])
 
     def get_set_of_cooccurring_samples(self) -> list:
-        """TODO: Add docstring."""
-        sample_names = self.gene_a.samples
-        cooccurring_samples = [
-            sample_names[i]
-            for i in range(len(sample_names))
-            if self.gene_a.counts[i] > 0 and self.gene_b.counts[i] > 0
-        ]
-        return sorted(cooccurring_samples)
+        """Return sample names with observed mutations in both features."""
+        return sorted(
+            self.gene_a.samples[index]
+            for index in range(len(self.gene_a.samples))
+            if self.gene_a.counts[index] > 0 and self.gene_b.counts[index] > 0
+        )
 
-    def compute_fisher_pvalues(self) -> tuple(float, float):
-        """TODO: Add docstring."""
+    def compute_fisher_pvalues(self) -> tuple[float, float]:
+        """Return one-sided Fisher p-values for ME and CO."""
         cross_tab = self.compute_contingency_table()
         _, me_pval = fisher_exact(cross_tab, alternative="less")
         _, co_pval = fisher_exact(cross_tab, alternative="greater")
+        return float(me_pval), float(co_pval)
 
-        return me_pval, co_pval
-
-    # -------------------------------------------------------------------------------- #
-    #                            DATA VALIDATION AND LOGGING                           #
-    # -------------------------------------------------------------------------------- #
     def verify_bmr_pmf_and_counts_exist(self) -> None:
-        """TODO: Add docstring."""
-        if self.gene_a.bmr_pmf is None or self.gene_b.bmr_pmf is None:
-            msg = "BMR PMFs are not defined for one or both genes."
-            raise ValueError(msg)
+        """Require both genes to have counts and native BMR support."""
+        self.gene_a.component_probabilities()
+        self.gene_b.component_probabilities()
 
-        if self.gene_a.counts is None or self.gene_b.counts is None:
-            msg = "Counts are not defined for one or both genes."
-            raise ValueError(msg)
-
-    def verify_taus_are_valid(self, taus: list, tol: float = 1e-2) -> None:
-        """TODO: Add docstring."""
-        if not all(0 <= t <= 1 for t in taus) or not np.isclose(
-            sum(taus),
-            1,
-            atol=tol,
+    def verify_taus_are_valid(
+        self,
+        taus: list | tuple | np.ndarray,
+        tol: float = _SIMPLEX_TOL,
+    ) -> None:
+        """Require finite weights on the probability simplex."""
+        values = np.asarray(taus, dtype=float)
+        if (
+            values.shape != (4,)
+            or not np.all(np.isfinite(values))
+            or np.any(values < -tol)
+            or np.any(values > 1 + tol)
+            or not np.isclose(values.sum(), 1, atol=tol)
         ):
-            msg = "Invalid tau parameters. Ensure 0 <= tau_i <= 1 and sum(tau) == 1."
-            raise ValueError(
-                msg,
-            )
-        tau_11 = taus[-1]
-        if tau_11 == 1:
-            msg = "Tau_11 cannot be 1. This leads to log(0) in log-likelihood."
-            raise ValueError(
-                msg,
-            )
+            msg = "Invalid tau parameters: expected four finite simplex weights."
+            raise ValueError(msg)
 
     def verify_pi_values(self, pi_a: float, pi_b: float) -> None:
-        """TODO: Add docstring."""
-        if pi_a is None or pi_b is None:
-            msg = "Driver probabilities are not defined for both genes."
-            raise ValueError(
-                msg,
-            )
+        """Require fitted driver probabilities for both genes."""
+        self.gene_a.verify_pi_is_valid(pi_a)
+        self.gene_b.verify_pi_is_valid(pi_b)
 
-    # -------------------------------------------------------------------------------- #
-    #                         LIKELIHOOD AND METRIC EVALUATION                         #
-    # -------------------------------------------------------------------------------- #
-    def compute_joint_probability(self, tau: float, u: int, v: int) -> np.ndarray:
-        """TODO: Add docstring."""
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, 0)
-
-        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
-        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
-        return np.array(
-            [
-                tau
-                * safe_get(a_pmf, c_a - u, 0)
-                * safe_get(b_pmf, c_b - v, 0)
-                for c_a, c_b, a_pmf, b_pmf in zip(
-                    a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
-                )
-            ],
+    def component_probabilities(self) -> np.ndarray:
+        """Return exact pair-component probabilities in 00, 01, 10, 11 order."""
+        if self._component_probabilities_cache is not None:
+            return self._component_probabilities_cache
+        a_components = self.gene_a.component_probabilities()
+        b_components = self.gene_b.component_probabilities()
+        components = np.column_stack(
+            (
+                a_components[:, 0] * b_components[:, 0],
+                a_components[:, 0] * b_components[:, 1],
+                a_components[:, 1] * b_components[:, 0],
+                a_components[:, 1] * b_components[:, 1],
+            ),
         )
+        unsupported = np.flatnonzero(components.sum(axis=1) == 0)
+        if unsupported.size:
+            index = int(unsupported[0])
+            msg = (
+                f"Unsupported observation for interaction {self.name} at sample "
+                f"{self.gene_a.samples[index]}."
+            )
+            raise ValueError(msg)
+        self._component_probabilities_cache = components
+        return components
+
+    def compute_joint_probability(self, tau: float, u: int, v: int) -> np.ndarray:
+        """Return each observation's weighted ``(D_A=u,D_B=v)`` probability."""
+        if u not in (0, 1) or v not in (0, 1):
+            msg = "Driver states u and v must each be 0 or 1."
+            raise ValueError(msg)
+        return float(tau) * self.component_probabilities()[:, (2 * u) + v]
 
     def compute_total_probability(
         self,
@@ -170,412 +226,485 @@ class Interaction:
         tau_10: float,
         tau_11: float,
     ) -> np.ndarray:
-        """TODO: Add docstring."""
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, 0)
-
-        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
-        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
-        return np.array(
-            [
-                sum(
-                    (
-                        tau_00 * safe_get(a_pmf, c_a, 0) * safe_get(b_pmf, c_b, 0),
-                        tau_01 * safe_get(a_pmf, c_a, 0) * safe_get(b_pmf, c_b - 1, 0),
-                        tau_10 * safe_get(a_pmf, c_a - 1, 0) * safe_get(b_pmf, c_b, 0),
-                        tau_11
-                        * safe_get(a_pmf, c_a - 1, 0)
-                        * safe_get(b_pmf, c_b - 1, 0),
-                    ),
-                )
-                for c_a, c_b, a_pmf, b_pmf in zip(
-                    a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
-                )
-            ],
-        )
-
-    def compute_log_likelihood(self, taus: list) -> float:
-        r"""Compute the log-likelihood for the interaction given \\( \tau \\) params.
-
-        The log-likelihood function is defined as:
-
-        .. math::
-
-            \\ell_C(\\tau) = \\sum_{i=1}^{N} \\log \\Big(
-                \\mathbb{P}(P_i = c_i) \\mathbb{P}(P_i' = c_i') \\tau_{00} +
-                \\mathbb{P}(P_i = c_i) \\mathbb{P}(P_i' = c_i' - 1) \\tau_{01} +
-                \\mathbb{P}(P_i = c_i - 1) \\mathbb{P}(P_i' = c_i') \\tau_{10} +
-                \\mathbb{P}(P_i = c_i - 1) \\mathbb{P}(P_i' = c_i' - 1) \\tau_{11}
-            \\Big)
-
-        where:
-
-        - \\( N \\): Number of samples.
-        - \\( P_i \\) and \\( P_i' \\): Random variables representing passengers.
-        - \\( c_i \\) and \\( c_i' \\): Observed counts of somatic mutations.
-        - \\( \\tau = (\\tau_{00}, \\tau_{01}, \\tau_{10}, \\tau_{11}) \\): Params.
-
-        **Parameters**:
-        :param tau: (tuple) \\( (\\tau_{00}, \\tau_{01}, \\tau_{10}, \\tau_{11}) \\)
-
-        **Returns**:
-        :return: (float) The computed log-likelihood value.
-
-        **Raises**:
-        :raises ValueError: If `bmr_pmf` or `counts` are not defined for either gene,
-            or if `tau` is invalid.
-        """
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get_no_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, min_val)
-
-        # TODO @ashuaibi7: move function to helper module
-        # https://linear.app/princeton-phd-research/issue/DEV-77
-        def safe_get_with_default(pmf: dict, c: int, min_val: float = 1e-100) -> float:
-            if c > max(pmf.keys()):
-                return min_val
-            return pmf.get(c, 0)
-
-        self.verify_bmr_pmf_and_counts_exist()
+        """Return each observation's probability under the four-component mixture."""
+        taus = np.asarray((tau_00, tau_01, tau_10, tau_11), dtype=float)
         self.verify_taus_are_valid(taus)
+        return np.sum(self.component_probabilities() * taus, axis=1)
 
-        a_counts, b_counts = self.gene_a.counts, self.gene_b.counts
-        a_pmfs, b_pmfs = self.gene_a.bmr_pmfs, self.gene_b.bmr_pmfs
-        tau_00, tau_01, tau_10, tau_11 = taus
-        return sum(
-            np.log(
-                safe_get_no_default(a_pmf, c_a)
-                * safe_get_no_default(b_pmf, c_b)
-                * tau_00
-                + safe_get_no_default(a_pmf, c_a)
-                * safe_get_with_default(b_pmf, c_b - 1)
-                * tau_01
-                + safe_get_with_default(a_pmf, c_a - 1)
-                * safe_get_no_default(b_pmf, c_b)
-                * tau_10
-                + safe_get_with_default(a_pmf, c_a - 1)
-                * safe_get_with_default(b_pmf, c_b - 1)
-                * tau_11,
-            )
-            for c_a, c_b, a_pmf, b_pmf in zip(
-                a_counts, b_counts, a_pmfs, b_pmfs, strict=False,
-            )
-        )
-
-    def compute_likelihood_ratio(self, taus: list) -> float:
-        r"""Compute likelihood ratio test (\\( \\lambda_{LR} \\)) w.r.t. the null.
-
-        The likelihood ratio test statistic is defined as:
-
-        .. math::
-
-            \\lambda_{LR} = -2 [ \\ell(\\tau_{\\text{null}}) - \\ell(\\hat{\\tau}) ]
-
-        where:
-
-        - \\( \\ell() \\): Log-likelihood function.
-        - \\( \\tau_{\\text{null}} \\): Null hypothesis of no interaction.
-        - \\( \\hat{\\tau} \\): Estimated values of the \\( \\tau \\) parameters.
-
-        **Returns**:
-        :return: (float) The computed l.r.t. statistic (\\( \\lambda_{LR} \\)).
-        """
-        tau_00, tau_01, tau_10, tau_11 = taus
-        driver_a_marginal = tau_10 + tau_11
-        driver_b_marginal = tau_01 + tau_11
-
-        tau_null = (
-            (1 - driver_a_marginal) * (1 - driver_b_marginal),
-            (1 - driver_a_marginal) * driver_b_marginal,
-            driver_a_marginal * (1 - driver_b_marginal),
-            driver_a_marginal * driver_b_marginal,
-        )
-        return -2 * (
-            self.compute_log_likelihood(tau_null)
-            - self.compute_log_likelihood((tau_00, tau_01, tau_10, tau_11))
-        )
-
-    def compute_log_odds_ratio(self, taus: list) -> float:
-        r"""Compute the log odds ratio for the interaction based on the \\( \tau \\).
-
-        The log odds ratio is calculated as:
-
-        .. math::
-
-            \text{Log Odds Ratio} = \\log \\left(
-                \\frac{\\tau_{01} \\cdot \\tau_{10}}{\\tau_{00} \\cdot \\tau_{11}}
-            \\right)
-
-        **Returns**:
-        :return: (float) The computed log odds ratio.
-
-        **Raises**:
-        :raises ValueError: If \\( \\tau \\) parameters are invalid.
-        """
+    def compute_log_likelihood(self, taus: list | tuple | np.ndarray) -> float:
+        """Compute the exact pair log-likelihood without pseudo-probability floors."""
         self.verify_taus_are_valid(taus)
-        tau_00, tau_01, tau_10, tau_11 = taus
+        probabilities = np.sum(
+            self.component_probabilities() * np.asarray(taus, dtype=float),
+            axis=1,
+        )
+        if np.any(probabilities <= 0):
+            return -np.inf
+        return float(math.fsum(np.log(probabilities)))
 
+    def compute_independence_taus(self) -> tuple[float, float, float, float]:
+        """Return the constrained-null weights from the marginal MLEs."""
+        if not self.gene_a.mle_converged:
+            self.gene_a.estimate_pi_with_mle()
+        if not self.gene_b.mle_converged:
+            self.gene_b.estimate_pi_with_mle()
+        pi_a, pi_b = self.gene_a.pi, self.gene_b.pi
+        self.verify_pi_values(pi_a, pi_b)
+        return (
+            (1 - pi_a) * (1 - pi_b),
+            (1 - pi_a) * pi_b,
+            pi_a * (1 - pi_b),
+            pi_a * pi_b,
+        )
+
+    def compute_likelihood_ratio(
+        self,
+        taus: list | tuple | np.ndarray,
+    ) -> float:
+        """Compute the profile LRT against fitted driver independence."""
+        alternative_log_likelihood = self.compute_log_likelihood(taus)
+        null_log_likelihood = self.compute_log_likelihood(
+            self.compute_independence_taus(),
+        )
+        if not np.isfinite(alternative_log_likelihood) or not np.isfinite(
+            null_log_likelihood,
+        ):
+            msg = f"Interaction {self.name} has a non-finite fitted likelihood."
+            raise ValueError(msg)
+
+        likelihood_ratio = 2 * (alternative_log_likelihood - null_log_likelihood)
+        if likelihood_ratio < -_NESTED_LIKELIHOOD_TOL:
+            msg = (
+                f"Interaction {self.name} violates nestedness: alternative "
+                f"log-likelihood {alternative_log_likelihood:.12g} is below null "
+                f"{null_log_likelihood:.12g}."
+            )
+            raise ValueError(msg)
+
+        self.alternative_log_likelihood = alternative_log_likelihood
+        self.null_log_likelihood = null_log_likelihood
+        self.likelihood_ratio = max(float(likelihood_ratio), 0.0)
+        return self.likelihood_ratio
+
+    def compute_log_odds_ratio(
+        self,
+        taus: list | tuple | np.ndarray,
+    ) -> float | None:
+        """Return the latent-state log odds ratio."""
+        self.verify_taus_are_valid(taus)
+        tau_00, tau_01, tau_10, tau_11 = np.asarray(taus, dtype=float)
         if tau_01 * tau_10 == 0 or tau_00 * tau_11 == 0:
             return None
+        return float(np.log((tau_01 * tau_10) / (tau_00 * tau_11)))
 
-        return np.log((tau_01 * tau_10) / (tau_00 * tau_11))
-
-    def compute_wald_statistic(self, taus: list) -> float:
-        r"""Compute the Wald statistic for the interaction.
-
-        The Wald statistic is calculated as:
-
-        .. math::
-
-            W = \\frac{\\text{Log Odds Ratio}}{\\text{Standard Error}}
-
-        where the standard error is defined as:
-
-        .. math::
-
-            \\text{Standard Error} = \\sqrt{
-                \\frac{1}{\\tau_{01}} +
-                \\frac{1}{\\tau_{10}} +
-                \\frac{1}{\\tau_{00}} +
-                \\frac{1}{\\tau_{11}}
-            }
-
-        **Returns**:
-        :return: (float or None) The computed Wald statistic, or None.
-        """
-        self.verify_taus_are_valid(taus)
+    def compute_wald_statistic(
+        self,
+        taus: list | tuple | np.ndarray,
+    ) -> float | None:
+        """Return the historical Wald statistic for the fitted latent table."""
         log_odds_ratio = self.compute_log_odds_ratio(taus)
         if log_odds_ratio is None:
             return None
-
-        try:
-            std_err = np.sqrt(
-                (1 / self.tau_01)
-                + (1 / self.tau_10)
-                + (1 / self.tau_00)
-                + (1 / self.tau_11),
-            )
-        except ZeroDivisionError:
+        tau_00, tau_01, tau_10, tau_11 = np.asarray(taus, dtype=float)
+        if any(tau == 0 for tau in (tau_00, tau_01, tau_10, tau_11)):
             return None
-
-        return log_odds_ratio / std_err
-
-    def compute_rho(self, taus: list) -> float:
-        r"""Compute the interaction measure \\( \rho \\) for the given \\( \tau \\).
-
-        The interaction measure \\( \rho \\) is calculated as:
-
-        .. math::
-
-            \\rho = \\frac{\\tau_{11} \\cdot \\tau_{00} - \\tau_{01} \\cdot \\tau_{10}}
-            {\\sqrt{\\tau_{0*} \\cdot \\tau_{1*} \\cdot \\tau_{*0} \\cdot \\tau_{*1}}}
-
-        where:
-
-        - \\( \\tau_{0*} = \\tau_{00} + \\tau_{01} \\): Marginal probability for
-            no driver mutation in gene \\( A \\).
-        - \\( \\tau_{1*} = \\tau_{10} + \\tau_{11} \\): Marginal probability for
-            a driver mutation in gene \\( A \\).
-        - \\( \\tau_{*0} = \\tau_{00} + \\tau_{10} \\): Marginal probability for
-            no driver mutation in gene \\( B \\).
-        - \\( \\tau_{*1} = \\tau_{01} + \\tau_{11} \\): Marginal probability for
-            a driver mutation in gene \\( B \\).
-
-        **Returns**:
-        :return: (float or None) The computed value of \\( \\rho \\), or None.
-        """
-        self.verify_taus_are_valid(taus)
-
-        tau_0x = self.tau_00 + self.tau_01
-        tau_1x = self.tau_10 + self.tau_11
-        tau_x0 = self.tau_00 + self.tau_10
-        tau_x1 = self.tau_01 + self.tau_11
-
-        if any(t == 0 for t in [tau_0x, tau_1x, tau_x0, tau_x1]):
-            return None
-
-        return (self.tau_11 * self.tau_00 - self.tau_01 * self.tau_10) / (
-            np.sqrt(tau_0x * tau_1x * tau_x0 * tau_x1)
+        standard_error = np.sqrt(
+            (1 / tau_00) + (1 / tau_01) + (1 / tau_10) + (1 / tau_11),
         )
+        return float(log_odds_ratio / standard_error)
 
-    # -------------------------------------------------------------------------------- #
-    #                           PARAMETER ESTIMATION METHODS                           #
-    # -------------------------------------------------------------------------------- #
+    def compute_rho(self, taus: list | tuple | np.ndarray) -> float | None:
+        """Return the Marshall-Olkin correlation of the latent driver states."""
+        self.verify_taus_are_valid(taus)
+        return compute_marshall_olkin_rho(taus)
+
+    def compute_rho_for_direction(
+        self,
+        taus: list | tuple | np.ndarray,
+        likelihood_ratio: float,
+    ) -> float | None:
+        """Return rho while forbidding an undefined direction for a positive LRT."""
+        if not np.isfinite(likelihood_ratio) or likelihood_ratio < 0:
+            msg = f"Interaction {self.name} has an invalid pair likelihood ratio."
+            raise ValueError(msg)
+        rho = self.compute_rho(taus)
+        if rho is None and likelihood_ratio > UNDEFINED_RHO_LRT_TOL:
+            msg = (
+                f"Interaction {self.name} has undefined rho with positive "
+                f"likelihood ratio {likelihood_ratio:.12g}."
+            )
+            raise ValueError(msg)
+        return rho
+
     def estimate_tau_with_optimization_using_scipy(
         self,
         tau_init: list | None = None,
-        alpha: float = 1e-13,
+        alpha: float = 0.0,
     ) -> None:
-        """TODO: Add docstring."""
-        # TODO @ashuaibi7: resolve issues with this method
-        # https://linear.app/princeton-phd-research/issue/DEV-78
-        if tau_init is None:
-            tau_init = [0.25, 0.25, 0.25, 0.25]
-
-        self.verify_bmr_pmf_and_counts_exist()
-
-        def negative_log_likelihood(taus: list) -> float:
-            return -self.compute_log_likelihood(taus)
-
-        bounds = 4 * [(alpha, 1 - alpha)]
-        constraints = {"type": "eq", "fun": lambda tau: sum(tau) - 1}
-        result = minimize(
-            negative_log_likelihood,
-            x0=tau_init,
-            bounds=bounds,
-            constraints=constraints,
-            method="SLSQP",
-        )
-        if not result.success:
-            msg = f"Optimization failed: {result.message}"
+        """Fit the concave alternative with deterministic constrained optimization."""
+        del alpha
+        null_taus = np.asarray(self.compute_independence_taus(), dtype=float)
+        if tau_init is not None and not np.allclose(
+            np.asarray(tau_init, dtype=float),
+            null_taus,
+            atol=_SIMPLEX_TOL,
+        ):
+            msg = (
+                "The profile-LRT alternative must initialize at the independence "
+                "null."
+            )
             raise ValueError(msg)
 
+        result = minimize(
+            lambda taus: -self.compute_log_likelihood(taus),
+            x0=null_taus,
+            bounds=[(0.0, 1.0)] * 4,
+            constraints={"type": "eq", "fun": lambda taus: taus.sum() - 1},
+            method="SLSQP",
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        if not result.success:
+            msg = f"Alternative optimization failed for {self.name}: {result.message}"
+            raise ValueError(msg)
+        self.verify_taus_are_valid(result.x)
         self.tau_00, self.tau_01, self.tau_10, self.tau_11 = result.x
+        components = self.component_probabilities()
+        fixed_point_residual = self._compute_fixed_point_residual(
+            result.x,
+            components,
+        )
+        kkt_residual = self._compute_kkt_residual(result.x, components)
+        self._record_fit(
+            algorithm="scipy-slsqp-v1",
+            iterations=int(result.nit),
+            last_log_likelihood_gain=0.0,
+            fixed_point_residual=fixed_point_residual,
+            kkt_residual=kkt_residual,
+        )
+        self.compute_likelihood_ratio(result.x)
+        self._component_probabilities_cache = None
+
+    def estimate_tau_with_coordinate_ascent(
+        self,
+        *,
+        max_iter: int = 1000,
+        kkt_tol: float = PAIR_FIT_KKT_TOL,
+        tau_init: list | tuple | np.ndarray | None = None,
+    ) -> None:
+        """Fit the concave alternative by exact simplex coordinate ascent.
+
+        The fit starts at the exact constrained independence null. At each step it
+        transfers mass from the active cell with the smallest gradient to the cell
+        with the largest gradient. The one-dimensional concave subproblem is solved
+        deterministically by a boundary check plus derivative bisection. Convergence
+        requires the global simplex KKT certificate, which is sufficient for this
+        concave mixture-weight likelihood.
+        """
+        if max_iter <= 0:
+            msg = "Coordinate-ascent max_iter must be positive."
+            raise ValueError(msg)
+        if not np.isfinite(kkt_tol) or kkt_tol <= 0:
+            msg = "Coordinate-ascent kkt_tol must be finite and positive."
+            raise ValueError(msg)
+
+        null_taus = np.asarray(self.compute_independence_taus(), dtype=float)
+        if tau_init is not None and not np.array_equal(
+            np.asarray(tau_init, dtype=float),
+            null_taus,
+        ):
+            msg = (
+                "The profile-LRT alternative must initialize at the exact "
+                "independence null."
+            )
+            raise ValueError(msg)
+
+        (
+            fitted_taus,
+            iterations,
+            last_gain,
+            fixed_point_residual,
+            kkt_residual,
+        ) = self._run_tau_coordinate_ascent(null_taus, max_iter, kkt_tol)
+        self.tau_00, self.tau_01, self.tau_10, self.tau_11 = fitted_taus
+        self._record_fit(
+            algorithm=PAIR_FIT_CONTRACT,
+            iterations=iterations,
+            last_log_likelihood_gain=last_gain,
+            fixed_point_residual=fixed_point_residual,
+            kkt_residual=kkt_residual,
+        )
+        self.compute_likelihood_ratio(fitted_taus)
+        self._component_probabilities_cache = None
 
     def estimate_tau_with_em_from_scratch(
         self,
         max_iter: int = 1000,
-        tol: float = 1e-3,
+        tol: float = PAIR_FIT_KKT_TOL,
         tau_init: list | None = None,
-        n_inits: int = 10,
+        n_inits: int = 1,
         seed: int = 0,
     ) -> None:
-        r"""Estimate the tau parameters for interaction using EM algorithm.
+        """Backward-compatible entry point for the deterministic production fit."""
+        del n_inits, seed
+        self.estimate_tau_with_coordinate_ascent(
+            max_iter=max_iter,
+            kkt_tol=tol,
+            tau_init=tau_init,
+        )
 
-        This method iteratively updates the tau parameters,
-        \\( \tau = (\tau_{00}, \tau_{01}, \tau_{10}, \tau_{11}) \\),
-        to maximize the likelihood of the observed mutation count data for interaction.
+    def _run_tau_coordinate_ascent(
+        self,
+        tau_init: np.ndarray,
+        max_iter: int,
+        kkt_tol: float,
+    ) -> tuple[np.ndarray, int, float, float, float]:
+        """Return a globally certified simplex fit and optimization diagnostics."""
+        components = self.component_probabilities()
+        taus = np.asarray(tau_init, dtype=float)
+        self.verify_taus_are_valid(taus)
+        if not np.isfinite(self.compute_log_likelihood(taus)):
+            msg = f"Interaction {self.name} has a non-finite exact null likelihood."
+            raise ValueError(msg)
 
-        **Algorithm Steps**:
-
-        1. **E-Step**:
-           At iteration \\( t \\), given the estimated driver mutation probabilities
-           \\( \tau^{(t)} = (\tau_{00}^{(t)}, \tau_{01}^{(t)},
-                                \tau_{10}^{(t)}, \tau_{11}^{(t)}) \\),
-           compute the responsibilities \\( z_{i,uv}^{(t)} \\) for each pair
-           \\( (u,v) \\in \\{0,1\\}^2 \\) and sample \\( i = 1, \\dots, N \\) as:
-
-           .. math::
-
-               z_{i,uv}^{(t)} = \\frac{\\tau_{uv}^{(t)}
-                                            \\cdot \\mathbb{P}(P_i = c_i - u)
-                                            \\cdot \\mathbb{P}(P_i' = c_i' - v)}
-               {\\sum_{(x,y) \\in \\{0,1\\}^2} \\left(
-                        \\tau_{xy}^{(t)}
-                        \\cdot \\mathbb{P}(P_i = c_i - x)
-                        \\cdot \\mathbb{P}(P_i' = c_i' - y)
-                \\right)}
-
-           where \\( P_i \\) and \\( P_i' \\) are passenger mutation probabilities.
-           and \\( c_i, c_i' \\) are the observed mutation counts.
-
-        2. **M-Step**:
-           Given the responsibilities \\( \\bm{z}_i^{(t)} = (z_{i,00}^{(t)},
-                                                                z_{i,01}^{(t)},
-                                                                z_{i,10}^{(t)},
-                                                                z_{i,11}^{(t)}) \\),
-           update the tau parameters at iteration \\( t+1 \\) as:
-
-           .. math::
-
-               \\tau_{uv}^{(t+1)} = \\frac{1}{N} \\sum_{i=1}^{N} z_{i,uv}^{(t)}
-
-           for each pair \\( (u,v) \\in \\{0,1\\}^2 \\).
-
-        **Parameters**:
-        :param max_iter: (int) Maximum number of iterations for the EM algorithm.
-        :param tol: (float) Convergence threshold for log-likelihood improvement.
-        :param tau_init: (list of float) Initial guesses for the tau parameters.
-
-        **Returns**:
-        :return: (tuple) The estimated values of tau parameters.
-        """
-        if tau_init is None:
-            tau_init = [0.25, 0.25, 0.25, 0.25]
-
-        self.verify_bmr_pmf_and_counts_exist()
-
-        # Samples with no background support for either gene yield 0/0 (NaN)
-        # responsibilities that get floored below, effectively excluding them --
-        # typically hypermutators under a cohort-level BMR. Surface it rather than
-        # dropping silently (see the hypermutator-handling workstream).
-        init_total = np.asarray(self.compute_total_probability(*tau_init))
-        n_degenerate = int(np.sum(init_total == 0))
-        n_samples = len(self.gene_a.counts)
-        if n_degenerate and n_degenerate / n_samples > _HYPERMUTATOR_DROP_FRACTION:
-            logger.warning(
-                "Interaction %s: %d/%d samples have no background support and are "
-                "effectively excluded from EM (likely hypermutators); tau may be "
-                "biased.",
-                self.name,
-                n_degenerate,
-                n_samples,
-            )
-
-        rng = np.random.default_rng(seed)
-        # init #0 is the informed symmetric default; the rest are Dirichlet random
-        # restarts that guard against local optima (Reviewer 3). Keep the best fit.
-        inits = [
-            list(tau_init),
-            *(rng.dirichlet([1, 1, 1, 1]).tolist() for _ in range(max(n_inits - 1, 0))),
-        ]
-        best_tau = tuple(tau_init)
-        best_log_likelihood, stale, n_used = -np.inf, 0, 0
-        for init in inits:
-            n_used += 1
-            tau = self._run_tau_em(init, max_iter, tol)
-            log_likelihood = self.compute_log_likelihood(list(tau))
-            if log_likelihood > best_log_likelihood + tol:
-                best_tau, best_log_likelihood, stale = tau, log_likelihood, 0
-            else:
-                stale += 1
-                if stale >= _EM_RESTART_PATIENCE:
-                    break
-
-        self.tau_00, self.tau_01, self.tau_10, self.tau_11 = best_tau
-        self.em_n_inits_used = n_used
-
-    def _run_tau_em(self, tau_init: list, max_iter: int, tol: float) -> tuple:
-        """Run one EM trajectory from a single tau_init and return the fitted taus."""
-        tau_00, tau_01, tau_10, tau_11 = tau_init
-        for _ in range(max_iter):
-            total_probabilities = self.compute_total_probability(
-                tau_00, tau_01, tau_10, tau_11,
-            )
-            z_i_00 = self.compute_joint_probability(tau_00, 0, 0) / total_probabilities
-            z_i_01 = self.compute_joint_probability(tau_01, 0, 1) / total_probabilities
-            z_i_10 = self.compute_joint_probability(tau_10, 1, 0) / total_probabilities
-            z_i_11 = self.compute_joint_probability(tau_11, 1, 1) / total_probabilities
-            # TODO @ashuaibi7: standardize handling of nan values
-            # https://linear.app/princeton-phd-research/issue/DEV-79
-            curr_tau_00 = np.mean(np.nan_to_num(z_i_00, nan=2e-100))
-            curr_tau_01 = np.mean(np.nan_to_num(z_i_01, nan=2e-100))
-            curr_tau_10 = np.mean(np.nan_to_num(z_i_10, nan=2e-100))
-            curr_tau_11 = np.mean(np.nan_to_num(z_i_11, nan=2e-100))
-            if abs(
-                self.compute_log_likelihood(
-                    (curr_tau_00, curr_tau_01, curr_tau_10, curr_tau_11),
+        last_gain = 0.0
+        for iteration in range(max_iter + 1):
+            kkt_residual = self._compute_kkt_residual(taus, components)
+            if kkt_residual <= kkt_tol:
+                fixed_point_residual = self._compute_fixed_point_residual(
+                    taus,
+                    components,
                 )
-                - self.compute_log_likelihood((tau_00, tau_01, tau_10, tau_11)),
-            ) < tol:
+                if fixed_point_residual > kkt_tol:
+                    msg = (
+                        f"Interaction {self.name} passed KKT but failed its mixture "
+                        "fixed-point certificate."
+                    )
+                    raise ValueError(msg)
+                return (
+                    taus,
+                    iteration,
+                    last_gain,
+                    fixed_point_residual,
+                    kkt_residual,
+                )
+            if iteration == max_iter:
                 break
-            tau_00, tau_01, tau_10, tau_11 = (
-                curr_tau_00, curr_tau_01, curr_tau_10, curr_tau_11,
-            )
-        return tau_00, tau_01, tau_10, tau_11
 
-    # TODO @ashuaibi7: implement em w/ pomegranate
-    # https://linear.app/princeton-phd-research/issue/DEV-76
+            probabilities = np.sum(components * taus, axis=1)
+            normalized_gradients = self._normalized_gradients(
+                components,
+                probabilities,
+            )
+            target = int(np.argmax(normalized_gradients))
+            active = np.flatnonzero(taus > 0)
+            if not active.size:
+                msg = f"Interaction {self.name} has no active simplex cell."
+                raise ValueError(msg)
+            donor = int(active[np.argmin(normalized_gradients[active])])
+            if target == donor:
+                msg = (
+                    f"Interaction {self.name} has a KKT violation without a "
+                    "feasible ascent coordinate."
+                )
+                raise ValueError(msg)
+
+            candidate, gain = self._maximize_mass_transfer(
+                taus,
+                components,
+                probabilities,
+                target=target,
+                donor=donor,
+            )
+            if np.array_equal(candidate, taus):
+                msg = (
+                    f"Interaction {self.name} coordinate ascent stalled before "
+                    "satisfying KKT."
+                )
+                raise ValueError(msg)
+            taus = candidate
+            last_gain = gain
+
+        msg = (
+            f"Interaction {self.name} failed to converge within {max_iter} "
+            "coordinate-ascent iterations."
+        )
+        raise ValueError(msg)
+
+    def _maximize_mass_transfer(
+        self,
+        taus: np.ndarray,
+        components: np.ndarray,
+        probabilities: np.ndarray,
+        *,
+        target: int,
+        donor: int,
+    ) -> tuple[np.ndarray, float]:
+        """Maximize and certify one feasible target-minus-donor mass transfer."""
+        upper = float(taus[donor])
+        if upper <= 0:
+            msg = f"Interaction {self.name} selected an inactive mass donor."
+            raise ValueError(msg)
+        delta = components[:, target] - components[:, donor]
+        derivative_at_zero = self._mass_transfer_derivative(
+            probabilities,
+            delta,
+            0.0,
+        )
+        if not np.isfinite(derivative_at_zero) or derivative_at_zero <= 0:
+            msg = f"Interaction {self.name} selected a non-ascent coordinate."
+            raise ValueError(msg)
+
+        derivative_at_upper = self._mass_transfer_derivative(
+            probabilities,
+            delta,
+            upper,
+        )
+        if derivative_at_upper >= 0:
+            transfer = upper
+        else:
+            lower, upper_bound = 0.0, upper
+            for _ in range(_LINE_SEARCH_ITERATIONS):
+                midpoint = (lower + upper_bound) / 2
+                derivative = self._mass_transfer_derivative(
+                    probabilities,
+                    delta,
+                    midpoint,
+                )
+                if derivative > 0:
+                    lower = midpoint
+                else:
+                    upper_bound = midpoint
+            # The lower bracket retains a positive directional derivative. Using
+            # its midpoint with the nonpositive bracket can step microscopically
+            # past the maximizer after floating-point rounding.
+            transfer = lower
+
+        for _ in range(_LINE_SEARCH_ITERATIONS + 1):
+            candidate = taus.copy()
+            candidate[target] += transfer
+            candidate[donor] -= transfer
+            if transfer == upper:
+                candidate[donor] = 0.0
+            gain = self._certify_mass_transfer_candidate(
+                taus,
+                candidate,
+                components,
+                probabilities,
+            )
+            if gain is not None:
+                return candidate, gain
+            transfer /= 2
+
+        msg = (
+            f"Interaction {self.name} could not represent a certified monotone "
+            "coordinate-ascent step."
+        )
+        raise ValueError(msg)
+
+    def _certify_mass_transfer_candidate(
+        self,
+        taus: np.ndarray,
+        candidate: np.ndarray,
+        components: np.ndarray,
+        probabilities: np.ndarray,
+    ) -> float | None:
+        """Return a candidate's nonnegative direct LL gain when certified."""
+        if np.array_equal(candidate, taus):
+            return None
+        self.verify_taus_are_valid(candidate)
+        changes = candidate - taus
+        probability_changes = np.sum(components * changes, axis=1)
+        probability_ratios = probability_changes / probabilities
+        if np.any(probability_ratios <= -1):
+            return None
+        gain = float(math.fsum(np.log1p(probability_ratios)))
+        if not np.isfinite(gain) or gain < 0:
+            return None
+        return gain
+
+    @staticmethod
+    def _mass_transfer_derivative(
+        probabilities: np.ndarray,
+        delta: np.ndarray,
+        transfer: float,
+    ) -> float:
+        """Return the derivative along one target-minus-donor simplex edge."""
+        transferred_probabilities = probabilities + (transfer * delta)
+        if np.any(transferred_probabilities <= 0):
+            return -np.inf
+        derivative = np.sum(delta / transferred_probabilities)
+        return float(derivative)
+
+    @staticmethod
+    def _normalized_gradients(
+        components: np.ndarray,
+        probabilities: np.ndarray,
+    ) -> np.ndarray:
+        """Return likelihood gradients normalized by the sample count."""
+        if np.any(probabilities <= 0):
+            msg = "Cannot evaluate mixture gradients at zero observation probability."
+            raise ValueError(msg)
+        gradients = np.sum(components / probabilities[:, None], axis=0)
+        normalized = gradients / len(probabilities)
+        if not np.all(np.isfinite(normalized)):
+            msg = "Mixture gradient is non-finite."
+            raise ValueError(msg)
+        return normalized
+
+    @classmethod
+    def _compute_fixed_point_residual(
+        cls,
+        taus: np.ndarray,
+        components: np.ndarray,
+    ) -> float:
+        """Return the residual of the mixture-weight multiplicative fixed point."""
+        probabilities = np.sum(components * taus, axis=1)
+        normalized_gradients = cls._normalized_gradients(components, probabilities)
+        updated = taus * normalized_gradients
+        return float(np.max(np.abs(updated - taus)))
+
+    @classmethod
+    def _compute_kkt_residual(cls, taus: np.ndarray, components: np.ndarray) -> float:
+        """Return the normalized simplex KKT residual for the mixture weights."""
+        probabilities = np.sum(components * taus, axis=1)
+        normalized_gradients = cls._normalized_gradients(components, probabilities)
+        active = taus > 0
+        active_residual = (
+            np.max(np.abs(normalized_gradients[active] - 1))
+            if np.any(active)
+            else 0.0
+        )
+        inactive_residual = (
+            np.max(np.maximum(normalized_gradients[~active] - 1, 0))
+            if np.any(~active)
+            else 0.0
+        )
+        return float(max(active_residual, inactive_residual))
+
+    def _record_fit(
+        self,
+        *,
+        algorithm: str,
+        iterations: int,
+        last_log_likelihood_gain: float,
+        fixed_point_residual: float,
+        kkt_residual: float,
+    ) -> None:
+        """Record generic fit metadata and maintain legacy attribute aliases."""
+        self.fit_algorithm = algorithm
+        self.fit_converged = True
+        self.fit_iterations = iterations
+        self.fit_last_log_likelihood_gain = last_log_likelihood_gain
+        self.fit_fixed_point_residual = fixed_point_residual
+        self.fit_kkt_residual = kkt_residual
+        self.em_converged = True
+        self.em_iterations = iterations
+        self.em_n_inits_used = 1
+        self.em_final_log_likelihood_increment = last_log_likelihood_gain
+        self.em_fixed_point_residual = fixed_point_residual
+        self.em_kkt_residual = kkt_residual
+
     def estimate_tau_with_em_using_pomegranate(self) -> None:
-        """TODO: Add docstring."""
+        """Raise because the optional pomegranate implementation does not exist."""
         msg = "Method is not yet implemented."
         raise NotImplementedError(msg)

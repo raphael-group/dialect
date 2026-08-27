@@ -33,6 +33,7 @@ dist/
 /output/
 /figures/
 /tables/
+/tmp/
 external/CBaSE/auxiliary
 external/DISCOVER
 external/DIGDriver/
