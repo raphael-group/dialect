@@ -7,8 +7,8 @@ each ``*_SIGNIFICANCE_THRESHOLDS`` maps a method to ``(q/p-value column, cutoff)
 ME_METHOD_RANKING_CRITERIA = {
     "DIALECT (Rho)": ("Rho", "ascending"),
     "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
-    "DIALECT (LOR)": ("Log Odds Ratio", "descending"),
-    "DIALECT (Wald)": ("Wald Statistic", "descending"),
+    "DIALECT (LOR)": ("Log Odds Ratio", "ascending"),
+    "DIALECT (Wald)": ("Wald Statistic", "ascending"),
     "DISCOVER": ("Discover ME P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's ME P-Val", "ascending"),
     "MEGSA": ("MEGSA S-Score (LRT)", "descending"),
@@ -18,8 +18,8 @@ ME_METHOD_RANKING_CRITERIA = {
 CO_METHOD_RANKING_CRITERIA = {
     "DIALECT (Rho)": ("Rho", "descending"),
     "DIALECT (LRT)": ("Likelihood Ratio", "descending"),
-    "DIALECT (LOR)": ("Log Odds Ratio", "ascending"),
-    "DIALECT (Wald)": ("Wald Statistic", "ascending"),
+    "DIALECT (LOR)": ("Log Odds Ratio", "descending"),
+    "DIALECT (Wald)": ("Wald Statistic", "descending"),
     "DISCOVER": ("Discover CO P-Val", "ascending"),
     "Fisher's Exact Test": ("Fisher's CO P-Val", "ascending"),
     "WeSCO": ("WeSCO P-Val", "ascending"),

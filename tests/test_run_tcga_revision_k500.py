@@ -180,6 +180,9 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
     assert contract["pair_policy"]["row_count"] == 2
     assert contract["pair_policy"]["same_base_pairs_excluded"] == 1
     assert contract["samples"]["matched_samples"] == 4
+    assert contract["samples"]["extra_mutsig_samples"] == 0
+    assert contract["samples"]["exact_order_match"]
+    assert contract["samples"]["contract"] == runner.SAMPLE_AXIS_CONTRACT
     assert contract["samples"]["cohort_mean_fallback_samples"] == 0
     assert contract["feature_policy"]["mutsig_cbase_feature_fallback"] is False
     assert contract["mutsig_pmf_contract"]["selected_observed_count_max"] == 1
@@ -189,6 +192,42 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
         support = contract["observed_count_support_audit"][bmr]
         assert support["zero_support_feature_samples"] == 0
         assert support["pairs"]["full_sample_support"] == 2
+
+
+def test_cohort_contract_rejects_extra_or_reordered_mutsig_samples(tmp_path):
+    paths = _write_inputs(tmp_path)
+    mutsig_dir = paths.mutsig_root / "CHOL"
+    patients = ["s1", "s2", "s3", "s4", "s5"]
+    (mutsig_dir / "persample_patients.txt").write_text(
+        "\n".join(patients) + "\n",
+        encoding="utf-8",
+    )
+    (mutsig_dir / "persample_meta.txt").write_text(
+        "ng\t3\nnp\t5\nneff\t2\n",
+        encoding="utf-8",
+    )
+    np.full((3, 5, 2), 0.1, dtype="<f4").ravel(order="F").tofile(
+        mutsig_dir / "persample_lambda.f32",
+    )
+
+    with pytest.raises(ValueError, match="exactly equal"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    patients = ["s2", "s1", "s3", "s4"]
+    (mutsig_dir / "persample_patients.txt").write_text(
+        "\n".join(patients) + "\n",
+        encoding="utf-8",
+    )
+    (mutsig_dir / "persample_meta.txt").write_text(
+        "ng\t3\nnp\t4\nneff\t2\n",
+        encoding="utf-8",
+    )
+    np.full((3, 4, 2), 0.1, dtype="<f4").ravel(order="F").tofile(
+        mutsig_dir / "persample_lambda.f32",
+    )
+
+    with pytest.raises(ValueError, match="same_set=True"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
 
 
 def test_full_support_universe_skips_unsupported_high_count_feature(tmp_path):
@@ -295,6 +334,29 @@ def test_rho_contract_and_tolerance_are_hard_launch_gates(monkeypatch):
         runner._require_corrected_lrt()  # noqa: SLF001
 
 
+def test_output_semantic_contracts_are_hard_launch_gates(monkeypatch):
+    monkeypatch.setattr(
+        runner.interaction_module,
+        "CONTINGENCY_TABLE_CONTRACT",
+        "wrong-contingency-contract",
+    )
+    with pytest.raises(RuntimeError, match="CONTINGENCY_TABLE_CONTRACT"):
+        runner._require_corrected_lrt()  # noqa: SLF001
+
+    monkeypatch.setattr(
+        runner.interaction_module,
+        "CONTINGENCY_TABLE_CONTRACT",
+        runner.REQUIRED_CONTINGENCY_TABLE_CONTRACT,
+    )
+    monkeypatch.setattr(
+        runner.interaction_module,
+        "LOG_ODDS_RATIO_CONTRACT",
+        "wrong-log-odds-contract",
+    )
+    with pytest.raises(RuntimeError, match="LOG_ODDS_RATIO_CONTRACT"):
+        runner._require_corrected_lrt()  # noqa: SLF001
+
+
 def test_pairwise_rho_validation_is_fail_closed():
     pair = ("A_M", "B_M")
     independent_taus = [0.25, 0.25, 0.25, 0.25]
@@ -389,6 +451,21 @@ def test_task_completion_is_atomic_validated_and_resumable(tmp_path, monkeypatch
     assert usage["peak_rss"]["source"] == (
         "resource.getrusage(resource.RUSAGE_SELF).ru_maxrss"
     )
+    assert manifest["sample_axis_contract"] == runner.SAMPLE_AXIS_CONTRACT
+    assert (
+        manifest["contingency_table_contract"]
+        == runner.REQUIRED_CONTINGENCY_TABLE_CONTRACT
+    )
+    pairwise = pd.read_csv(final_dir / "pairwise_interaction_results.csv")
+    asymmetric = pairwise.loc[
+        (pairwise["Gene A"] == "A_N") & (pairwise["Gene B"] == "B_M")
+    ].iloc[0]
+    assert [
+        asymmetric["_00_"],
+        asymmetric["_10_"],
+        asymmetric["_01_"],
+        asymmetric["_11_"],
+    ] == [1, 1, 0, 2]
     manifest["rho_contract"] = "wrong-rho-contract"
     manifest_path = final_dir / "task_manifest.json"
     manifest_path.write_text(runner._canonical_json(manifest).decode() + "\n")  # noqa: SLF001

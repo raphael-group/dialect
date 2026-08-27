@@ -47,7 +47,7 @@ def _dialect_frame() -> pd.DataFrame:
             (tau00 + tau01) * (tau10 + tau11) * (tau00 + tau10) * (tau01 + tau11)
         ) ** 0.5
         rho = (tau11 * tau00 - tau01 * tau10) / denominator
-        log_odds = math.log((tau01 * tau10) / (tau00 * tau11))
+        log_odds = math.log((tau00 * tau11) / (tau01 * tau10))
         wald = log_odds / math.sqrt(
             (1 / tau01) + (1 / tau10) + (1 / tau00) + (1 / tau11),
         )

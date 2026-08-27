@@ -7,6 +7,8 @@ import pytest
 
 from dialect.models.gene import Gene
 from dialect.models.interaction import (
+    CONTINGENCY_TABLE_CONTRACT,
+    LOG_ODDS_RATIO_CONTRACT,
     LRT_CONTRACT,
     PAIR_FIT_CONTRACT,
     PAIR_FIT_KKT_TOL,
@@ -121,6 +123,47 @@ def make_fitted_interaction() -> Interaction:
     interaction = Interaction(gene_a, gene_b)
     interaction.estimate_tau_with_coordinate_ascent()
     return interaction
+
+
+def test_observed_contingency_cells_have_exact_asymmetric_semantics() -> None:
+    """Regression: every observed cell label matches its binary state."""
+    gene_a = make_gene(
+        {0: 1.0},
+        [0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+        name="A_M",
+    )
+    gene_b = make_gene(
+        {0: 1.0},
+        [0, 1, 1, 0, 0, 0, 1, 1, 1, 1],
+        name="B_M",
+    )
+    interaction = Interaction(gene_a, gene_b)
+
+    assert interaction.compute_contingency_table().tolist() == [[1, 2], [3, 4]]
+    assert "[[1 2]\n [3 4]]" in str(interaction)
+    assert CONTINGENCY_TABLE_CONTRACT == "observed-binary-cells-00-01-10-11-v1"
+
+
+def test_latent_log_odds_ratio_uses_conventional_orientation() -> None:
+    """Positive association has a positive conventional LOR and Wald statistic."""
+    interaction = Interaction(
+        make_gene({0: 1.0}, [0], name="A_M"),
+        make_gene({0: 1.0}, [0], name="B_M"),
+    )
+    co_taus = (0.6, 0.1, 0.1, 0.2)
+    me_taus = (0.45, 0.25, 0.25, 0.05)
+
+    assert interaction.compute_log_odds_ratio(co_taus) == pytest.approx(
+        math.log(12),
+    )
+    assert interaction.compute_log_odds_ratio(me_taus) == pytest.approx(
+        math.log(0.36),
+    )
+    assert interaction.compute_wald_statistic(co_taus) > 0
+    assert interaction.compute_wald_statistic(me_taus) < 0
+    assert LOG_ODDS_RATIO_CONTRACT == (
+        "conventional-latent-odds-00x11-over-01x10-v1"
+    )
 
 
 def test_profile_lrt_uses_constrained_marginal_mles() -> None:

@@ -543,7 +543,7 @@ def dialect_payload(
     expected_log_odds = np.full(len(df), np.nan)
     expected_wald = np.full(len(df), np.nan)
     expected_log_odds[defined] = np.log(
-        (tau01[defined] * tau10[defined]) / (tau00[defined] * tau11[defined]),
+        (tau00[defined] * tau11[defined]) / (tau01[defined] * tau10[defined]),
     )
     expected_wald[defined] = expected_log_odds[defined] / np.sqrt(
         (1 / tau01[defined])

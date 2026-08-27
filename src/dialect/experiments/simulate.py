@@ -45,6 +45,22 @@ CO_METHODS = [
     "WeSCO",
 ]
 
+RNG_CONTRACT = "single-explicit-numpy-generator-v1"
+
+
+def _validate_matrix_simulation_parameters(
+    driver_proportion: float,
+    tau_uv_low: float,
+    tau_uv_high: float,
+) -> None:
+    """Validate matrix-simulation probability controls."""
+    if not 0 <= driver_proportion <= 1:
+        msg = "Driver-eligible proportion must be between 0 and 1."
+        raise ValueError(msg)
+    if not 0 <= tau_uv_low < tau_uv_high <= 1:
+        msg = "Tau bounds must satisfy 0 <= low < high <= 1."
+        raise ValueError(msg)
+
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -56,16 +72,20 @@ def generate_bmr_pmf(length: int, mu: float, threshold: float = 1e-50) -> list:
 
 
 def simulate_single_gene_passenger_mutations(
-    bmr_pmf: dict,
+    bmr_pmf: dict[int, float],
     nsamples: int,
+    *,
+    rng: np.random.Generator,
 ) -> np.ndarray:
-    """TODO: Add docstring."""
+    """Draw passenger counts with the caller's reproducible generator."""
+    if nsamples < 0:
+        msg = "Number of samples must be nonnegative."
+        raise ValueError(msg)
     if not np.isclose(sum(bmr_pmf.values()), 1.0, atol=1e-6):
         msg = "Background mutation rates (bmr_pmf) must sum to 1."
         raise ValueError(msg)
 
     bmr_pmf = {k: v / sum(bmr_pmf.values()) for k, v in bmr_pmf.items()}
-    rng = np.random.default_rng()
     return rng.choice(
         list(bmr_pmf.keys()),
         nsamples,
@@ -73,12 +93,19 @@ def simulate_single_gene_passenger_mutations(
     )
 
 
-def simulate_single_gene_driver_mutations(pi: float, nsamples: int) -> np.ndarray:
-    """TODO: Add docstring."""
+def simulate_single_gene_driver_mutations(
+    pi: float,
+    nsamples: int,
+    *,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Draw Bernoulli driver states with the caller's generator."""
     if not (0 <= pi <= 1):
         msg = "Driver mutation rate pi must be between 0 and 1."
         raise ValueError(msg)
-    rng = np.random.default_rng()
+    if nsamples < 0:
+        msg = "Number of samples must be nonnegative."
+        raise ValueError(msg)
     return rng.binomial(1, pi, size=nsamples)
 
 
@@ -86,14 +113,21 @@ def simulate_single_gene_somatic_mutations(
     bmr_pmf_arr: list,
     pi: float,
     nsamples: int,
+    *,
+    rng: np.random.Generator,
 ) -> Gene:
-    """TODO: Add docstring."""
+    """Draw one somatic-count vector from passenger and driver components."""
     bmr_pmf = {i: bmr_pmf_arr[i] for i in range(len(bmr_pmf_arr))}
     passenger_mutations = simulate_single_gene_passenger_mutations(
         bmr_pmf,
         nsamples,
+        rng=rng,
     )
-    driver_mutations = simulate_single_gene_driver_mutations(pi, nsamples)
+    driver_mutations = simulate_single_gene_driver_mutations(
+        pi,
+        nsamples,
+        rng=rng,
+    )
     somatic_mutations = (passenger_mutations + driver_mutations).astype(int)
     return Gene(
         name="SimulatedGene",
@@ -109,22 +143,49 @@ def simulate_pairwise_gene_driver_mutations(
     tau_11: float,
     nsamples: int,
     driver_proportion: float,
+    *,
+    rng: np.random.Generator,
 ) -> tuple:
-    """TODO: Add docstring."""
-    gene_a_drivers = np.zeros(nsamples)
-    gene_b_drivers = np.zeros(nsamples)
-    rng = np.random.default_rng()
-    n_drivers = int(nsamples * driver_proportion)
-    if n_drivers:
-        rnd = rng.uniform(size=n_drivers)
-        both_mutations = rnd < tau_11
-        only_gene_b_mutations = (rnd >= tau_11) & (rnd < tau_11 + tau_01)
-        only_gene_a_mutations = (rnd >= tau_11 + tau_01) & (
-            rnd < tau_11 + tau_01 + tau_10
+    """Draw latent pair states in a random eligible subset of tumors.
+
+    ``driver_proportion`` is the proportion of tumors to which the joint driver
+    distribution is applied. The remaining tumors have state ``00``. Within the
+    eligible subset, ``tau_00`` is the residual probability after the three supplied
+    nonzero states.
+    """
+    values = np.asarray((tau_01, tau_10, tau_11), dtype=float)
+    if (
+        not np.isfinite(values).all()
+        or (values < 0).any()
+        or values.sum() > 1 + 1e-12
+    ):
+        msg = (
+            "tau_01, tau_10, and tau_11 must be finite nonnegative weights "
+            "summing to at most 1."
         )
-        idx = np.arange(n_drivers)
-        gene_a_drivers[idx[both_mutations | only_gene_a_mutations]] = 1
-        gene_b_drivers[idx[both_mutations | only_gene_b_mutations]] = 1
+        raise ValueError(msg)
+    if not 0 <= driver_proportion <= 1:
+        msg = "Driver-eligible proportion must be between 0 and 1."
+        raise ValueError(msg)
+    if nsamples < 0:
+        msg = "Number of samples must be nonnegative."
+        raise ValueError(msg)
+
+    gene_a_drivers = np.zeros(nsamples, dtype=np.int8)
+    gene_b_drivers = np.zeros(nsamples, dtype=np.int8)
+    n_eligible = min(round(nsamples * driver_proportion), nsamples)
+    if n_eligible:
+        eligible = rng.choice(nsamples, size=n_eligible, replace=False)
+        tau_00 = max(1.0 - float(values.sum()), 0.0)
+        probabilities = np.asarray((tau_00, tau_01, tau_10, tau_11), dtype=float)
+        probabilities /= probabilities.sum()
+        states = rng.choice(
+            4,
+            size=n_eligible,
+            p=probabilities,
+        )
+        gene_a_drivers[eligible] = np.isin(states, (2, 3))
+        gene_b_drivers[eligible] = np.isin(states, (1, 3))
     return gene_a_drivers, gene_b_drivers
 
 
@@ -136,15 +197,19 @@ def simulate_pairwise_gene_somatic_mutations(
     tau_11: float,
     nsamples: int,
     driver_proportion: float,
+    *,
+    rng: np.random.Generator,
 ) -> Interaction:
-    """TODO: Add docstring."""
+    """Draw a sample-aligned somatic-count pair with one generator."""
     gene_a_passenger_mutations = simulate_single_gene_passenger_mutations(
         gene_a_pmf,
         nsamples,
+        rng=rng,
     )
     gene_b_passenger_mutations = simulate_single_gene_passenger_mutations(
         gene_b_pmf,
         nsamples,
+        rng=rng,
     )
     gene_a_driver_mutations, gene_b_driver_mutations = (
         simulate_pairwise_gene_driver_mutations(
@@ -153,6 +218,7 @@ def simulate_pairwise_gene_somatic_mutations(
             tau_11,
             nsamples,
             driver_proportion,
+            rng=rng,
         )
     )
     gene_a_somatic_mutations = (
@@ -196,8 +262,8 @@ def create_single_gene_simulation(
     out: str,
     seed: int,
 ) -> None:
-    """TODO: Add docstring."""
-    np.random.default_rng(seed)
+    """Create reproducible single-event simulations and their parameters."""
+    rng = np.random.default_rng(seed)
     dout = Path(out)
     dout.mkdir(parents=True, exist_ok=True)
 
@@ -208,6 +274,7 @@ def create_single_gene_simulation(
             bmr_pmf_arr,
             pi,
             num_samples,
+            rng=rng,
         )
         simulated_genes.append(simulated_gene.counts)
 
@@ -225,6 +292,7 @@ def create_single_gene_simulation(
         "length": length,
         "mu": mu,
         "bmr_pmf": bmr_pmf_arr,
+        "rng_contract": RNG_CONTRACT,
     }
     param_out = Path(dout) / "single_gene_simulation_parameters.json"
     with param_out.open("w") as f:
@@ -246,8 +314,10 @@ def create_pair_gene_simulation(
     driver_proportion: float,
     seed: int,
 ) -> None:
-    """TODO: Add docstring."""
-    np.random.default_rng(seed)
+    """Create reproducible pair simulations and their parameters."""
+    rng = np.random.default_rng(seed)
+    dout = Path(out)
+    dout.mkdir(parents=True, exist_ok=True)
     bmr_pmf_arr_a = generate_bmr_pmf(length_a, mu_a)
     bmr_pmf_arr_b = generate_bmr_pmf(length_b, mu_b)
     bmr_pmf_a = {i: bmr_pmf_arr_a[i] for i in range(len(bmr_pmf_arr_a))}
@@ -262,6 +332,7 @@ def create_pair_gene_simulation(
             tau_11,
             num_samples,
             driver_proportion,
+            rng=rng,
         )
         simulated_interactions.append(simulated_interaction)
 
@@ -271,7 +342,7 @@ def create_pair_gene_simulation(
             for interaction in simulated_interactions
         ],
     )
-    data_out = Path(out) / "pair_gene_simulated_data.npy"
+    data_out = dout / "pair_gene_simulated_data.npy"
     np.save(data_out, counts_array)
 
     params = {
@@ -286,8 +357,11 @@ def create_pair_gene_simulation(
         "mu_b": mu_b,
         "bmr_pmf_a": bmr_pmf_arr_a,
         "bmr_pmf_b": bmr_pmf_arr_b,
+        "driver_proportion": driver_proportion,
+        "seed": seed,
+        "rng_contract": RNG_CONTRACT,
     }
-    param_out = Path(out) / "pair_gene_simulation_parameters.json"
+    param_out = dout / "pair_gene_simulation_parameters.json"
     with param_out.open("w") as f:
         json.dump(params, f, indent=4)
 
@@ -307,7 +381,12 @@ def create_matrix_simulation(
     driver_proportion: float,
     seed: int = 42,
 ) -> None:
-    """TODO: Add docstring."""
+    """Create one reproducible matrix simulation and ground-truth manifest."""
+    _validate_matrix_simulation_parameters(
+        driver_proportion,
+        tau_uv_low,
+        tau_uv_high,
+    )
     rng = np.random.default_rng(seed)
     dir_out = Path(dout)
     dir_out.mkdir(parents=True, exist_ok=True)
@@ -331,7 +410,7 @@ def create_matrix_simulation(
         .index,
     )
 
-    drivers_df = cnt_df[[col for col in drivers_set if col in cnt_df.columns]]
+    drivers_df = cnt_df[[col for col in cnt_df.columns if col in drivers_set]]
     drivers = list(
         drivers_df.sum(axis=0)
         .sort_values(ascending=False)
@@ -379,6 +458,7 @@ def create_matrix_simulation(
             tau_11=tau_11,
             nsamples=num_samples,
             driver_proportion=driver_proportion,
+            rng=rng,
         )
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
@@ -405,6 +485,7 @@ def create_matrix_simulation(
             tau_11=tau_11,
             nsamples=num_samples,
             driver_proportion=driver_proportion,
+            rng=rng,
         )
         simulated_counts[gene_a] = interaction.gene_a.counts
         simulated_counts[gene_b] = interaction.gene_b.counts
@@ -414,6 +495,7 @@ def create_matrix_simulation(
             bmr_pmf_arr=bmr_dict[likely_passenger],
             pi=0.0,
             nsamples=num_samples,
+            rng=rng,
         )
         simulated_counts[likely_passenger] = simulated_gene.counts
 
@@ -440,6 +522,11 @@ def create_matrix_simulation(
         "tau_low": tau_uv_low,
         "tau_high": tau_uv_high,
         "driver_proportion": driver_proportion,
+        "driver_proportion_definition": (
+            "fraction of tumors eligible for the joint driver-state draw"
+        ),
+        "seed": seed,
+        "rng_contract": RNG_CONTRACT,
     }
     gt_out_fn = dir_out / "matrix_simulation_info.json"
     with gt_out_fn.open("w") as f:

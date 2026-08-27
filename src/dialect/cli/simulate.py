@@ -56,6 +56,7 @@ def create_pair(
     length_b: int = typer.Option(10000, "-lb", "--length_b"),
     mu_a: float = typer.Option(1e-6, "-ma", "--mu_a"),
     mu_b: float = typer.Option(1e-6, "-mb", "--mu_b"),
+    driver_proportion: float = typer.Option(1.0, "-dp", "--driver_proportion"),
     seed: int = typer.Option(42, "-s", "--seed"),
 ) -> None:
     """Create pairwise-gene simulations."""
@@ -70,6 +71,7 @@ def create_pair(
         length_b=length_b,
         mu_b=mu_b,
         out=out,
+        driver_proportion=driver_proportion,
         seed=seed,
     )
 

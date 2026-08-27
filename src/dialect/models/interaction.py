@@ -16,6 +16,8 @@ PAIR_FIT_CONTRACT = "deterministic-simplex-coordinate-ascent-v1"
 PAIR_FIT_KKT_TOL = 1e-8
 RHO_CONTRACT = "marshall-olkin-finite-or-degenerate-null-v1"
 UNDEFINED_RHO_LRT_TOL = 1e-8
+CONTINGENCY_TABLE_CONTRACT = "observed-binary-cells-00-01-10-11-v1"
+LOG_ODDS_RATIO_CONTRACT = "conventional-latent-odds-00x11-over-01x10-v1"
 
 _NESTED_LIKELIHOOD_TOL = 1e-8
 _SIMPLEX_TOL = 1e-8
@@ -135,15 +137,15 @@ class Interaction:
             f"Gene A: {self.gene_a.name} (Pi: {pi_a})\n"
             f"Gene B: {self.gene_b.name} (Pi: {pi_b})\n"
             f"Tau Parameters: {taus_info}\n"
-            f"Contingency Table:\n[[{cm[1, 1]} {cm[1, 0]}]\n "
-            f"[{cm[0, 1]} {cm[0, 0]}]]"
+            f"Contingency Table (00, 01 / 10, 11):\n"
+            f"[[{cm[0, 0]} {cm[0, 1]}]\n [{cm[1, 0]} {cm[1, 1]}]]"
         )
 
     def compute_contingency_table(self) -> np.ndarray:
-        """Return the observed binary mutation contingency table."""
+        """Return observed cells as ``[[n00, n01], [n10, n11]]``."""
         gene_a_mutations = (np.asarray(self.gene_a.counts) > 0).astype(int)
         gene_b_mutations = (np.asarray(self.gene_b.counts) > 0).astype(int)
-        return confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[1, 0])
+        return confusion_matrix(gene_a_mutations, gene_b_mutations, labels=[0, 1])
 
     def get_set_of_cooccurring_samples(self) -> list:
         """Return sample names with observed mutations in both features."""
@@ -290,12 +292,12 @@ class Interaction:
         self,
         taus: list | tuple | np.ndarray,
     ) -> float | None:
-        """Return the latent-state log odds ratio."""
+        """Return ``log((tau_00 * tau_11) / (tau_01 * tau_10))``."""
         self.verify_taus_are_valid(taus)
         tau_00, tau_01, tau_10, tau_11 = np.asarray(taus, dtype=float)
         if tau_01 * tau_10 == 0 or tau_00 * tau_11 == 0:
             return None
-        return float(np.log((tau_01 * tau_10) / (tau_00 * tau_11)))
+        return float(np.log((tau_00 * tau_11) / (tau_01 * tau_10)))
 
     def compute_wald_statistic(
         self,

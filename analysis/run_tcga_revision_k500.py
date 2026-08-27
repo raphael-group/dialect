@@ -63,7 +63,7 @@ from dialect.utils.identify import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 TOP_K = 500
 BMRS = ("cbase", "dig", "mutsig")
 MEMORY_HEAVY_MUTSIG_COHORTS = {"BRCA", "CRAD", "LGG", "SKCM", "UCEC"}
@@ -73,8 +73,13 @@ REQUIRED_PAIR_FIT_CONTRACT = "deterministic-simplex-coordinate-ascent-v1"
 REQUIRED_PAIR_FIT_KKT_TOL = 1e-8
 REQUIRED_RHO_CONTRACT = "marshall-olkin-finite-or-degenerate-null-v1"
 REQUIRED_UNDEFINED_RHO_LRT_TOL = 1e-8
+REQUIRED_CONTINGENCY_TABLE_CONTRACT = "observed-binary-cells-00-01-10-11-v1"
+REQUIRED_LOG_ODDS_RATIO_CONTRACT = (
+    "conventional-latent-odds-00x11-over-01x10-v1"
+)
 OBSERVATION_SUPPORT_UNIVERSE = "full-observation-support-common-universe-v1"
 REQUIRED_GENE_SUPPORT_CONTRACT = "latent-state-union-v1"
+SAMPLE_AXIS_CONTRACT = "count-matrix-equals-ordered-mutsig-patient-axis-v1"
 TCGA_COHORTS = (
     "ACC",
     "BLCA",
@@ -503,25 +508,34 @@ def _mutsig_contract(
             f"metadata requires {expected_bytes}: {lambda_path}"
         )
         raise ValueError(msg)
+    ordered_count_samples = [str(sample) for sample in count_samples]
     patient_position = {patient: position for position, patient in enumerate(patients)}
-    missing = [sample for sample in count_samples if sample not in patient_position]
-    if missing:
+    count_sample_set = set(ordered_count_samples)
+    patient_set = set(patients)
+    missing = [sample for sample in ordered_count_samples if sample not in patient_set]
+    extra = [patient for patient in patients if patient not in count_sample_set]
+    if ordered_count_samples != patients:
         msg = (
-            "MutSig patient axis lacks count-matrix samples; cohort-mean fallback is "
-            f"prohibited: {missing[:5]}"
+            "Count-matrix sample axis must exactly equal the ordered MutSig patient "
+            f"axis; missing_in_mutsig={missing[:5]}, extra_in_mutsig={extra[:5]}, "
+            f"same_set={count_sample_set == patient_set}."
         )
         raise ValueError(msg)
-    mapping = [f"{sample}\t{patient_position[sample]}" for sample in count_samples]
-    count_sample_set = set(count_samples)
+    mapping = [
+        f"{sample}\t{patient_position[sample]}" for sample in ordered_count_samples
+    ]
+    ordered_axis_sha256 = _sequence_sha256(ordered_count_samples)
     return set(genes), {
         "dimensions": fields,
         "sample_mapping": {
-            "cohort_samples": len(count_samples),
-            "matched_samples": len(count_samples),
-            "extra_mutsig_samples": sum(
-                patient not in count_sample_set for patient in patients
-            ),
+            "contract": SAMPLE_AXIS_CONTRACT,
+            "cohort_samples": len(ordered_count_samples),
+            "matched_samples": len(ordered_count_samples),
+            "extra_mutsig_samples": 0,
             "cohort_mean_fallback_samples": 0,
+            "exact_order_match": True,
+            "ordered_count_ids_sha256": ordered_axis_sha256,
+            "ordered_mutsig_ids_sha256": ordered_axis_sha256,
             "ordered_mapping_sha256": _sequence_sha256(mapping),
         },
         "files": {
@@ -780,6 +794,26 @@ def _require_full_observation_support(contract: dict[str, Any]) -> None:
             raise ValueError(msg)
 
 
+def _require_exact_sample_axis(contract: dict[str, Any]) -> None:
+    """Require one identical ordered tumor axis for counts and MutSig backgrounds."""
+    samples = contract.get("samples", {})
+    count = samples.get("count")
+    if (
+        samples.get("contract") != SAMPLE_AXIS_CONTRACT
+        or not samples.get("exact_order_match")
+        or samples.get("extra_mutsig_samples") != 0
+        or samples.get("cohort_mean_fallback_samples") != 0
+        or samples.get("cohort_samples") != count
+        or samples.get("matched_samples") != count
+        or samples.get("ordered_ids_sha256")
+        != samples.get("ordered_count_ids_sha256")
+        or samples.get("ordered_ids_sha256")
+        != samples.get("ordered_mutsig_ids_sha256")
+    ):
+        msg = "Cohort contract does not bind one exact ordered sample axis."
+        raise ValueError(msg)
+
+
 def build_cohort_contract(
     paths: RunPaths,
     cohort: str,
@@ -891,6 +925,7 @@ def build_cohort_contract(
             "mutsig": mutsig,
         },
     }
+    _require_exact_sample_axis(contract)
     _require_full_observation_support(contract)
     return contract
 
@@ -947,6 +982,7 @@ def _load_verified_contract(
     if contract.get("top_k") != top_k or contract.get("cohort") != cohort:
         msg = f"Frozen contract coordinates do not match task: {path}"
         raise ValueError(msg)
+    _require_exact_sample_axis(contract)
     _require_full_observation_support(contract)
     inputs = contract["inputs"]
     _verify_file_record(inputs["counts"])
@@ -1031,8 +1067,11 @@ def _initialize_run(paths: RunPaths, *, allow_dirty: bool) -> dict[str, Any]:
         "required_pair_fit_kkt_tolerance": REQUIRED_PAIR_FIT_KKT_TOL,
         "required_rho_contract": REQUIRED_RHO_CONTRACT,
         "undefined_rho_lrt_tolerance": REQUIRED_UNDEFINED_RHO_LRT_TOL,
+        "required_contingency_table_contract": REQUIRED_CONTINGENCY_TABLE_CONTRACT,
+        "required_log_odds_ratio_contract": REQUIRED_LOG_ODDS_RATIO_CONTRACT,
         "observation_support_universe": OBSERVATION_SUPPORT_UNIVERSE,
         "required_gene_support_contract": REQUIRED_GENE_SUPPORT_CONTRACT,
+        "sample_axis_contract": SAMPLE_AXIS_CONTRACT,
     }
     manifest_path = paths.output_root / "run_manifest.json"
     git = _git_snapshot(repo_root)
@@ -1087,7 +1126,7 @@ def _initialize_run(paths: RunPaths, *, allow_dirty: bool) -> dict[str, Any]:
     return manifest
 
 
-def _require_corrected_lrt() -> tuple[str, str, str, str]:
+def _require_corrected_lrt() -> tuple[str, str, str, str, str, str]:
     actual = getattr(interaction_module, "LRT_CONTRACT", None)
     if actual != REQUIRED_LRT_CONTRACT:
         msg = (
@@ -1131,6 +1170,31 @@ def _require_corrected_lrt() -> tuple[str, str, str, str]:
             f"{undefined_rho_lrt_tol_actual!r}."
         )
         raise RuntimeError(msg)
+    contingency_actual = getattr(
+        interaction_module,
+        "CONTINGENCY_TABLE_CONTRACT",
+        None,
+    )
+    if contingency_actual != REQUIRED_CONTINGENCY_TABLE_CONTRACT:
+        msg = (
+            "K=500 launch blocked: "
+            "dialect.models.interaction.CONTINGENCY_TABLE_CONTRACT must be "
+            f"{REQUIRED_CONTINGENCY_TABLE_CONTRACT!r}, found "
+            f"{contingency_actual!r}."
+        )
+        raise RuntimeError(msg)
+    log_odds_actual = getattr(
+        interaction_module,
+        "LOG_ODDS_RATIO_CONTRACT",
+        None,
+    )
+    if log_odds_actual != REQUIRED_LOG_ODDS_RATIO_CONTRACT:
+        msg = (
+            "K=500 launch blocked: "
+            "dialect.models.interaction.LOG_ODDS_RATIO_CONTRACT must be "
+            f"{REQUIRED_LOG_ODDS_RATIO_CONTRACT!r}, found {log_odds_actual!r}."
+        )
+        raise RuntimeError(msg)
     gene_support_actual = getattr(gene_module, "OBSERVATION_SUPPORT_CONTRACT", None)
     if gene_support_actual != REQUIRED_GENE_SUPPORT_CONTRACT:
         msg = (
@@ -1144,6 +1208,8 @@ def _require_corrected_lrt() -> tuple[str, str, str, str]:
         str(pair_fit_actual),
         str(rho_actual),
         str(gene_support_actual),
+        str(contingency_actual),
+        str(log_odds_actual),
     )
 
 
@@ -1290,6 +1356,25 @@ def _validate_pairwise_rho(
 
 
 def _validate_pairwise_output(path: Path, contract: dict[str, Any]) -> int:
+    counts = _read_counts(Path(str(contract["inputs"]["counts"]["path"])))
+    if (
+        _sequence_sha256(str(sample) for sample in counts.index)
+        != contract["samples"]["ordered_ids_sha256"]
+        or len(counts) != int(contract["samples"]["count"])
+    ):
+        msg = "Frozen count matrix no longer matches the contracted sample axis."
+        raise ValueError(msg)
+    n_samples = len(counts)
+    mutation_masks = {
+        feature: int.from_bytes(
+            np.packbits(
+                counts[feature].to_numpy(dtype=np.int64) > 0,
+                bitorder="little",
+            ).tobytes(),
+            "little",
+        )
+        for feature in contract["features"]
+    }
     expected_pairs = iter_tested_pairs(contract["features"])
     digest = hashlib.sha256()
     row_count = 0
@@ -1345,6 +1430,41 @@ def _validate_pairwise_output(path: Path, contract: dict[str, Any]) -> int:
                 msg = f"Invalid likelihood ratio for pair {actual}: {likelihood_ratio}"
                 raise ValueError(msg)
             _validate_pairwise_rho(row["Rho"], taus, likelihood_ratio, actual)
+            tau_00, tau_10, tau_01, tau_11 = taus
+            log_odds_defined = tau_00 * tau_11 > 0 and tau_01 * tau_10 > 0
+            if log_odds_defined:
+                expected_log_odds = float(
+                    np.log((tau_00 * tau_11) / (tau_01 * tau_10)),
+                )
+                expected_wald = float(
+                    expected_log_odds
+                    / np.sqrt(
+                        (1 / tau_00)
+                        + (1 / tau_01)
+                        + (1 / tau_10)
+                        + (1 / tau_11),
+                    ),
+                )
+                try:
+                    actual_log_odds = float(row["Log Odds Ratio"])
+                    actual_wald = float(row["Wald Statistic"])
+                except (TypeError, ValueError) as error:
+                    msg = f"Missing conventional LOR/Wald statistic for pair {actual}."
+                    raise ValueError(msg) from error
+                if (
+                    not np.isfinite(actual_log_odds)
+                    or not np.isfinite(actual_wald)
+                    or actual_log_odds != expected_log_odds
+                    or actual_wald != expected_wald
+                ):
+                    msg = (
+                        "Conventional LOR/Wald orientation mismatch for pair "
+                        f"{actual}."
+                    )
+                    raise ValueError(msg)
+            elif row["Log Odds Ratio"] != "" or row["Wald Statistic"] != "":
+                msg = f"Boundary LOR/Wald statistic must be blank for pair {actual}."
+                raise ValueError(msg)
             if (
                 row["Fit Algorithm"] != REQUIRED_PAIR_FIT_CONTRACT
                 or row["Fit Converged"].strip().lower() != "true"
@@ -1383,6 +1503,19 @@ def _validate_pairwise_output(path: Path, contract: dict[str, Any]) -> int:
             ):
                 msg = f"Invalid contingency table for pair {actual}: {contingency}"
                 raise ValueError(msg)
+            mask_a = mutation_masks[actual[0]]
+            mask_b = mutation_masks[actual[1]]
+            n_11 = (mask_a & mask_b).bit_count()
+            n_10 = mask_a.bit_count() - n_11
+            n_01 = mask_b.bit_count() - n_11
+            n_00 = n_samples - n_10 - n_01 - n_11
+            expected_contingency = [n_00, n_10, n_01, n_11]
+            if contingency != expected_contingency:
+                msg = (
+                    f"Observed-cell semantics do not match the count matrix for pair "
+                    f"{actual}: expected={expected_contingency}, actual={contingency}"
+                )
+                raise ValueError(msg)
             encoded = f"{actual[0]}\t{actual[1]}".encode()
             digest.update(len(encoded).to_bytes(8, "big"))
             digest.update(encoded)
@@ -1409,6 +1542,7 @@ def validate_task_output(
     require_manifest: bool = True,
 ) -> dict[str, Any]:
     """Validate a complete task directory against its frozen cohort contract."""
+    _require_exact_sample_axis(contract)
     _require_full_observation_support(contract)
     single_path = task_dir / "single_gene_results.csv"
     pairwise_path = task_dir / "pairwise_interaction_results.csv"
@@ -1483,8 +1617,11 @@ def validate_task_output(
             "pair_fit_kkt_tolerance": REQUIRED_PAIR_FIT_KKT_TOL,
             "rho_contract": REQUIRED_RHO_CONTRACT,
             "undefined_rho_lrt_tolerance": REQUIRED_UNDEFINED_RHO_LRT_TOL,
+            "contingency_table_contract": REQUIRED_CONTINGENCY_TABLE_CONTRACT,
+            "log_odds_ratio_contract": REQUIRED_LOG_ODDS_RATIO_CONTRACT,
             "observation_support_universe": OBSERVATION_SUPPORT_UNIVERSE,
             "gene_support_contract": REQUIRED_GENE_SUPPORT_CONTRACT,
+            "sample_axis_contract": SAMPLE_AXIS_CONTRACT,
         }
         if any(
             manifest.get(key) != value
@@ -1518,6 +1655,8 @@ def execute_task(
         pair_fit_contract,
         rho_contract,
         gene_support_contract,
+        contingency_table_contract,
+        log_odds_ratio_contract,
     ) = _require_corrected_lrt()
     implementation_sha256 = (
         _verify_run_implementation(paths) if top_k == TOP_K else {}
@@ -1593,8 +1732,11 @@ def execute_task(
             "pair_fit_kkt_tolerance": REQUIRED_PAIR_FIT_KKT_TOL,
             "rho_contract": rho_contract,
             "undefined_rho_lrt_tolerance": REQUIRED_UNDEFINED_RHO_LRT_TOL,
+            "contingency_table_contract": contingency_table_contract,
+            "log_odds_ratio_contract": log_odds_ratio_contract,
             "observation_support_universe": OBSERVATION_SUPPORT_UNIVERSE,
             "gene_support_contract": gene_support_contract,
+            "sample_axis_contract": SAMPLE_AXIS_CONTRACT,
             "exit_status": 0,
             "completed_at_utc": _utc_now(),
             "resource_usage": resource_usage,
