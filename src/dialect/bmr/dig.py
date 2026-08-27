@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from dialect.bmr._dig_pmf import dig_results_to_bmr_pmfs
@@ -49,14 +50,38 @@ class DIGProvider:
         check_file_exists(self.dig_results)
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        bmr_csv = out / "bmr_pmfs.dig.csv"
-        dig_results_to_bmr_pmfs(self.dig_results, self.n_samples, str(bmr_csv))
-        pmf_arrays = load_bmr_pmfs(str(bmr_csv))
-        pmfs = {gene: dict(enumerate(arr)) for gene, arr in pmf_arrays.items()}
         counts_path = out / "count_matrix.csv"
         counts = (
             pd.read_csv(counts_path, index_col=0)
             if counts_path.exists()
             else pd.DataFrame()
         )
+        max_count: int | None = None
+        if counts_path.exists():
+            if len(counts) != self.n_samples:
+                msg = (
+                    "DIG n_samples does not match count_matrix.csv: "
+                    f"expected {self.n_samples}, observed {len(counts)}"
+                )
+                raise ValueError(msg)
+            values = counts.to_numpy(dtype=np.float64)
+            if values.size:
+                if (
+                    not np.isfinite(values).all()
+                    or (values < 0).any()
+                    or not np.equal(values, np.floor(values)).all()
+                ):
+                    msg = "count_matrix.csv must contain finite nonnegative integers"
+                    raise ValueError(msg)
+                max_count = int(values.max())
+
+        bmr_csv = out / "bmr_pmfs.dig.csv"
+        dig_results_to_bmr_pmfs(
+            self.dig_results,
+            self.n_samples,
+            str(bmr_csv),
+            max_count=max_count,
+        )
+        pmf_arrays = load_bmr_pmfs(str(bmr_csv))
+        pmfs = {gene: dict(enumerate(arr)) for gene, arr in pmf_arrays.items()}
         return BMRResult(pmfs=pmfs, counts=counts, provider=self.name)

@@ -28,6 +28,7 @@ def test_adapter_produces_normalized_per_effect_pmfs(tmp_path) -> None:
 
     assert set(b.index) == {"SHORT_M", "SHORT_N", "LONG_M", "LONG_N"}
     assert (b.sum(axis=1).round(6) == 1.0).all()
+    assert b.loc["SHORT_M", "9"] + b.loc["SHORT_M", "10"] > 0
 
 
 def test_higher_background_gene_has_more_passenger_mass(tmp_path) -> None:

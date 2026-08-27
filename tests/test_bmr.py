@@ -59,7 +59,7 @@ def test_dig_provider_estimate(tmp_path) -> None:
         tmp_path / "count_matrix.csv",
     )
 
-    result = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=10).estimate(
+    result = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=2).estimate(
         str(tmp_path / "cohort.maf"),
         str(tmp_path),
     )
@@ -68,3 +68,51 @@ def test_dig_provider_estimate(tmp_path) -> None:
     assert result.provider == "dig"
     assert {"G_M", "G_N"} <= set(result.pmfs)
     assert abs(sum(result.pmfs["G_M"].values()) - 1.0) < 1e-6
+
+
+def test_dig_provider_covers_existing_count_matrix_observations(tmp_path) -> None:
+    """Existing high counts extend PMFs beyond the tail-only truncation point."""
+    (tmp_path / "cohort.maf").write_text("dummy\n")
+    pd.DataFrame(
+        {
+            "GENE": ["G"],
+            "ALPHA": [100.0],
+            "THETA": [0.3],
+            "Pi_MIS": [0.04],
+            "Pi_NONS": [0.002],
+        },
+    ).to_csv(tmp_path / "dig.results.txt", sep="\t", index=False)
+    pd.DataFrame(
+        {"G_M": [0, 25]},
+        index=["s1", "s2"],
+    ).rename_axis("sample").to_csv(tmp_path / "count_matrix.csv")
+
+    result = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=2).estimate(
+        str(tmp_path / "cohort.maf"),
+        str(tmp_path),
+    )
+
+    assert max(result.pmfs["G_M"]) >= 25
+    assert result.pmfs["G_M"][24] + result.pmfs["G_M"][25] > 0
+
+
+def test_dig_provider_rejects_count_matrix_sample_mismatch(tmp_path) -> None:
+    """The cohort-size divisor must equal the existing count-matrix row count."""
+    (tmp_path / "cohort.maf").write_text("dummy\n")
+    pd.DataFrame(
+        {
+            "GENE": ["G"],
+            "ALPHA": [100.0],
+            "THETA": [0.3],
+            "Pi_MIS": [0.04],
+            "Pi_NONS": [0.002],
+        },
+    ).to_csv(tmp_path / "dig.results.txt", sep="\t", index=False)
+    pd.DataFrame(
+        {"G_M": [0, 1]},
+        index=["s1", "s2"],
+    ).rename_axis("sample").to_csv(tmp_path / "count_matrix.csv")
+
+    provider = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=3)
+    with pytest.raises(ValueError, match="n_samples does not match"):
+        provider.estimate(str(tmp_path / "cohort.maf"), str(tmp_path))
