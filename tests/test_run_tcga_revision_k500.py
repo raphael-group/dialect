@@ -1,4 +1,5 @@
 import csv
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,49 @@ import pytest
 
 from analysis import run_tcga_revision_k500 as runner
 from analysis.mutsig_lambda_co import build_lambda_pmfs
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_mutsig_receipt(mutsig_dir: Path) -> None:
+    artifacts = {
+        "lambda_sha256": mutsig_dir / "persample_lambda.f32",
+        "meta_sha256": mutsig_dir / "persample_meta.txt",
+        "genes_sha256": mutsig_dir / "persample_genes.txt",
+        "patients_sha256": mutsig_dir / "persample_patients.txt",
+    }
+    np_value = next(
+        line.split("\t", 1)[1]
+        for line in (mutsig_dir / "persample_meta.txt")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.startswith("np\t")
+    )
+    fields = {
+        "schema_version": runner.MUTSIG_RECEIPT_SCHEMA_VERSION,
+        "cohort": mutsig_dir.name,
+        "upstream_commit": runner.MUTSIG_UPSTREAM_COMMIT,
+        "patch_sha256": runner._sha256(  # noqa: SLF001
+            _REPO_ROOT / runner.MUTSIG_PATCH_PATH,
+        ),
+        "runner_sha256": runner._sha256(  # noqa: SLF001
+            _REPO_ROOT / runner.MUTSIG_RUNNER_PATH,
+        ),
+        "runtime_sha256": hashlib.sha256(b"test-runtime").hexdigest(),
+        "maf_sha256": hashlib.sha256(b"test-maf").hexdigest(),
+        "sample_axis_sha256": runner._sha256(  # noqa: SLF001
+            mutsig_dir / "persample_patients.txt",
+        ),
+        "sample_axis_count": np_value,
+        **{
+            key: runner._sha256(path)  # noqa: SLF001
+            for key, path in artifacts.items()
+        },
+    }
+    (mutsig_dir / "persample_receipt.tsv").write_text(
+        "".join(f"{key}\t{value}\n" for key, value in fields.items()),
+        encoding="utf-8",
+    )
 
 
 def _write_inputs(root: Path) -> runner.RunPaths:
@@ -28,6 +72,10 @@ def _write_inputs(root: Path) -> runner.RunPaths:
         index=["s1", "s2", "s3", "s4"],
     )
     counts.rename_axis("sample").to_csv(cohort_dir / "count_matrix.csv")
+    (cohort_dir / "sample_axis.txt").write_text(
+        "\n".join(str(sample) for sample in counts.index) + "\n",
+        encoding="utf-8",
+    )
     pmfs = pd.DataFrame(
         [[0.7, 0.2, 0.08, 0.02]] * 4,
         index=counts.columns,
@@ -52,6 +100,7 @@ def _write_inputs(root: Path) -> runner.RunPaths:
         encoding="utf-8",
     )
     lambdas.ravel(order="F").tofile(mutsig_dir / "persample_lambda.f32")
+    _write_mutsig_receipt(mutsig_dir)
     return runner.RunPaths(source_root, mutsig_root, output_root)
 
 
@@ -180,6 +229,7 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
     assert contract["pair_policy"]["row_count"] == 2
     assert contract["pair_policy"]["same_base_pairs_excluded"] == 1
     assert contract["samples"]["matched_samples"] == 4
+    assert contract["samples"]["authoritative_samples"] == 4
     assert contract["samples"]["extra_mutsig_samples"] == 0
     assert contract["samples"]["exact_order_match"]
     assert contract["samples"]["contract"] == runner.SAMPLE_AXIS_CONTRACT
@@ -188,6 +238,17 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
     assert contract["mutsig_pmf_contract"]["selected_observed_count_max"] == 1
     assert contract["mutsig_pmf_contract"]["lambda_floor"] is None
     assert len(contract["inputs"]["mutsig"]["files"]["lambda"]["sha256"]) == 64
+    assert contract["inputs"]["mutsig"]["receipt"]["upstream_commit"] == (
+        runner.MUTSIG_UPSTREAM_COMMIT
+    )
+    assert "receipt" in contract["inputs"]["mutsig"]["files"]
+    assert contract["inputs"]["sample_axis"]["sha256"] == (
+        contract["inputs"]["mutsig"]["receipt"]["sample_axis_sha256"]
+    )
+    assert contract["inputs"]["mutsig"]["receipt"]["canonical_maf_binding"] == {
+        "status": runner.MUTSIG_MAF_BINDING_STATUS,
+        "required_before_production": runner.MUTSIG_MAF_BINDING_REQUIREMENT,
+    }
     for bmr in runner.BMRS:
         support = contract["observed_count_support_audit"][bmr]
         assert support["zero_support_feature_samples"] == 0
@@ -230,6 +291,131 @@ def test_cohort_contract_rejects_extra_or_reordered_mutsig_samples(tmp_path):
         runner.build_cohort_contract(paths, "CHOL", top_k=3)
 
 
+def test_cohort_contract_requires_current_mutsig_receipt_and_all_sidecars(
+    tmp_path,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    mutsig_dir = paths.mutsig_root / "CHOL"
+    receipt_path = mutsig_dir / "persample_receipt.tsv"
+    receipt_path.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    _write_mutsig_receipt(mutsig_dir)
+    lambda_path = mutsig_dir / "persample_lambda.f32"
+    lambda_bytes = lambda_path.read_bytes()
+    tampered_lambda = bytearray(lambda_bytes)
+    tampered_lambda[0] ^= 1
+    lambda_path.write_bytes(tampered_lambda)
+    with pytest.raises(ValueError, match=r"hash does not match lambda"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    lambda_path.write_bytes(lambda_bytes)
+    _write_mutsig_receipt(mutsig_dir)
+    receipt = receipt_path.read_text(encoding="utf-8")
+    receipt_path.write_text(
+        receipt.replace(
+            "lambda_sha256\t",
+            f"lambda_sha256\t{'0' * 64}\nignored\t",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="wrong fields"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    _write_mutsig_receipt(mutsig_dir)
+    receipt_path.write_text(
+        receipt_path.read_text(encoding="utf-8").replace(
+            next(
+                line
+                for line in receipt_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("patch_sha256\t")
+            ),
+            f"patch_sha256\t{'0' * 64}",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"patch_sha256.*tracked source"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+
+def test_cohort_contract_binds_canonical_authoritative_sample_axis(tmp_path) -> None:
+    paths = _write_inputs(tmp_path)
+    cohort_dir = paths.source_root / "CHOL"
+    axis_path = cohort_dir / "sample_axis.txt"
+    axis_path.unlink()
+    with pytest.raises(FileNotFoundError):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    axis_path.write_bytes(b"s1\r\ns2\r\ns3\r\ns4\r\n")
+    with pytest.raises(ValueError, match="LF separators"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    axis_path.write_text("s2\ns1\ns3\ns4\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="lexicographically ordered"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    axis_path.write_text("s1\ns2\ns3\ns4\n", encoding="utf-8")
+    receipt_path = paths.mutsig_root / "CHOL" / "persample_receipt.tsv"
+    receipt_lines = receipt_path.read_text(encoding="utf-8").splitlines()
+    receipt_path.write_text(
+        "\n".join(
+            f"sample_axis_sha256\t{'0' * 64}"
+            if line.startswith("sample_axis_sha256\t")
+            else line
+            for line in receipt_lines
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"authoritative sample_axis\.txt"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+
+def test_unbound_canonical_maf_receipt_is_an_explicit_production_stop_ship(
+    tmp_path,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    with pytest.raises(RuntimeError, match=r"MAF provenance stop-ship"):
+        runner._require_canonical_mutsig_maf_binding(contract)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("receipt_key", "artifact"),
+    [
+        ("lambda_sha256", "lambda"),
+        ("meta_sha256", "metadata"),
+        ("genes_sha256", "genes"),
+        ("patients_sha256", "patients"),
+    ],
+)
+def test_mutsig_receipt_binds_each_sidecar(
+    tmp_path,
+    receipt_key,
+    artifact,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    receipt_path = paths.mutsig_root / "CHOL" / "persample_receipt.tsv"
+    lines = receipt_path.read_text(encoding="utf-8").splitlines()
+    receipt_path.write_text(
+        "\n".join(
+            f"{receipt_key}\t{'0' * 64}"
+            if line.startswith(f"{receipt_key}\t")
+            else line
+            for line in lines
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=rf"hash does not match {artifact}"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+
 def test_full_support_universe_skips_unsupported_high_count_feature(tmp_path):
     paths = _write_inputs(tmp_path)
     cohort_dir = paths.source_root / "CHOL"
@@ -266,6 +452,7 @@ def test_full_support_universe_excludes_exact_zero_mutsig_rate(tmp_path):
     lambdas = np.full((3, 4, 2), 0.1, dtype="<f4")
     lambdas[0, :, :] = 0
     lambdas.ravel(order="F").tofile(mutsig_dir / "persample_lambda.f32")
+    _write_mutsig_receipt(mutsig_dir)
 
     contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
     exclusion = next(
@@ -531,8 +718,450 @@ def test_task_validation_rejects_resource_provenance_drift(tmp_path, monkeypatch
 
 
 def test_default_concurrency_is_strictly_below_half_of_fourteen_cores():
-    assert runner.safe_default_jobs(14) == 5
+    assert runner.safe_default_jobs(14) == 3
     assert runner.safe_default_jobs(14) < 14 / 2
+
+
+def test_darwin_memory_pressure_parser_uses_aggregate_free_percentage():
+    total, available = runner._parse_darwin_memory_pressure(  # noqa: SLF001
+        "The system has 25769803776 (1572864 pages).\n"
+        "System-wide memory free percentage: 39%\n",
+    )
+
+    assert total == 25769803776
+    assert available == total * 39 // 100
+
+
+def test_linux_meminfo_parser_uses_memavailable():
+    total, available = runner._parse_linux_meminfo(  # noqa: SLF001
+        "MemTotal:       24576000 kB\n"
+        "MemFree:         1000000 kB\n"
+        "MemAvailable:   10000000 kB\n",
+    )
+
+    assert total == 24576000 * 1024
+    assert available == 10000000 * 1024
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "System-wide memory free percentage: 39%\n",
+        "The system has 25769803776 bytes.\n"
+        "System-wide memory free percentage: 101%\n",
+    ],
+)
+def test_darwin_memory_pressure_parser_rejects_incomplete_or_invalid_output(output):
+    with pytest.raises(RuntimeError, match="macOS memory_pressure"):
+        runner._parse_darwin_memory_pressure(output)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "MemTotal: 100 kB\nMemFree: 50 kB\n",
+        "MemTotal: 100 kB\nMemAvailable: 101 kB\n",
+        "MemTotal: 100 bytes\nMemAvailable: 50 bytes\n",
+    ],
+)
+def test_linux_meminfo_parser_rejects_missing_invalid_or_wrong_unit_fields(content):
+    with pytest.raises(RuntimeError, match="Linux /proc/meminfo"):
+        runner._parse_linux_meminfo(content)  # noqa: SLF001
+
+
+def test_live_resource_gate_requires_cpu_memory_and_disk_headroom():
+    snapshot = runner.HostResourceSnapshot(
+        measured_at_utc="2026-08-28T00:00:00+00:00",
+        logical_cores=14,
+        total_memory_bytes=24 * 1024**3,
+        available_memory_bytes=10 * 1024**3,
+        free_disk_bytes=100 * 1024**3,
+        memory_source="test",
+    )
+
+    assert runner.evaluate_host_resource_gate(snapshot, jobs=3)["passed"] is True
+
+    low_memory = runner.HostResourceSnapshot(
+        **{
+            **snapshot.__dict__,
+            "available_memory_bytes": 7 * 1024**3,
+        },
+    )
+    evaluation = runner.evaluate_host_resource_gate(low_memory, jobs=3)
+    assert evaluation["passed"] is False
+    assert "available memory" in evaluation["reasons"][0]
+
+    evaluation = runner.evaluate_host_resource_gate(snapshot, jobs=4)
+    assert evaluation["passed"] is False
+    assert "safe live cap" in evaluation["reasons"][0]
+
+
+def test_live_resource_gate_rejects_malformed_aggregate_readback():
+    snapshot = runner.HostResourceSnapshot(
+        measured_at_utc="",
+        logical_cores=0,
+        total_memory_bytes=0,
+        available_memory_bytes=1,
+        free_disk_bytes=-1,
+        memory_source="",
+    )
+
+    evaluation = runner.evaluate_host_resource_gate(snapshot, jobs=1)
+
+    assert evaluation["passed"] is False
+    assert evaluation["reasons"] == [
+        "logical core count must be positive",
+        "total memory must be positive",
+        "available memory is outside the physical-memory range",
+        "free disk cannot be negative",
+        "resource readback provenance is incomplete",
+        "free disk is below the 2x historical-output gate",
+    ]
+
+
+def test_live_resource_gate_records_invalid_snapshot_before_failing(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    paths.output_root.mkdir()
+    snapshot = runner.HostResourceSnapshot(
+        measured_at_utc="not-a-timestamp",
+        logical_cores=0,
+        total_memory_bytes=0,
+        available_memory_bytes=1,
+        free_disk_bytes=-1,
+        memory_source="test",
+    )
+    monkeypatch.setattr(runner, "read_host_resources", lambda _root: snapshot)
+
+    with pytest.raises(RuntimeError, match="Live resource gate failed"):
+        runner._require_live_resource_gate(  # noqa: SLF001
+            paths,
+            jobs=1,
+            label="invalid-snapshot",
+        )
+
+    records = list((paths.output_root / "resource_readbacks").glob("*.json"))
+    assert len(records) == 1
+    record = runner._read_json(records[0])  # noqa: SLF001
+    assert record["evaluation"]["passed"] is False
+    assert "resource readback provenance is incomplete" in record["evaluation"][
+        "reasons"
+    ]
+
+
+def test_resource_readback_record_cannot_be_overwritten(tmp_path, monkeypatch):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    paths.output_root.mkdir()
+    snapshot = runner.HostResourceSnapshot(
+        measured_at_utc="2026-08-28T00:00:00+00:00",
+        logical_cores=14,
+        total_memory_bytes=24 * 1024**3,
+        available_memory_bytes=10 * 1024**3,
+        free_disk_bytes=100 * 1024**3,
+        memory_source="test",
+    )
+
+    class FixedUuid:
+        hex = "fixed"
+
+    monkeypatch.setattr(runner, "read_host_resources", lambda _root: snapshot)
+    monkeypatch.setattr(runner.uuid, "uuid4", FixedUuid)
+    runner._require_live_resource_gate(  # noqa: SLF001
+        paths,
+        jobs=1,
+        label="first",
+    )
+    record_path = paths.output_root / "resource_readbacks" / "fixed.json"
+    original = record_path.read_bytes()
+
+    with pytest.raises(FileExistsError):
+        runner._require_live_resource_gate(  # noqa: SLF001
+            paths,
+            jobs=1,
+            label="replacement",
+        )
+
+    assert record_path.read_bytes() == original
+
+
+def test_internal_task_environment_requires_every_exact_limit(monkeypatch):
+    required = {
+        **runner.THREAD_LIMIT_ENV,
+        runner.INTERNAL_TASK_ENV: "1",
+        "PYTHONHASHSEED": "0",
+    }
+    for name in required:
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(RuntimeError, match="single-thread environment"):
+        runner._require_internal_task_environment()  # noqa: SLF001
+
+    for name, value in required.items():
+        monkeypatch.setenv(name, value)
+    runner._require_internal_task_environment()  # noqa: SLF001
+
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+    with pytest.raises(RuntimeError, match="OMP_NUM_THREADS"):
+        runner._require_internal_task_environment()  # noqa: SLF001
+
+
+def test_task_subprocess_inherits_exact_single_thread_environment(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    runner._write_json_atomic(  # noqa: SLF001
+        paths.output_root / "contracts" / "CHOL.json",
+        {"cohort": "CHOL"},
+    )
+    captured = {}
+
+    def record_run(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        return runner.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner.subprocess, "run", record_run)
+
+    task, return_code = runner._invoke_task(  # noqa: SLF001
+        paths,
+        runner.Task("CHOL", "cbase"),
+        10,
+    )
+
+    assert task == runner.Task("CHOL", "cbase")
+    assert return_code == 0
+    assert {
+        name: captured["env"][name]
+        for name in runner.THREAD_LIMIT_ENV
+    } == runner.THREAD_LIMIT_ENV
+    assert captured["env"][runner.INTERNAL_TASK_ENV] == "1"
+    assert captured["env"]["PYTHONHASHSEED"] == "0"
+
+
+def test_production_task_requires_child_gate_before_any_inference(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    for name, value in runner.THREAD_LIMIT_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(runner.INTERNAL_TASK_ENV, "1")
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+
+    def reject_gate(_paths, *, jobs, label):
+        assert jobs == 1
+        assert label == "task-start-CHOL-cbase"
+        msg = "blocked by child gate"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(runner, "_require_live_resource_gate", reject_gate)
+
+    with pytest.raises(RuntimeError, match="blocked by child gate"):
+        runner.execute_task(
+            paths,
+            runner.Task("CHOL", "cbase"),
+            nice_increment=0,
+            expected_contract_sha256="frozen",
+        )
+
+
+def test_execute_task_rejects_negative_niceness_before_reading_inputs(tmp_path):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+
+    with pytest.raises(ValueError, match="niceness increment"):
+        runner.execute_task(
+            paths,
+            runner.Task("CHOL", "cbase"),
+            nice_increment=-1,
+            top_k=3,
+        )
+
+
+def test_cli_resource_overrides_share_the_computed_host_cap():
+    with pytest.raises(ValueError, match="--jobs 4 exceeds"):
+        runner._validate_cli_resource_options(  # noqa: SLF001
+            jobs=4,
+            mutsig_jobs=1,
+            nice_increment=10,
+            logical_cores=14,
+        )
+
+    with pytest.raises(ValueError, match=r"--mutsig-jobs.*between 1 and 1"):
+        runner._validate_cli_resource_options(  # noqa: SLF001
+            jobs=1,
+            mutsig_jobs=2,
+            nice_increment=10,
+            logical_cores=2,
+        )
+
+
+def test_internal_cli_rejects_negative_niceness_before_execution(
+    tmp_path,
+    monkeypatch,
+):
+    invoked = []
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            "runner",
+            "--output-root",
+            str(tmp_path / "run"),
+            "--internal-cohort",
+            "CHOL",
+            "--internal-bmr",
+            "cbase",
+            "--internal-contract-sha256",
+            "frozen",
+            "--nice",
+            "-1",
+        ],
+    )
+    def record_execution(*_args, **_kwargs):
+        invoked.append(1)
+
+    monkeypatch.setattr(runner, "execute_task", record_execution)
+
+    with pytest.raises(ValueError, match="--nice must be nonnegative"):
+        runner.main()
+
+    assert invoked == []
+
+
+def test_task_batch_rechecks_resources_before_each_bounded_wave(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    tasks = [runner.Task(f"C{i}", "cbase") for i in range(5)]
+    gates = []
+    invoked = []
+
+    def record_gate(_paths, *, jobs, label):
+        gates.append((jobs, label))
+
+    def record_invocation(_paths, task, _nice_increment):
+        invoked.append(task)
+        return task, 0
+
+    monkeypatch.setattr(runner, "_require_live_resource_gate", record_gate)
+    monkeypatch.setattr(runner, "_invoke_task", record_invocation)
+
+    failures = runner._run_task_batch(  # noqa: SLF001
+        paths,
+        tasks,
+        jobs=2,
+        nice_increment=10,
+    )
+
+    assert failures == 0
+    assert [jobs for jobs, _label in gates] == [2, 2, 1]
+    assert len({label for _jobs, label in gates}) == 3
+    assert set(invoked) == set(tasks)
+
+
+def test_task_batch_never_invokes_a_task_after_a_failed_live_gate(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    invoked = []
+
+    def reject_gate(_paths, *, jobs, label):
+        del jobs, label
+        msg = "unsafe host"
+        raise RuntimeError(msg)
+
+    def record_invocation(_paths, task, _nice_increment):
+        invoked.append(task)
+        return task, 0
+
+    monkeypatch.setattr(runner, "_require_live_resource_gate", reject_gate)
+    monkeypatch.setattr(runner, "_invoke_task", record_invocation)
+
+    with pytest.raises(RuntimeError, match="unsafe host"):
+        runner._run_task_batch(  # noqa: SLF001
+            paths,
+            [runner.Task("CHOL", "cbase")],
+            jobs=1,
+            nice_increment=10,
+        )
+
+    assert invoked == []
+
+
+def test_task_batch_rejects_nonpositive_concurrency_before_scheduling(tmp_path):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+
+    with pytest.raises(ValueError, match="concurrency must be positive"):
+        runner._run_task_batch(  # noqa: SLF001
+            paths,
+            [runner.Task("CHOL", "cbase")],
+            jobs=0,
+            nice_increment=10,
+        )
+
+
+def test_noncanary_subset_cannot_bypass_missing_chol_canaries(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    contract_path = paths.output_root / "contracts" / "BRCA.json"
+    runner._write_json_atomic(contract_path, {})  # noqa: SLF001
+    batches = []
+    monkeypatch.setattr(runner, "_initialize_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner, "_ensure_contract", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner, "_require_corrected_lrt", lambda: ())
+    monkeypatch.setattr(
+        runner,
+        "_require_canonical_mutsig_maf_binding",
+        lambda _contract: None,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_task_batch",
+        lambda *_args, **_kwargs: batches.append(1),
+    )
+
+    with pytest.raises(RuntimeError, match="Validated CHOL canaries"):
+        runner._orchestrate(  # noqa: SLF001
+            paths,
+            ["BRCA"],
+            jobs=1,
+            mutsig_jobs=1,
+            nice_increment=10,
+            preflight_only=False,
+        )
+
+    assert batches == []
+
+
+def test_canary_gate_revalidates_all_three_background_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    for bmr in runner.BMRS:
+        (paths.output_root / "tasks" / "CHOL" / bmr).mkdir(parents=True)
+    validated = []
+    monkeypatch.setattr(
+        runner,
+        "_load_verified_contract",
+        lambda _paths, cohort, *, top_k: {"cohort": cohort, "top_k": top_k},
+    )
+    monkeypatch.setattr(
+        runner,
+        "validate_task_output",
+        lambda task_dir, _contract: validated.append(task_dir.name),
+    )
+
+    runner._require_validated_canary_outputs(paths)  # noqa: SLF001
+
+    assert validated == list(runner.BMRS)
 
 
 def test_production_initialization_rejects_dirty_git_tree(tmp_path, monkeypatch):
@@ -547,4 +1176,22 @@ def test_production_initialization_rejects_dirty_git_tree(tmp_path, monkeypatch)
     manifest = runner._initialize_run(paths, allow_dirty=True)  # noqa: SLF001
     assert manifest["git"] == dirty
     with pytest.raises(RuntimeError, match="clean Git tree"):
+        runner._initialize_run(paths, allow_dirty=False)  # noqa: SLF001
+
+
+def test_run_resume_rejects_resource_policy_drift(tmp_path, monkeypatch):
+    paths = runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run")
+    clean = {"head": "abc123", "dirty": False, "status": []}
+    monkeypatch.setattr(runner, "_git_snapshot", lambda _root: clean)
+    monkeypatch.setattr(
+        runner,
+        "_source_snapshot",
+        lambda _root: {"runner.py": "frozen"},
+    )
+    manifest = runner._initialize_run(paths, allow_dirty=False)  # noqa: SLF001
+    manifest["resource_policy"]["maximum_general_jobs"] = 99
+    manifest_path = paths.output_root / "run_manifest.json"
+    manifest_path.write_bytes(runner._canonical_json(manifest) + b"\n")  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="resource_policy"):
         runner._initialize_run(paths, allow_dirty=False)  # noqa: SLF001

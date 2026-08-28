@@ -15,11 +15,12 @@ The current repository must expose the required LRT, pair-fit, and observation-s
 contracts. These intentional launch gates prevent expensive K=500 runs from using the
 historical statistic, an uncertified optimizer, or silently unsupported observations.
 
-Launch after the LRT gate is implemented and reviewed::
+Launch only after the LRT and signed canonical-MAF binding gates are implemented
+and reviewed::
 
     PYTHONPATH=src /opt/anaconda3/envs/dialect/bin/python \
       -m analysis.run_tcga_revision_k500 \
-      --output-root output/revision_tcga_k500_2026-08-27 --jobs 5
+      --output-root output/revision_tcga_k500_2026-08-27 --jobs 3
 """
 
 from __future__ import annotations
@@ -33,13 +34,14 @@ import math
 import os
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
@@ -79,7 +81,34 @@ REQUIRED_LOG_ODDS_RATIO_CONTRACT = (
 )
 OBSERVATION_SUPPORT_UNIVERSE = "full-observation-support-common-universe-v1"
 REQUIRED_GENE_SUPPORT_CONTRACT = "latent-state-union-v1"
-SAMPLE_AXIS_CONTRACT = "count-matrix-equals-ordered-mutsig-patient-axis-v1"
+SAMPLE_AXIS_CONTRACT = (
+    "count-matrix-equals-authoritative-and-mutsig-patient-axis-v2"
+)
+MUTSIG_RECEIPT_SCHEMA_VERSION = "1"
+MUTSIG_UPSTREAM_COMMIT = "0109e27e70478181695f31ca8dd281bb44f0b3af"
+MUTSIG_MAF_BINDING_STATUS = "unverified-canonical-maf-stop-ship"
+MUTSIG_MAF_BINDING_REQUIREMENT = (
+    "bind receipt maf_sha256 to the signed canonical MAF/population manifest"
+)
+MUTSIG_PATCH_PATH = Path("external/mutsig2cv_octave_dialect.patch")
+MUTSIG_RUNNER_PATH = Path("scripts/run_mutsig_octave.sh")
+MUTSIG_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "cohort",
+        "upstream_commit",
+        "patch_sha256",
+        "runner_sha256",
+        "runtime_sha256",
+        "maf_sha256",
+        "sample_axis_sha256",
+        "sample_axis_count",
+        "lambda_sha256",
+        "meta_sha256",
+        "genes_sha256",
+        "patients_sha256",
+    },
+)
 TCGA_COHORTS = (
     "ACC",
     "BLCA",
@@ -124,6 +153,7 @@ THREAD_LIMIT_ENV = {
     "OPENBLAS_NUM_THREADS": "1",
     "VECLIB_MAXIMUM_THREADS": "1",
 }
+INTERNAL_TASK_ENV = "DIALECT_K500_ORCHESTRATED_TASK"
 PAIRWISE_COLUMNS = (
     "Gene A",
     "Gene B",
@@ -155,11 +185,19 @@ PAIRWISE_COLUMNS = (
 SOURCE_FILES = (
     Path("analysis/run_tcga_revision_k500.py"),
     Path("analysis/mutsig_lambda_co.py"),
+    MUTSIG_PATCH_PATH,
+    MUTSIG_RUNNER_PATH,
     Path("src/dialect/models/gene.py"),
     Path("src/dialect/models/interaction.py"),
     Path("src/dialect/utils/identify.py"),
 )
 _HASH_CHUNK_BYTES = 1024 * 1024
+_GIB = 1024**3
+MAX_GENERAL_JOBS = 3
+PRIOR_TASK_PEAK_RSS_BYTES = round(2.083 * _GIB)
+MEMORY_HEADROOM_FACTOR = 1.25
+MIN_AVAILABLE_MEMORY_FRACTION = 0.33
+MIN_FREE_DISK_BYTES = round(7.6 * _GIB)
 
 
 @dataclass(frozen=True)
@@ -177,6 +215,18 @@ class Task:
 
     cohort: str
     bmr: str
+
+
+@dataclass(frozen=True)
+class HostResourceSnapshot:
+    """One live, aggregate-only host resource readback."""
+
+    measured_at_utc: str
+    logical_cores: int
+    total_memory_bytes: int
+    available_memory_bytes: int
+    free_disk_bytes: int
+    memory_source: str
 
 
 def _utc_now() -> str:
@@ -490,9 +540,133 @@ def _read_axis(path: Path, expected: int, *, label: str) -> list[str]:
     return values
 
 
+def _read_authoritative_sample_axis(path: Path) -> list[str]:
+    """Read the materialized axis in its canonical UTF-8/LF byte convention."""
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        msg = f"Authoritative sample axis is not UTF-8: {path}"
+        raise ValueError(msg) from error
+    values = text.splitlines()
+    canonical = ("\n".join(values) + "\n").encode()
+    if raw != canonical:
+        msg = (
+            "Authoritative sample axis must use UTF-8, LF separators, and one "
+            f"terminal newline: {path}"
+        )
+        raise ValueError(msg)
+    if not values or any(not value or value != value.strip() for value in values):
+        msg = f"Authoritative sample axis contains a blank or padded ID: {path}"
+        raise ValueError(msg)
+    if len(values) != len(set(values)):
+        msg = f"Authoritative sample axis contains duplicate IDs: {path}"
+        raise ValueError(msg)
+    if values != sorted(values):
+        msg = f"Authoritative sample axis must be lexicographically ordered: {path}"
+        raise ValueError(msg)
+    return values
+
+
+def _read_mutsig_receipt(path: Path) -> dict[str, str]:
+    """Read the receipt published last by the tracked MutSig runner."""
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        pieces = line.split("\t")
+        if (
+            len(pieces) != 2
+            or not pieces[0]
+            or not pieces[1]
+            or pieces[0] in fields
+        ):
+            msg = f"Invalid MutSig receipt row in {path}: {line!r}"
+            raise ValueError(msg)
+        fields[pieces[0]] = pieces[1]
+    if set(fields) != MUTSIG_RECEIPT_KEYS:
+        missing = sorted(MUTSIG_RECEIPT_KEYS - set(fields))
+        unexpected = sorted(set(fields) - MUTSIG_RECEIPT_KEYS)
+        msg = (
+            f"MutSig receipt has the wrong fields: {path}; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+        raise ValueError(msg)
+    return fields
+
+
+def _validate_mutsig_receipt(
+    mutsig_dir: Path,
+    dimensions: dict[str, int],
+    artifact_records: dict[str, dict[str, Any]],
+    *,
+    authoritative_axis_sha256: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Validate input/source provenance and every receipt-bound sidecar."""
+    receipt_path = mutsig_dir / "persample_receipt.tsv"
+    receipt = _read_mutsig_receipt(receipt_path)
+    if receipt["schema_version"] != MUTSIG_RECEIPT_SCHEMA_VERSION:
+        msg = f"Unsupported MutSig receipt schema in {receipt_path}"
+        raise ValueError(msg)
+    if receipt["cohort"] != mutsig_dir.name:
+        msg = f"MutSig receipt cohort does not match its directory: {receipt_path}"
+        raise ValueError(msg)
+    if receipt["upstream_commit"] != MUTSIG_UPSTREAM_COMMIT:
+        msg = (
+            "MutSig receipt does not pin the required upstream commit: "
+            f"{receipt_path}"
+        )
+        raise ValueError(msg)
+    if receipt["sample_axis_sha256"] != authoritative_axis_sha256:
+        msg = (
+            "MutSig receipt sample_axis_sha256 does not match the authoritative "
+            f"sample_axis.txt: {receipt_path}"
+        )
+        raise ValueError(msg)
+
+    sha256_fields = {key for key in MUTSIG_RECEIPT_KEYS if key.endswith("_sha256")}
+    for key in sha256_fields:
+        if re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None:
+            msg = f"MutSig receipt {key} is not a lowercase SHA-256: {receipt_path}"
+            raise ValueError(msg)
+    if not receipt["sample_axis_count"].isdigit() or (
+        int(receipt["sample_axis_count"]) != dimensions["np"]
+    ):
+        msg = (
+            "MutSig receipt sample-axis count does not match metadata: "
+            f"{receipt_path}"
+        )
+        raise ValueError(msg)
+
+    repo_root = Path(__file__).resolve().parents[1]
+    expected_source_hashes = {
+        "patch_sha256": _sha256(repo_root / MUTSIG_PATCH_PATH),
+        "runner_sha256": _sha256(repo_root / MUTSIG_RUNNER_PATH),
+    }
+    for key, expected in expected_source_hashes.items():
+        if receipt[key] != expected:
+            msg = (
+                f"MutSig receipt {key} does not match the tracked source: "
+                f"{receipt_path}"
+            )
+            raise ValueError(msg)
+
+    receipt_artifact_keys = {
+        "lambda": "lambda_sha256",
+        "metadata": "meta_sha256",
+        "genes": "genes_sha256",
+        "patients": "patients_sha256",
+    }
+    for artifact, key in receipt_artifact_keys.items():
+        if receipt[key] != artifact_records[artifact]["sha256"]:
+            msg = f"MutSig receipt hash does not match {artifact}: {receipt_path}"
+            raise ValueError(msg)
+    return receipt, _file_record(receipt_path)
+
+
 def _mutsig_contract(
     mutsig_dir: Path,
     count_samples: Sequence[str],
+    *,
+    authoritative_axis_sha256: str,
 ) -> tuple[set[str], dict[str, Any]]:
     meta_path = mutsig_dir / "persample_meta.txt"
     genes_path = mutsig_dir / "persample_genes.txt"
@@ -525,8 +699,34 @@ def _mutsig_contract(
         f"{sample}\t{patient_position[sample]}" for sample in ordered_count_samples
     ]
     ordered_axis_sha256 = _sequence_sha256(ordered_count_samples)
+    artifact_records = {
+        "lambda": _file_record(lambda_path),
+        "metadata": _file_record(meta_path),
+        "genes": _file_record(genes_path),
+        "patients": _file_record(patients_path),
+    }
+    receipt, receipt_record = _validate_mutsig_receipt(
+        mutsig_dir,
+        fields,
+        artifact_records,
+        authoritative_axis_sha256=authoritative_axis_sha256,
+    )
     return set(genes), {
         "dimensions": fields,
+        "receipt": {
+            "schema_version": receipt["schema_version"],
+            "upstream_commit": receipt["upstream_commit"],
+            "patch_sha256": receipt["patch_sha256"],
+            "runner_sha256": receipt["runner_sha256"],
+            "runtime_sha256": receipt["runtime_sha256"],
+            "maf_sha256": receipt["maf_sha256"],
+            "canonical_maf_binding": {
+                "status": MUTSIG_MAF_BINDING_STATUS,
+                "required_before_production": MUTSIG_MAF_BINDING_REQUIREMENT,
+            },
+            "sample_axis_sha256": receipt["sample_axis_sha256"],
+            "sample_axis_count": int(receipt["sample_axis_count"]),
+        },
         "sample_mapping": {
             "contract": SAMPLE_AXIS_CONTRACT,
             "cohort_samples": len(ordered_count_samples),
@@ -538,12 +738,7 @@ def _mutsig_contract(
             "ordered_mutsig_ids_sha256": ordered_axis_sha256,
             "ordered_mapping_sha256": _sequence_sha256(mapping),
         },
-        "files": {
-            "lambda": _file_record(lambda_path),
-            "metadata": _file_record(meta_path),
-            "genes": _file_record(genes_path),
-            "patients": _file_record(patients_path),
-        },
+        "files": {**artifact_records, "receipt": receipt_record},
     }
 
 
@@ -795,7 +990,7 @@ def _require_full_observation_support(contract: dict[str, Any]) -> None:
 
 
 def _require_exact_sample_axis(contract: dict[str, Any]) -> None:
-    """Require one identical ordered tumor axis for counts and MutSig backgrounds."""
+    """Require one authoritative ordered tumor axis across all backgrounds."""
     samples = contract.get("samples", {})
     count = samples.get("count")
     if (
@@ -804,14 +999,34 @@ def _require_exact_sample_axis(contract: dict[str, Any]) -> None:
         or samples.get("extra_mutsig_samples") != 0
         or samples.get("cohort_mean_fallback_samples") != 0
         or samples.get("cohort_samples") != count
+        or samples.get("authoritative_samples") != count
         or samples.get("matched_samples") != count
         or samples.get("ordered_ids_sha256")
         != samples.get("ordered_count_ids_sha256")
         or samples.get("ordered_ids_sha256")
         != samples.get("ordered_mutsig_ids_sha256")
+        or samples.get("ordered_ids_sha256")
+        != samples.get("ordered_authoritative_ids_sha256")
     ):
         msg = "Cohort contract does not bind one exact ordered sample axis."
         raise ValueError(msg)
+
+
+def _require_canonical_mutsig_maf_binding(contract: dict[str, Any]) -> None:
+    """Block production until the receipt MAF hash has an approved authority."""
+    binding = (
+        contract.get("inputs", {})
+        .get("mutsig", {})
+        .get("receipt", {})
+        .get("canonical_maf_binding", {})
+    )
+    if binding.get("status") != "verified":
+        requirement = binding.get(
+            "required_before_production",
+            MUTSIG_MAF_BINDING_REQUIREMENT,
+        )
+        msg = f"K=500 launch blocked by MutSig MAF provenance stop-ship: {requirement}."
+        raise RuntimeError(msg)
 
 
 def build_cohort_contract(
@@ -823,17 +1038,28 @@ def build_cohort_contract(
     """Build a deterministic fail-closed contract for one cohort."""
     cohort_dir = paths.source_root / cohort
     count_path = cohort_dir / "count_matrix.csv"
+    sample_axis_path = cohort_dir / "sample_axis.txt"
     cbase_path = cohort_dir / "bmr_pmfs.csv"
     dig_path = cohort_dir / "bmr_pmfs.dig.csv"
     mutsig_dir = paths.mutsig_root / cohort
     counts = _read_counts(count_path)
+    ordered_count_samples = [str(sample) for sample in counts.index]
+    authoritative_samples = _read_authoritative_sample_axis(sample_axis_path)
+    if ordered_count_samples != authoritative_samples:
+        msg = (
+            "Count-matrix sample axis must exactly equal authoritative "
+            f"sample_axis.txt for {cohort}."
+        )
+        raise ValueError(msg)
+    authoritative_axis_sha256 = _sha256(sample_axis_path)
     cbase_pmfs = _load_strict_pmfs(cbase_path)
     dig_pmfs = _load_strict_pmfs(dig_path)
     cbase_features = set(cbase_pmfs)
     dig_features = set(dig_pmfs)
     mutsig_genes, mutsig = _mutsig_contract(
         mutsig_dir,
-        [str(sample) for sample in counts.index],
+        ordered_count_samples,
+        authoritative_axis_sha256=authoritative_axis_sha256,
     )
     fully_supported_features, support_universe = build_full_support_universe(
         counts,
@@ -876,7 +1102,11 @@ def build_cohort_contract(
         },
         "samples": {
             "count": len(counts),
-            "ordered_ids_sha256": _sequence_sha256(str(x) for x in counts.index),
+            "authoritative_samples": len(authoritative_samples),
+            "ordered_ids_sha256": _sequence_sha256(ordered_count_samples),
+            "ordered_authoritative_ids_sha256": _sequence_sha256(
+                authoritative_samples,
+            ),
             **mutsig["sample_mapping"],
         },
         "features": features,
@@ -920,6 +1150,7 @@ def build_cohort_contract(
         "observed_count_support_audit": support_audit,
         "inputs": {
             "counts": _file_record(count_path),
+            "sample_axis": _file_record(sample_axis_path),
             "cbase": _file_record(cbase_path),
             "dig": _file_record(dig_path),
             "mutsig": mutsig,
@@ -986,6 +1217,7 @@ def _load_verified_contract(
     _require_full_observation_support(contract)
     inputs = contract["inputs"]
     _verify_file_record(inputs["counts"])
+    _verify_file_record(inputs["sample_axis"])
     _verify_file_record(inputs["cbase"])
     _verify_file_record(inputs["dig"])
     for record in inputs["mutsig"]["files"].values():
@@ -1052,6 +1284,23 @@ def _verify_run_implementation(paths: RunPaths) -> dict[str, str]:
 
 def _initialize_run(paths: RunPaths, *, allow_dirty: bool) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
+    resource_policy = {
+        "default_jobs": safe_default_jobs(),
+        "default_mutsig_jobs": min(2, safe_default_jobs()),
+        "maximum_general_jobs": MAX_GENERAL_JOBS,
+        "serial_canary_cohort": CANARY_COHORT,
+        "memory_heavy_mutsig_cohorts": sorted(MEMORY_HEAVY_MUTSIG_COHORTS),
+        "memory_heavy_mutsig_jobs": 1,
+        "default_child_process_nice_increment": 10,
+        "thread_environment": THREAD_LIMIT_ENV,
+        "internal_task_environment": {INTERNAL_TASK_ENV: "1"},
+        "prior_task_peak_rss_bytes": PRIOR_TASK_PEAK_RSS_BYTES,
+        "memory_headroom_factor": MEMORY_HEADROOM_FACTOR,
+        "minimum_available_memory_fraction": MIN_AVAILABLE_MEMORY_FRACTION,
+        "minimum_free_disk_bytes": MIN_FREE_DISK_BYTES,
+        "live_readback_before_every_wave": True,
+        "live_readback_before_every_task": True,
+    }
     expected = {
         "schema_version": SCHEMA_VERSION,
         "analysis": "tcga-revision-k500",
@@ -1072,6 +1321,7 @@ def _initialize_run(paths: RunPaths, *, allow_dirty: bool) -> dict[str, Any]:
         "observation_support_universe": OBSERVATION_SUPPORT_UNIVERSE,
         "required_gene_support_contract": REQUIRED_GENE_SUPPORT_CONTRACT,
         "sample_axis_contract": SAMPLE_AXIS_CONTRACT,
+        "resource_policy": resource_policy,
     }
     manifest_path = paths.output_root / "run_manifest.json"
     git = _git_snapshot(repo_root)
@@ -1112,15 +1362,6 @@ def _initialize_run(paths: RunPaths, *, allow_dirty: bool) -> dict[str, Any]:
         "created_at_utc": _utc_now(),
         "git": git,
         "implementation_sha256": _source_snapshot(repo_root),
-        "resource_policy": {
-            "default_jobs": safe_default_jobs(),
-            "default_mutsig_jobs": 2,
-            "serial_canary_cohort": CANARY_COHORT,
-            "memory_heavy_mutsig_cohorts": sorted(MEMORY_HEAVY_MUTSIG_COHORTS),
-            "memory_heavy_mutsig_jobs": 1,
-            "child_process_nice_increment": 10,
-            "thread_environment": THREAD_LIMIT_ENV,
-        },
     }
     _write_json_atomic(manifest_path, manifest)
     return manifest
@@ -1650,6 +1891,19 @@ def execute_task(
     if task.cohort not in TCGA_COHORTS or task.bmr not in BMRS:
         msg = f"Invalid task: {task}"
         raise ValueError(msg)
+    if nice_increment < 0:
+        msg = "Task niceness increment must be nonnegative."
+        raise ValueError(msg)
+    if top_k == TOP_K:
+        if expected_contract_sha256 is None:
+            msg = "Production tasks require the orchestrator's frozen contract hash."
+            raise ValueError(msg)
+        _require_internal_task_environment()
+        _require_live_resource_gate(
+            paths,
+            jobs=1,
+            label=f"task-start-{task.cohort}-{task.bmr}",
+        )
     (
         lrt_contract,
         pair_fit_contract,
@@ -1664,10 +1918,9 @@ def execute_task(
     if nice_increment > 0:
         os.nice(nice_increment)
     contract = _load_verified_contract(paths, task.cohort, top_k=top_k)
+    if top_k == TOP_K:
+        _require_canonical_mutsig_maf_binding(contract)
     contract_sha256 = _json_sha256(contract)
-    if top_k == TOP_K and expected_contract_sha256 is None:
-        msg = "Production tasks require the orchestrator's frozen contract hash."
-        raise ValueError(msg)
     if (
         expected_contract_sha256 is not None
         and contract_sha256 != expected_contract_sha256
@@ -1768,9 +2021,233 @@ def execute_task(
 
 
 def safe_default_jobs(logical_cores: int | None = None) -> int:
-    """Return a default strictly below half the available logical cores."""
+    """Return at most three jobs and below half when the host has at least 3 cores."""
     cores = logical_cores if logical_cores is not None else (os.cpu_count() or 1)
-    return max(1, min(5, (cores - 1) // 2))
+    return max(1, min(MAX_GENERAL_JOBS, (cores - 1) // 2))
+
+
+def _parse_darwin_memory_pressure(output: str) -> tuple[int, int]:
+    total_match = re.search(r"The system has (\d+) ", output)
+    free_match = re.search(r"System-wide memory free percentage: (\d+)%", output)
+    if total_match is None or free_match is None:
+        msg = "Could not parse macOS memory_pressure aggregate readback."
+        raise RuntimeError(msg)
+    total = int(total_match.group(1))
+    free_percent = int(free_match.group(1))
+    if total <= 0 or not 0 <= free_percent <= 100:
+        msg = "macOS memory_pressure returned invalid aggregate values."
+        raise RuntimeError(msg)
+    return total, total * free_percent // 100
+
+
+def _parse_linux_meminfo(content: str) -> tuple[int, int]:
+    fields: dict[str, int] = {}
+    for line in content.splitlines():
+        name, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        pieces = raw_value.split()
+        if len(pieces) == 2 and pieces[0].isdigit() and pieces[1] == "kB":
+            fields[name] = int(pieces[0]) * 1024
+    try:
+        total = fields["MemTotal"]
+        available = fields["MemAvailable"]
+    except KeyError as error:
+        msg = "Linux /proc/meminfo lacks MemTotal or MemAvailable."
+        raise RuntimeError(msg) from error
+    if total <= 0 or not 0 <= available <= total:
+        msg = "Linux /proc/meminfo returned invalid aggregate values."
+        raise RuntimeError(msg)
+    return total, available
+
+
+def _nearest_existing_parent(path: Path) -> Path:
+    candidate = path.resolve()
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            msg = f"No existing parent is available for disk readback: {path}"
+            raise FileNotFoundError(msg)
+        candidate = parent
+    return candidate
+
+
+def read_host_resources(output_root: Path) -> HostResourceSnapshot:
+    """Read aggregate host memory, core, and target-filesystem capacity."""
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            ["/usr/bin/memory_pressure", "-Q"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        total_memory, available_memory = _parse_darwin_memory_pressure(
+            result.stdout,
+        )
+        memory_source = "/usr/bin/memory_pressure -Q"
+    elif sys.platform.startswith("linux"):
+        total_memory, available_memory = _parse_linux_meminfo(
+            Path("/proc/meminfo").read_text(encoding="utf-8"),
+        )
+        memory_source = "/proc/meminfo MemAvailable"
+    else:
+        msg = f"Unsupported platform for live memory gating: {sys.platform!r}."
+        raise RuntimeError(msg)
+    disk_parent = _nearest_existing_parent(output_root)
+    return HostResourceSnapshot(
+        measured_at_utc=_utc_now(),
+        logical_cores=os.cpu_count() or 1,
+        total_memory_bytes=total_memory,
+        available_memory_bytes=available_memory,
+        free_disk_bytes=shutil.disk_usage(disk_parent).free,
+        memory_source=memory_source,
+    )
+
+
+def evaluate_host_resource_gate(
+    snapshot: HostResourceSnapshot,
+    *,
+    jobs: int,
+) -> dict[str, Any]:
+    """Evaluate the frozen half-machine launch policy against one readback."""
+    reasons: list[str] = []
+    if snapshot.logical_cores <= 0:
+        reasons.append("logical core count must be positive")
+    if snapshot.total_memory_bytes <= 0:
+        reasons.append("total memory must be positive")
+    if not 0 <= snapshot.available_memory_bytes <= snapshot.total_memory_bytes:
+        reasons.append("available memory is outside the physical-memory range")
+    if snapshot.free_disk_bytes < 0:
+        reasons.append("free disk cannot be negative")
+    try:
+        measured_at = datetime.fromisoformat(snapshot.measured_at_utc)
+        timestamp_is_utc = (
+            measured_at.tzinfo is not None
+            and measured_at.utcoffset() == UTC.utcoffset(None)
+        )
+    except (TypeError, ValueError):
+        timestamp_is_utc = False
+    if not timestamp_is_utc or not snapshot.memory_source:
+        reasons.append("resource readback provenance is incomplete")
+
+    required_by_prior_rss = math.ceil(
+        jobs * PRIOR_TASK_PEAK_RSS_BYTES * MEMORY_HEADROOM_FACTOR,
+    )
+    required_by_fraction = math.ceil(
+        max(snapshot.total_memory_bytes, 0) * MIN_AVAILABLE_MEMORY_FRACTION,
+    )
+    required_available = max(required_by_prior_rss, required_by_fraction)
+    safe_cap = safe_default_jobs(max(snapshot.logical_cores, 1))
+    if jobs <= 0 or jobs > safe_cap:
+        reasons.append(f"jobs={jobs} exceeds safe live cap={safe_cap}")
+    if (
+        snapshot.total_memory_bytes > 0
+        and 0 <= snapshot.available_memory_bytes <= snapshot.total_memory_bytes
+        and snapshot.available_memory_bytes < required_available
+    ):
+        reasons.append(
+            "available memory is below the prior-RSS/fraction headroom gate",
+        )
+    if snapshot.free_disk_bytes < MIN_FREE_DISK_BYTES:
+        reasons.append("free disk is below the 2x historical-output gate")
+    return {
+        "passed": not reasons,
+        "jobs": jobs,
+        "safe_job_cap": safe_cap,
+        "required_available_memory_bytes": required_available,
+        "required_by_prior_rss_bytes": required_by_prior_rss,
+        "required_by_fraction_bytes": required_by_fraction,
+        "minimum_free_disk_bytes": MIN_FREE_DISK_BYTES,
+        "reasons": reasons,
+    }
+
+
+def _require_live_resource_gate(
+    paths: RunPaths,
+    *,
+    jobs: int,
+    label: str,
+) -> None:
+    snapshot = read_host_resources(paths.output_root)
+    evaluation = evaluate_host_resource_gate(snapshot, jobs=jobs)
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "label": label,
+        "snapshot": asdict(snapshot),
+        "evaluation": evaluation,
+    }
+    record_path = (
+        paths.output_root / "resource_readbacks" / f"{uuid.uuid4().hex}.json"
+    )
+    _write_json_atomic(record_path, record)
+    if (
+        snapshot.total_memory_bytes > 0
+        and 0 <= snapshot.available_memory_bytes <= snapshot.total_memory_bytes
+    ):
+        available_memory = (
+            f"{snapshot.available_memory_bytes / snapshot.total_memory_bytes:.0%}"
+        )
+    else:
+        available_memory = "invalid"
+    print(
+        f"resource gate {label}: jobs={jobs}, "
+        f"available_memory={available_memory}, "
+        f"free_disk={snapshot.free_disk_bytes / _GIB:.1f} GiB",
+    )
+    if not evaluation["passed"]:
+        msg = f"Live resource gate failed: {evaluation['reasons']}"
+        raise RuntimeError(msg)
+
+
+def _require_internal_task_environment() -> None:
+    """Require the exact deterministic, single-threaded child launch environment."""
+    required = {
+        **THREAD_LIMIT_ENV,
+        INTERNAL_TASK_ENV: "1",
+        "PYTHONHASHSEED": "0",
+    }
+    mismatches = {
+        name: os.environ.get(name)
+        for name, expected in required.items()
+        if os.environ.get(name) != expected
+    }
+    if mismatches:
+        msg = (
+            "Production internal tasks require the orchestrator's exact "
+            f"single-thread environment; mismatches: {sorted(mismatches)}"
+        )
+        raise RuntimeError(msg)
+
+
+def _validate_cli_resource_options(
+    *,
+    jobs: int,
+    mutsig_jobs: int,
+    nice_increment: int,
+    logical_cores: int | None = None,
+) -> None:
+    """Fail closed on resource-related public CLI overrides."""
+    cores = logical_cores if logical_cores is not None else (os.cpu_count() or 1)
+    safe_cap = safe_default_jobs(cores)
+    if jobs <= 0:
+        msg = "--jobs must be positive."
+        raise ValueError(msg)
+    if jobs > safe_cap:
+        msg = (
+            f"--jobs {jobs} exceeds the safe cap {safe_cap} for "
+            f"{cores} logical cores."
+        )
+        raise ValueError(msg)
+    mutsig_cap = min(2, safe_cap)
+    if mutsig_jobs <= 0 or mutsig_jobs > mutsig_cap:
+        msg = (
+            f"--mutsig-jobs must be between 1 and {mutsig_cap} for "
+            f"{cores} logical cores."
+        )
+        raise ValueError(msg)
+    if nice_increment < 0:
+        msg = "--nice must be nonnegative."
+        raise ValueError(msg)
 
 
 def _parse_cohorts(value: str | None) -> list[str]:
@@ -1841,6 +2318,7 @@ def _invoke_task(paths: RunPaths, task: Task, nice_increment: int) -> tuple[Task
     ]
     env = os.environ.copy()
     env.update(THREAD_LIMIT_ENV)
+    env[INTERNAL_TASK_ENV] = "1"
     env["PYTHONHASHSEED"] = "0"
     started_at = _utc_now()
     with log_path.open("x", encoding="utf-8") as log:
@@ -1898,21 +2376,36 @@ def _run_task_batch(
     failures = 0
     if not tasks:
         return failures
-    with ThreadPoolExecutor(max_workers=jobs) as executor:
-        futures = {
-            executor.submit(_invoke_task, paths, task, nice_increment): task
-            for task in tasks
-        }
-        for future in as_completed(futures):
-            task, return_code = future.result()
-            if return_code == 0:
-                print(f"complete {task.cohort}/{task.bmr}")
-            else:
-                failures += 1
-                print(
-                    f"failed {task.cohort}/{task.bmr}: exit={return_code}",
-                    file=sys.stderr,
-                )
+    if jobs <= 0:
+        msg = "Task-batch concurrency must be positive."
+        raise ValueError(msg)
+    for start in range(0, len(tasks), jobs):
+        wave = tasks[start : start + jobs]
+        wave_jobs = len(wave)
+        wave_number = start // jobs + 1
+        _require_live_resource_gate(
+            paths,
+            jobs=wave_jobs,
+            label="batch-{}-{}".format(
+                wave_number,
+                "-".join(f"{task.cohort}/{task.bmr}" for task in wave),
+            ),
+        )
+        with ThreadPoolExecutor(max_workers=wave_jobs) as executor:
+            futures = {
+                executor.submit(_invoke_task, paths, task, nice_increment): task
+                for task in wave
+            }
+            for future in as_completed(futures):
+                task, return_code = future.result()
+                if return_code == 0:
+                    print(f"complete {task.cohort}/{task.bmr}")
+                else:
+                    failures += 1
+                    print(
+                        f"failed {task.cohort}/{task.bmr}: exit={return_code}",
+                        file=sys.stderr,
+                    )
     return failures
 
 
@@ -1922,7 +2415,12 @@ def _run_serial_canaries(
     *,
     nice_increment: int,
 ) -> int:
-    for task in tasks:
+    for position, task in enumerate(tasks, start=1):
+        _require_live_resource_gate(
+            paths,
+            jobs=1,
+            label=f"canary-{position}-{task.cohort}-{task.bmr}",
+        )
         completed_task, return_code = _invoke_task(paths, task, nice_increment)
         if return_code != 0:
             print(
@@ -1935,6 +2433,34 @@ def _run_serial_canaries(
     return 0
 
 
+def _require_validated_canary_outputs(paths: RunPaths) -> None:
+    """Require all frozen CHOL outputs before launching a non-canary task."""
+    task_dirs = [
+        _task_dir(paths, Task(CANARY_COHORT, bmr))
+        for bmr in BMRS
+    ]
+    missing = [task_dir for task_dir in task_dirs if not task_dir.is_dir()]
+    if missing:
+        msg = (
+            f"Validated {CANARY_COHORT} canaries for all backgrounds are required "
+            "before any non-canary production task; include CHOL in this run or "
+            "resume from a run with complete validated CHOL outputs. "
+            f"Missing: {[path.as_posix() for path in missing]}"
+        )
+        raise RuntimeError(msg)
+    try:
+        contract = _load_verified_contract(paths, CANARY_COHORT, top_k=TOP_K)
+        for task_dir in task_dirs:
+            validate_task_output(task_dir, contract)
+    except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+        msg = (
+            f"Validated {CANARY_COHORT} canaries for all backgrounds are required "
+            "before any non-canary production task; include CHOL in this run or "
+            "resume from a run with complete validated CHOL outputs."
+        )
+        raise RuntimeError(msg) from error
+
+
 def _orchestrate(  # noqa: PLR0913
     paths: RunPaths,
     cohorts: Sequence[str],
@@ -1945,8 +2471,9 @@ def _orchestrate(  # noqa: PLR0913
     preflight_only: bool,
 ) -> int:
     _initialize_run(paths, allow_dirty=preflight_only)
+    contracts = {}
     for cohort in cohorts:
-        _ensure_contract(paths, cohort)
+        contracts[cohort] = _ensure_contract(paths, cohort)
         print(f"preflight {cohort}: valid K={TOP_K} contract")
     if preflight_only:
         _verify_recorded_source_hashes(paths)
@@ -1956,9 +2483,17 @@ def _orchestrate(  # noqa: PLR0913
             print(f"preflight launch gate: {error}", file=sys.stderr)
             return 2
         print("preflight launch gate: corrected LRT contract present")
+        try:
+            for contract in contracts.values():
+                _require_canonical_mutsig_maf_binding(contract)
+        except RuntimeError as error:
+            print(f"preflight launch gate: {error}", file=sys.stderr)
+            return 2
         return 0
 
     _require_corrected_lrt()
+    for contract in contracts.values():
+        _require_canonical_mutsig_maf_binding(contract)
     pending = []
     for cohort in cohorts:
         contract = _read_json(_contract_path(paths, cohort))
@@ -1985,6 +2520,8 @@ def _orchestrate(  # noqa: PLR0913
         print("canary failed; full K=500 grid remains gated", file=sys.stderr)
         print(json.dumps(_status(paths, cohorts), indent=2, sort_keys=True))
         return 1
+    if non_canaries:
+        _require_validated_canary_outputs(paths)
 
     cohort_level = [task for task in non_canaries if task.bmr != "mutsig"]
     light_mutsig = [
@@ -2031,14 +2568,25 @@ def _parser() -> argparse.ArgumentParser:
         help="Comma-separated TCGA cohort subset; default is the canonical 32.",
     )
     parser.add_argument("--jobs", type=int, default=safe_default_jobs())
-    parser.add_argument("--mutsig-jobs", type=int, default=2)
+    parser.add_argument(
+        "--mutsig-jobs",
+        type=int,
+        default=min(2, safe_default_jobs()),
+    )
     parser.add_argument("--nice", type=int, default=10)
-    parser.add_argument("--allow-high-concurrency", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--status", action="store_true")
-    parser.add_argument("--internal-cohort", choices=TCGA_COHORTS)
-    parser.add_argument("--internal-bmr", choices=BMRS)
-    parser.add_argument("--internal-contract-sha256")
+    parser.add_argument(
+        "--internal-cohort",
+        choices=TCGA_COHORTS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--internal-bmr",
+        choices=BMRS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--internal-contract-sha256", help=argparse.SUPPRESS)
     return parser
 
 
@@ -2050,9 +2598,17 @@ def main() -> None:
         mutsig_root=args.mutsig_root.resolve(),
         output_root=args.output_root.resolve(),
     )
-    if args.internal_cohort or args.internal_bmr:
-        if not args.internal_cohort or not args.internal_bmr:
-            msg = "Both internal task coordinates are required."
+    if args.nice < 0:
+        msg = "--nice must be nonnegative."
+        raise ValueError(msg)
+    internal_values = (
+        args.internal_cohort,
+        args.internal_bmr,
+        args.internal_contract_sha256,
+    )
+    if any(value is not None for value in internal_values):
+        if any(value is None for value in internal_values):
+            msg = "All internal task coordinates and the contract hash are required."
             raise ValueError(msg)
         execute_task(
             paths,
@@ -2069,23 +2625,11 @@ def main() -> None:
             raise FileNotFoundError(msg)
         print(json.dumps(_status(paths, cohorts), indent=2, sort_keys=True))
         return
-    safe_cap = safe_default_jobs()
-    if args.jobs <= 0:
-        msg = "--jobs must be positive."
-        raise ValueError(msg)
-    if args.mutsig_jobs <= 0 or args.mutsig_jobs > 2:
-        msg = "--mutsig-jobs must be 1 or 2 on the 24 GB development host."
-        raise ValueError(msg)
-    if args.jobs > safe_cap and not args.allow_high_concurrency:
-        msg = (
-            f"--jobs {args.jobs} exceeds the safe cap {safe_cap} for "
-            f"{os.cpu_count() or 1} logical cores; pass --allow-high-concurrency "
-            "only after explicit approval."
-        )
-        raise ValueError(msg)
-    if args.nice < 0:
-        msg = "--nice must be nonnegative."
-        raise ValueError(msg)
+    _validate_cli_resource_options(
+        jobs=args.jobs,
+        mutsig_jobs=args.mutsig_jobs,
+        nice_increment=args.nice,
+    )
     exit_status = _orchestrate(
         paths,
         cohorts,
