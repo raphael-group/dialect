@@ -68,7 +68,7 @@ def save_cbase_stats_to_gene_objects(genes: dict, cbase_stats: pd.DataFrame) -> 
     """Annotate Gene objects with CBaSE positive-selection phi/p.
 
     Returns ``True`` if the annotation was applied, ``False`` if no CBaSE stats were
-    provided (so callers can drop the now-empty phi column from their output).
+    provided (so callers can omit both empty CBaSE annotation columns).
     """
     if cbase_stats is None or cbase_stats.empty:
         return False

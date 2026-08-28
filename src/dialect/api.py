@@ -82,7 +82,8 @@ class IdentifyResult:
     """Structured result of :func:`identify_interactions`.
 
     Attributes:
-        single_gene: per-gene driver estimates (``Pi`` and related statistics).
+        single_gene: per-gene driver estimates. Its observed, expected-passenger,
+            and observed-minus-expected mutation columns are cohort totals.
         pairwise: per-pair interaction statistics (``Rho``, ``Tau_*``, ...).
         out_dir: directory the CSVs were written to.
     """

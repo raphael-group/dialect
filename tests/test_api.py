@@ -1,6 +1,7 @@
 """Tests for the public dialect.api surface (estimate_bmr / identify_interactions)."""
 
 import pandas as pd
+import pytest
 
 from dialect import (
     IdentifyResult,
@@ -44,6 +45,16 @@ def test_identify_interactions_returns_frames(tmp_path):
     assert isinstance(result, api.IdentifyResult)
     assert result.out_dir == tmp_path
     assert set(result.single_gene["Gene Name"]) == {"TP53_M", "KRAS_M", "EGFR_M"}
+    assert result.single_gene["Expected Mutations"].tolist() == pytest.approx(
+        [3.36] * 3,
+    )
+    assert result.single_gene["Obs. - Exp. Mutations"].tolist() == pytest.approx([
+        2.64,
+        -0.36,
+        0.64,
+    ])
+    assert "CBaSE Pos. Sel. Phi" not in result.single_gene
+    assert "CBaSE Pos. Sel. P-Val" not in result.single_gene
     assert {"Gene A", "Gene B", "Rho"} <= set(result.pairwise.columns)
     assert len(result.pairwise) == 3  # 3 choose 2 pairs
     assert (tmp_path / "single_gene_results.csv").exists()

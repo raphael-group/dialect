@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+from typing import Final
+
 import pandas as pd
 
 from dialect.data.cohort import MutationCohort
@@ -12,6 +15,61 @@ from dialect.models.assembly import (
 )
 from dialect.models.interaction import LRT_CONTRACT, PAIR_FIT_CONTRACT
 
+SINGLE_GENE_COUNT_CONTRACT: Final = (
+    "cohort-total-observed-and-passenger-expected-v1"
+)
+
+_SINGLE_GENE_RESULT_PREFIX_COLUMNS: Final[tuple[str, ...]] = (
+    "Gene Name",
+    "Pi",
+    "Log Odds Ratio",
+    "Likelihood Ratio",
+    "Observed Mutations",
+    "Expected Mutations",
+    "Obs. - Exp. Mutations",
+)
+SINGLE_GENE_CBASE_ANNOTATION_COLUMNS: Final[tuple[str, str]] = (
+    "CBaSE Pos. Sel. Phi",
+    "CBaSE Pos. Sel. P-Val",
+)
+_SINGLE_GENE_RESULT_SUFFIX_COLUMNS: Final[tuple[str, ...]] = (
+    "MLE Converged",
+    "MLE Iterations",
+    "MLE Log Likelihood",
+    "Single-Gene LRT Status",
+    "LRT Contract",
+    "Single-Gene Count Contract",
+)
+SINGLE_GENE_RESULT_COLUMNS: Final[tuple[str, ...]] = (
+    _SINGLE_GENE_RESULT_PREFIX_COLUMNS + _SINGLE_GENE_RESULT_SUFFIX_COLUMNS
+)
+SINGLE_GENE_RESULT_COLUMNS_WITH_CBASE: Final[tuple[str, ...]] = (
+    _SINGLE_GENE_RESULT_PREFIX_COLUMNS
+    + SINGLE_GENE_CBASE_ANNOTATION_COLUMNS
+    + _SINGLE_GENE_RESULT_SUFFIX_COLUMNS
+)
+SINGLE_GENE_RESULT_COLUMN_SEMANTICS: Final = MappingProxyType(
+    {
+        "Gene Name": "exact gene-effect feature identifier",
+        "Pi": "constrained maximum-likelihood driver probability",
+        "Log Odds Ratio": "log(Pi / (1 - Pi)) with infinite boundary values",
+        "Likelihood Ratio": "single-gene passenger-null likelihood-ratio statistic",
+        "Observed Mutations": "cohort total sum_i C_i",
+        "Expected Mutations": "cohort total sum_i sum_k k P(B_i = k)",
+        "Obs. - Exp. Mutations": (
+            "Observed Mutations minus Expected Mutations on the cohort-total scale"
+        ),
+        "CBaSE Pos. Sel. Phi": "optional CBaSE positive-selection phi annotation",
+        "CBaSE Pos. Sel. P-Val": "optional CBaSE positive-selection p-value",
+        "MLE Converged": "whether the constrained marginal MLE converged",
+        "MLE Iterations": "number of constrained marginal optimizer evaluations",
+        "MLE Log Likelihood": "maximized single-gene log likelihood",
+        "Single-Gene LRT Status": "finite or boundary-null LRT status",
+        "LRT Contract": "machine-readable likelihood-ratio-test contract",
+        "Single-Gene Count Contract": SINGLE_GENE_COUNT_CONTRACT,
+    },
+)
+
 
 # ------------------------------------------------------------------------------------ #
 #                                   HELPER FUNCTIONS                                   #
@@ -21,38 +79,49 @@ def create_single_gene_results(
     output_path: str,
     cbase_phi_vals_present: bool,
 ) -> None:
-    """TODO: Add docstring."""
+    """Write one row per gene under the explicit single-gene result schema.
+
+    ``Observed Mutations``, ``Expected Mutations``, and their difference are all
+    cohort totals. The optional CBaSE phi and p-value columns are emitted together
+    only when CBaSE annotations were applied.
+    """
     results = []
     for gene in genes:
         log_odds_ratio = gene.compute_log_odds_ratio(gene.pi)
         likelihood_ratio = gene.compute_likelihood_ratio(gene.pi)
         observed_mutations = sum(gene.counts)
-        expected_mutations = gene.calculate_expected_mutations()
+        expected_mutations = gene.calculate_expected_total_mutations()
         obs_minus_exp_mutations = observed_mutations - expected_mutations
-        cbase_phi = gene.cbase_phi
-        cbase_p = gene.cbase_p
+        row = {
+            "Gene Name": gene.name,
+            "Pi": gene.pi,
+            "Log Odds Ratio": log_odds_ratio,
+            "Likelihood Ratio": likelihood_ratio,
+            "Observed Mutations": observed_mutations,
+            "Expected Mutations": expected_mutations,
+            "Obs. - Exp. Mutations": obs_minus_exp_mutations,
+            "MLE Converged": gene.mle_converged,
+            "MLE Iterations": gene.mle_iterations,
+            "MLE Log Likelihood": gene.mle_log_likelihood,
+            "Single-Gene LRT Status": gene.likelihood_ratio_status,
+            "LRT Contract": LRT_CONTRACT,
+            "Single-Gene Count Contract": SINGLE_GENE_COUNT_CONTRACT,
+        }
+        if cbase_phi_vals_present:
+            row.update(
+                {
+                    "CBaSE Pos. Sel. Phi": gene.cbase_phi,
+                    "CBaSE Pos. Sel. P-Val": gene.cbase_p,
+                },
+            )
+        results.append(row)
 
-        results.append(
-            {
-                "Gene Name": gene.name,
-                "Pi": gene.pi,
-                "Log Odds Ratio": log_odds_ratio,
-                "Likelihood Ratio": likelihood_ratio,
-                "Observed Mutations": observed_mutations,
-                "Expected Mutations": expected_mutations,
-                "Obs. - Exp. Mutations": obs_minus_exp_mutations,
-                "CBaSE Pos. Sel. Phi": cbase_phi,
-                "CBaSE Pos. Sel. P-Val": cbase_p,
-                "MLE Converged": gene.mle_converged,
-                "MLE Iterations": gene.mle_iterations,
-                "MLE Log Likelihood": gene.mle_log_likelihood,
-                "Single-Gene LRT Status": gene.likelihood_ratio_status,
-                "LRT Contract": LRT_CONTRACT,
-            },
-        )
-    results_df = pd.DataFrame(results)
-    if not cbase_phi_vals_present:
-        results_df = results_df.drop(columns=["CBaSE Pos. Sel. Phi"])
+    columns = (
+        SINGLE_GENE_RESULT_COLUMNS_WITH_CBASE
+        if cbase_phi_vals_present
+        else SINGLE_GENE_RESULT_COLUMNS
+    )
+    results_df = pd.DataFrame(results, columns=columns)
     results_df.to_csv(output_path, index=False)
 
 

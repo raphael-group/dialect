@@ -72,6 +72,50 @@ class Gene:
             np.mean([sum(k * p for k, p in pmf.items()) for pmf in self.bmr_pmfs]),
         )
 
+    def calculate_expected_total_mutations(self) -> float:
+        r"""Return the cohort-total passenger expectation ``sum_i sum_k k p_i(k)``.
+
+        Unlike :meth:`calculate_expected_mutations`, this quantity is on the same
+        cohort-total scale as ``sum(self.counts)``. A sample-specific background
+        model must supply exactly one PMF per sample; shared PMFs are broadcast by
+        :attr:`bmr_pmfs` before the total is evaluated.
+        """
+        self.verify_bmr_pmf_and_counts_exist()
+        pmfs = self.bmr_pmfs
+        if len(pmfs) != len(self.counts) or len(self.samples) != len(self.counts):
+            msg = (
+                f"Gene {self.name} has misaligned samples, counts, and background "
+                "PMFs."
+            )
+            raise ValueError(msg)
+
+        expectations = []
+        for sample, pmf in zip(self.samples, pmfs, strict=True):
+            try:
+                expectation = math.fsum(
+                    float(count) * float(probability)
+                    for count, probability in pmf.items()
+                )
+            except (AttributeError, OverflowError, TypeError, ValueError) as exc:
+                msg = (
+                    f"Gene {self.name} has a malformed background PMF for sample "
+                    f"{sample}."
+                )
+                raise ValueError(msg) from exc
+            if not math.isfinite(expectation):
+                msg = (
+                    f"Gene {self.name} has a non-finite passenger expectation for "
+                    f"sample {sample}."
+                )
+                raise ValueError(msg)
+            expectations.append(expectation)
+
+        total = math.fsum(expectations)
+        if not math.isfinite(total):
+            msg = f"Gene {self.name} has a non-finite total passenger expectation."
+            raise ValueError(msg)
+        return total
+
     def verify_bmr_pmf_and_counts_exist(self) -> None:
         """Require both a background distribution and observed counts."""
         if self.bmr_pmf is None:

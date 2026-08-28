@@ -46,6 +46,52 @@ def test_calculate_expected_mutations_uses_keys_not_positions() -> None:
     assert gene.calculate_expected_mutations() == pytest.approx(2.5)
 
 
+def test_calculate_expected_total_mutations_sums_heterogeneous_sample_pmfs() -> None:
+    """The cohort total is the direct sum of each sample's passenger expectation."""
+    pmfs = [
+        {0: 0.5, 1: 0.5},  # E[B_0] = 0.5
+        {0: 0.25, 1: 0.25, 2: 0.5},  # E[B_1] = 1.25
+    ]
+    gene = Gene(name="G_M", samples=["s0", "s1"], counts=[1, 2], bmr_pmf=pmfs)
+
+    assert gene.calculate_expected_mutations() == pytest.approx(0.875)
+    assert gene.calculate_expected_total_mutations() == pytest.approx(1.75)
+
+
+def test_calculate_expected_total_mutations_broadcasts_shared_pmf() -> None:
+    """A cohort-shared PMF contributes its expectation once for every sample."""
+    gene = make_gene({0: 0.8, 1: 0.2}, counts=[0, 0, 1])
+
+    assert gene.calculate_expected_mutations() == pytest.approx(0.2)
+    assert gene.calculate_expected_total_mutations() == pytest.approx(0.6)
+
+
+def test_calculate_expected_total_mutations_rejects_misaligned_sample_pmfs() -> None:
+    """A per-sample background list cannot silently omit a cohort sample."""
+    gene = Gene(
+        name="G_M",
+        samples=["s0", "s1"],
+        counts=[0, 1],
+        bmr_pmf=[{0: 1.0}],
+    )
+
+    with pytest.raises(ValueError, match="misaligned samples, counts"):
+        gene.calculate_expected_total_mutations()
+
+
+def test_calculate_expected_total_mutations_rejects_nonfinite_expectation() -> None:
+    """Non-finite PMF arithmetic cannot enter a single-gene result CSV."""
+    gene = Gene(
+        name="G_M",
+        samples=["s0"],
+        counts=[1],
+        bmr_pmf=[{0: 0.5, 1: np.inf}],
+    )
+
+    with pytest.raises(ValueError, match="non-finite passenger expectation"):
+        gene.calculate_expected_total_mutations()
+
+
 def test_compute_log_likelihood_known_value() -> None:
     """Hand-computed log-likelihood for a tiny PMF and pi=0.5."""
     gene = make_gene({0: 0.8, 1: 0.2}, counts=[0, 1])

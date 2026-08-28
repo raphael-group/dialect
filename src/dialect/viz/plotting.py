@@ -688,7 +688,7 @@ def draw_gene_expected_and_observed_mutations_barplot(
     num_genes: int = 5,
     font_scale: float = FONT_SCALE,
 ) -> None:
-    """TODO: Add docstring."""
+    """Compare cohort-total observed and expected-passenger mutation counts."""
     top_likely_passenger_df = results_df[
         results_df["Gene Name"].isin(likely_passenger_genes)
     ].nlargest(num_genes, "Observed Mutations")
@@ -721,7 +721,7 @@ def draw_gene_expected_and_observed_mutations_barplot(
         all_genes_df["Expected Mutations"],
         width=bar_width,
         color="gray",
-        label="Expected",
+        label="Expected passengers",
     )
 
     ax.set_xticks(x)
