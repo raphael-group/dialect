@@ -14,9 +14,24 @@ dialect generate -m cohort.maf -o out/cohort
 dialect identify -c out/cohort/count_matrix.csv -b out/cohort/bmr_pmfs.csv -o out/cohort -k 100
 ```
 
+For a zero-complete CBaSE cohort, provide the exact ordered sample axis as one
+unique, nonempty identifier per line. The optional scalar is an equality assertion;
+CBaSE's per-sample denominator is derived from the axis.
+
+```bash
+dialect generate -m cohort.maf -o out/cohort --bmr cbase \
+  --cbase-sample-axis cohort_samples.txt --cbase-samples 137
+```
+
 ```python
 from dialect import estimate_bmr, identify_interactions
-estimate_bmr("cohort.maf", "out/cohort", provider="cbase")
+estimate_bmr(
+    "cohort.maf",
+    "out/cohort",
+    provider="cbase",
+    sample_ids="cohort_samples.txt",
+    n_samples=137,
+)
 result = identify_interactions(
     "out/cohort/count_matrix.csv", "out/cohort/bmr_pmfs.csv", "out/cohort", top_k=100
 )

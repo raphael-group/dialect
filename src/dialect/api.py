@@ -25,6 +25,7 @@ import pandas as pd
 
 from dialect.baselines.runner import run_comparison_methods
 from dialect.bmr import get_provider
+from dialect.bmr.base import SampleAxisError
 from dialect.data.io import read_cbase_results_file
 from dialect.utils.identify import identify_pairwise_interactions
 from dialect.utils.merge import merge_pairwise_interaction_results
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IdentifyResult",
+    "SampleAxisError",
     "compare_methods",
     "estimate_bmr",
     "identify_interactions",
@@ -64,7 +66,9 @@ def estimate_bmr(
         provider: registered provider name; see ``dialect.bmr.available()``.
         reference: genome build passed to the provider (CBaSE: ``hg19``/``hg38``).
         **provider_kwargs: forwarded to the provider constructor (e.g.
-            ``threshold`` for CBaSE; ``dig_results`` + ``n_samples`` for DIG).
+            ``threshold`` plus an exact ``sample_ids`` sequence/path and optional
+            matching ``n_samples`` assertion for CBaSE; ``dig_results`` plus
+            ``n_samples`` for DIG).
 
     Returns:
         The provider's :class:`BMRResult`.

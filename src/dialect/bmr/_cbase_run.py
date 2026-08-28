@@ -10,12 +10,105 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Sequence
+from numbers import Integral
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from dialect.bmr.base import SampleAxisError
 from dialect.data.io import check_file_exists
+
+_N_SAMPLES_FLAG = "--n-samples"
+
+
+def _validate_n_samples(n_samples: int | None) -> int | None:
+    """Validate an optional explicit cohort size before launching CBaSE."""
+    if n_samples is None:
+        return None
+    if isinstance(n_samples, bool) or not isinstance(n_samples, Integral):
+        msg = "n_samples must be a positive integer or None"
+        raise TypeError(msg)
+    validated = int(n_samples)
+    if validated <= 0:
+        msg = "n_samples must be a positive integer or None"
+        raise ValueError(msg)
+    return validated
+
+
+def _load_sample_ids(
+    sample_ids: Sequence[str] | str | Path,
+) -> tuple[str, ...]:
+    """Load and validate one exact ordered sample axis.
+
+    String and :class:`~pathlib.Path` inputs name a UTF-8 text file containing
+    exactly one sample identifier per line. Sequence inputs are consumed in their
+    existing order. Identifiers are never stripped or sorted: surrounding
+    whitespace, empty identifiers, and duplicates fail closed.
+    """
+    if isinstance(sample_ids, (str, Path)):
+        sample_axis_path = Path(sample_ids)
+        check_file_exists(str(sample_axis_path))
+        values = sample_axis_path.read_text(encoding="utf-8").splitlines()
+    elif isinstance(sample_ids, Sequence):
+        values = list(sample_ids)
+    else:
+        msg = "sample_ids must be an ordered sequence or a path"
+        raise SampleAxisError(msg)
+
+    if not values:
+        msg = "sample_ids must contain at least one sample identifier"
+        raise SampleAxisError(msg)
+
+    validated: list[str] = []
+    seen: set[str] = set()
+    for position, sample_id in enumerate(values):
+        if not isinstance(sample_id, str):
+            msg = f"sample_ids[{position}] must be a string"
+            raise SampleAxisError(msg)
+        if not sample_id or sample_id != sample_id.strip():
+            msg = (
+                f"sample_ids[{position}] must be nonempty and have no surrounding "
+                "whitespace"
+            )
+            raise SampleAxisError(msg)
+        if sample_id in seen:
+            msg = f"sample_ids contains duplicate identifier {sample_id!r}"
+            raise SampleAxisError(msg)
+        seen.add(sample_id)
+        validated.append(sample_id)
+    return tuple(validated)
+
+
+def _resolve_sample_axis(
+    *,
+    n_samples: int | None,
+    sample_ids: Sequence[str] | str | Path | None,
+) -> tuple[tuple[str, ...] | None, int | None]:
+    """Bind an explicit denominator to the exact ordered sample axis it counts."""
+    validated_n_samples = _validate_n_samples(n_samples)
+    if sample_ids is None:
+        if validated_n_samples is not None:
+            msg = (
+                "sample_ids is required when n_samples is explicit so zero-event "
+                "samples can be represented in the generated count matrices"
+            )
+            raise SampleAxisError(msg)
+        return None, None
+
+    sample_axis = _load_sample_ids(sample_ids)
+    axis_n_samples = len(sample_axis)
+    if (
+        validated_n_samples is not None
+        and validated_n_samples != axis_n_samples
+    ):
+        msg = (
+            f"n_samples ({validated_n_samples}) does not match the exact sample "
+            f"axis length ({axis_n_samples})"
+        )
+        raise SampleAxisError(msg)
+    return sample_axis, axis_n_samples
 
 
 def _run_cbase_step(label: str, cmd: list[str]) -> None:
@@ -53,8 +146,21 @@ def generate_bmr_using_cbase(
     out: str,
     reference: str,
     threshold: str,
+    *,
+    n_samples: int | None = None,
 ) -> None:
-    """Invoke CBaSE's params + qvals scripts to produce its raw background output."""
+    """Invoke CBaSE's params + qvals scripts to produce its raw background output.
+
+    Args:
+        maf: TCGA-style input MAF.
+        out: Output directory.
+        reference: Reference genome build understood by CBaSE.
+        threshold: PMF tail-truncation cutoff passed to CBaSE qvals.
+        n_samples: Complete cohort size, including mutation-free samples. If omitted,
+            preserve CBaSE's legacy behavior of inferring the size from samples with
+            retained mutations.
+    """
+    validated_n_samples = _validate_n_samples(n_samples)
     cbase_input_fn = convert_maf_to_cbase_input_file(maf, out)
 
     cbase_output_dir = Path(out) / "CBaSE_output"
@@ -81,6 +187,8 @@ def generate_bmr_using_cbase(
         str(cbase_auxiliary_dir),
         str(cbase_output_dir),
     ]
+    if validated_n_samples is not None:
+        cbase_params_cmd.extend([_N_SAMPLES_FLAG, str(validated_n_samples)])
     cbase_qvals_cmd = [
         sys.executable,
         str(cbase_qvals_script),
@@ -95,11 +203,54 @@ def generate_bmr_using_cbase(
         _run_cbase_step(label, cmd)
 
 
-def generate_counts_from_cbase_output(out: str) -> None:
-    """Pivot CBaSE's kept-mutations table into gene-level and effect-level counts."""
+def generate_counts_from_cbase_output(
+    out: str,
+    *,
+    sample_ids: Sequence[str] | str | Path | None = None,
+) -> None:
+    """Pivot CBaSE mutations into counts on an optional exact sample axis.
+
+    When ``sample_ids`` is provided, both generated matrices preserve that exact
+    order. Otherwise they use CBaSE's lexicographically ordered all-effect retained
+    sample axis. Both paths include all-zero rows for cohort members with no retained
+    missense or nonsense event. Every sample retained anywhere in CBaSE's mutation
+    table must belong to an explicit supplied axis.
+    """
     cbase_kept_mutations_fn = Path(out) / "CBaSE_output" / "kept_mutations.csv"
 
-    mut_df = pd.read_csv(cbase_kept_mutations_fn, sep="\t")
+    sample_axis = _load_sample_ids(sample_ids) if sample_ids is not None else None
+    mut_df = pd.read_csv(
+        cbase_kept_mutations_fn,
+        sep="\t",
+        dtype={"sample": "string"},
+        keep_default_na=False,
+    )
+    if mut_df["sample"].isna().any():
+        msg = "CBaSE retained mutation table contains an empty sample identifier"
+        raise ValueError(msg)
+    retained_sample_ids = set(mut_df["sample"])
+    if sample_axis is None:
+        sample_axis = tuple(sorted(retained_sample_ids))
+        if not sample_axis:
+            msg = "CBaSE retained mutation table contains no sample identifiers"
+            raise ValueError(msg)
+        if any(
+            not sample_id or sample_id != sample_id.strip()
+            for sample_id in sample_axis
+        ):
+            msg = "CBaSE retained mutation table contains a padded sample identifier"
+            raise ValueError(msg)
+    else:
+        sample_axis_set = set(sample_axis)
+        outside_axis = sorted(retained_sample_ids - sample_axis_set)
+        if outside_axis:
+            preview = ", ".join(repr(sample) for sample in outside_axis[:5])
+            msg = (
+                "CBaSE retained mutation samples outside the exact sample axis: "
+                f"{preview}"
+            )
+            raise SampleAxisError(msg)
+
     mut_df = mut_df[mut_df["effect"].isin(["missense", "nonsense"])]
     gene_level_df = mut_df.pivot_table(
         index="gene",
@@ -107,6 +258,7 @@ def generate_counts_from_cbase_output(out: str) -> None:
         aggfunc="size",
         fill_value=0,
     ).T
+    gene_level_df = gene_level_df.reindex(sample_axis, fill_value=0)
     gene_level_df.to_csv(
         Path(out) / "gene_level_count_matrix.csv",
         index=True,
@@ -118,6 +270,7 @@ def generate_counts_from_cbase_output(out: str) -> None:
         aggfunc="size",
         fill_value=0,
     ).T
+    mut_df = mut_df.reindex(sample_axis, fill_value=0)
     mut_df.to_csv(
         Path(out) / "count_matrix.csv",
         index=True,
@@ -156,14 +309,27 @@ def generate_bmr_files_from_cbase_output(out: str) -> None:
     pmf_df.to_csv(Path(out) / "bmr_pmfs.csv", index=True)
 
 
-def generate_bmr_and_counts(
+def generate_bmr_and_counts(  # noqa: PLR0913
     maf: str,
     out: str,
     reference: str,
     threshold: str,
+    *,
+    n_samples: int | None = None,
+    sample_ids: Sequence[str] | str | Path | None = None,
 ) -> None:
-    """Run CBaSE end-to-end: MAF -> background PMFs + count matrices on disk."""
+    """Run CBaSE end-to-end on an optional exact, zero-complete sample axis."""
+    sample_axis, resolved_n_samples = _resolve_sample_axis(
+        n_samples=n_samples,
+        sample_ids=sample_ids,
+    )
     check_file_exists(maf)
-    generate_bmr_using_cbase(maf, out, reference, threshold)
+    generate_bmr_using_cbase(
+        maf,
+        out,
+        reference,
+        threshold,
+        n_samples=resolved_n_samples,
+    )
+    generate_counts_from_cbase_output(out, sample_ids=sample_axis)
     generate_bmr_files_from_cbase_output(out)
-    generate_counts_from_cbase_output(out)

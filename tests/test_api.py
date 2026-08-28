@@ -2,7 +2,13 @@
 
 import pandas as pd
 
-from dialect import IdentifyResult, api, estimate_bmr, identify_interactions
+from dialect import (
+    IdentifyResult,
+    SampleAxisError,
+    api,
+    estimate_bmr,
+    identify_interactions,
+)
 from dialect.bmr.base import BMRResult
 
 
@@ -27,6 +33,7 @@ def test_top_level_reexports_match_api():
     assert estimate_bmr is api.estimate_bmr
     assert identify_interactions is api.identify_interactions
     assert IdentifyResult is api.IdentifyResult
+    assert SampleAxisError is api.SampleAxisError
 
 
 def test_identify_interactions_returns_frames(tmp_path):

@@ -7,7 +7,7 @@ to reviewers asking how robust the ME/CO calls are to the choice of BMR model.
 """
 
 from dialect.bmr._dig_pmf import dig_results_to_bmr_pmfs
-from dialect.bmr.base import BMRProvider, BMRResult
+from dialect.bmr.base import BMRProvider, BMRResult, SampleAxisError
 from dialect.bmr.cbase import CBaSEProvider
 from dialect.bmr.dig import DIGProvider
 from dialect.bmr.registry import available, get_provider
@@ -17,6 +17,7 @@ __all__ = [
     "BMRResult",
     "CBaSEProvider",
     "DIGProvider",
+    "SampleAxisError",
     "available",
     "dig_results_to_bmr_pmfs",
     "get_provider",

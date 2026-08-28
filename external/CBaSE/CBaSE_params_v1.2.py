@@ -25,6 +25,12 @@ import pandas as pd
 import scipy.special as sp
 from scipy.optimize import minimize
 
+from cbase_cohort_size import (
+    output_data_preparation_header,
+    parse_explicit_n_samples,
+    resolve_n_samples,
+)
+
 # ************************************ FUNCTION DEFINITIONS *************************************
 
 
@@ -1143,6 +1149,12 @@ MODEL = int(
 OUTNAME = str(sys.argv[6])  # 	name for the output file containing the q-values
 REFERENCE_DIR = str(sys.argv[7])  #   path to the reference files folder
 TEMP_DIR = str(sys.argv[8])  #   path to the temp files folder
+try:
+    EXPLICIT_N_SAMPLES = parse_explicit_n_samples(sys.argv[9:])
+except ValueError as err:
+    sys.stderr.write(f"{err}\n")
+    sys.stderr.write("\n***** ABORTING CBaSE *****\n\n")
+    sys.exit(2)
 
 # ***************************** GLOBAL DEFINITIONS & AUXILIARY DATA ******************************
 
@@ -1236,7 +1248,21 @@ muts_by_sample = [
 ]
 for el in muts_by_sample:
     sys.stderr.write("Sample %s: %i mutations.\n" % (el[0], len(el[1])))
-N_samples = len(muts_by_sample)
+mutation_bearing_N_samples = len(muts_by_sample)
+try:
+    N_samples = resolve_n_samples(
+        mutation_bearing_N_samples,
+        EXPLICIT_N_SAMPLES,
+    )
+except ValueError as err:
+    sys.stderr.write(f"{err}\n")
+    sys.stderr.write("\n***** ABORTING CBaSE *****\n\n")
+    sys.exit(2)
+if EXPLICIT_N_SAMPLES is not None:
+    sys.stderr.write(
+        "Using explicit cohort size of %i sample(s); %i sample(s) have retained mutations.\n"
+        % (N_samples, mutation_bearing_N_samples),
+    )
 
 # 	(2) Derive target size and observed mutation counts for all three categories per gene.
 res, mut_matrix = export_expected_observed_mks_per_gene(
@@ -1568,10 +1594,7 @@ for sam in muts_by_sample:
 
 fout = open(f"{TEMP_DIR}/output_data_preparation.txt", "w")
 # Output format: [gene, lm, lk, ls, mobs, kobs, sobs, Lgene, lambda_s]
-fout.write(
-    "gene\tl_m\tl_k\tl_s\tm_obs\tk_obs\ts_obs\tL_gene\tlambda_s\ts_max_per_sample\tN_samples=%i\n"
-    % N_samples,
-)
+fout.write(output_data_preparation_header(N_samples))
 for gene in mks_type:
     # 	Compute E[lambda_s]:
     thresh = 1 if gene["obs"][2] > 25 else 0

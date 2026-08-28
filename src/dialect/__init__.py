@@ -12,7 +12,12 @@ See :mod:`dialect.api` for the full surface.
 
 from __future__ import annotations
 
-from dialect.api import IdentifyResult, estimate_bmr, identify_interactions
+from dialect.api import (
+    IdentifyResult,
+    SampleAxisError,
+    estimate_bmr,
+    identify_interactions,
+)
 
 try:
     from dialect._version import __version__
@@ -21,6 +26,7 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
 
 __all__ = [
     "IdentifyResult",
+    "SampleAxisError",
     "__version__",
     "estimate_bmr",
     "identify_interactions",

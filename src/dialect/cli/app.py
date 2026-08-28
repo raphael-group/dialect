@@ -62,9 +62,26 @@ def generate(
         "--dig-samples",
         help="Number of cohort samples (required when --bmr dig).",
     ),
+    cbase_samples: int | None = typer.Option(
+        None,
+        "--cbase-samples",
+        help="Optional assertion for the CBaSE sample-axis length.",
+    ),
+    cbase_sample_axis: Path | None = typer.Option(
+        None,
+        "--cbase-sample-axis",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="UTF-8 file with one ordered cohort sample ID per line for CBaSE.",
+    ),
 ) -> None:
     """Generate the background mutation rate and count matrix from a MAF."""
     if bmr == "dig":
+        if cbase_samples is not None or cbase_sample_axis is not None:
+            msg = "--bmr dig does not accept CBaSE sample-axis options"
+            raise typer.BadParameter(msg)
         if not dig_results or not dig_samples:
             msg = "--bmr dig requires --dig-results and --dig-samples"
             raise typer.BadParameter(msg)
@@ -77,13 +94,24 @@ def generate(
             n_samples=dig_samples,
         )
     else:
-        api.estimate_bmr(
-            maf,
-            out,
-            provider="cbase",
-            reference=reference,
-            threshold=threshold,
-        )
+        if cbase_samples is not None and cbase_sample_axis is None:
+            msg = "--cbase-samples requires --cbase-sample-axis"
+            raise typer.BadParameter(msg)
+        if cbase_samples is not None and cbase_samples <= 0:
+            msg = "--cbase-samples must be a positive integer"
+            raise typer.BadParameter(msg)
+        try:
+            api.estimate_bmr(
+                maf,
+                out,
+                provider="cbase",
+                reference=reference,
+                threshold=threshold,
+                n_samples=cbase_samples,
+                sample_ids=cbase_sample_axis,
+            )
+        except api.SampleAxisError as err:
+            raise typer.BadParameter(str(err)) from err
 
 
 @app.command()

@@ -9,6 +9,10 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+class SampleAxisError(ValueError):
+    """An explicit sample axis is malformed or inconsistent with cohort data."""
+
+
 @dataclass
 class BMRResult:
     """A cohort's background-mutation-rate estimate in DIALECT's input contract.

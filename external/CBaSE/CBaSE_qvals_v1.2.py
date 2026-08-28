@@ -20,6 +20,11 @@ import numpy as np
 import scipy.special as sp
 import scipy.stats as st
 
+from cbase_cohort_size import (
+    parse_output_data_preparation_n_samples,
+    per_sample_rate,
+)
+
 # ************************************ FUNCTION DEFINITIONS *************************************
 
 
@@ -598,12 +603,14 @@ def compute_p_values(p, genes, aux):
             pofm_per_sample = []
             pofk_per_sample = []
             if simC == 0:
+                ratm_per_sample = per_sample_rate(ratm, N_samples)
+                ratk_per_sample = per_sample_rate(ratk, N_samples)
                 i = 0
                 test_prob = pofx_given_s(
                     i,
                     sobs,
                     L,
-                    ratm / N_samples,
+                    ratm_per_sample,
                     large_flag,
                 )
                 while abs(test_prob) < THRESHOLD:
@@ -613,7 +620,7 @@ def compute_p_values(p, genes, aux):
                         i,
                         sobs,
                         L,
-                        ratm / N_samples,
+                        ratm_per_sample,
                         large_flag,
                     )
                     if test_prob - pofm_per_sample[-1][1] < 0:
@@ -625,7 +632,7 @@ def compute_p_values(p, genes, aux):
                         i,
                         sobs,
                         L,
-                        ratm / N_samples,
+                        ratm_per_sample,
                         large_flag,
                     )
                 i = 0
@@ -633,7 +640,7 @@ def compute_p_values(p, genes, aux):
                     i,
                     sobs,
                     L,
-                    ratk / N_samples,
+                    ratk_per_sample,
                     large_flag,
                 )
                 while abs(test_prob) < THRESHOLD:
@@ -643,7 +650,7 @@ def compute_p_values(p, genes, aux):
                         i,
                         sobs,
                         L,
-                        ratk / N_samples,
+                        ratk_per_sample,
                         large_flag,
                     )
                     if test_prob - pofk_per_sample[-1][1] < 0:
@@ -655,7 +662,7 @@ def compute_p_values(p, genes, aux):
                         i,
                         sobs,
                         L,
-                        ratk / N_samples,
+                        ratk_per_sample,
                         large_flag,
                     )
 
@@ -1095,7 +1102,7 @@ fin = open(f"{TEMP_DIR}/output_data_preparation.txt")
 lines = fin.readlines()
 fin.close()
 mks_type = []
-N_samples = int(lines[0].strip().split("\t")[-1].split("=")[-1])
+N_samples = parse_output_data_preparation_n_samples(lines[0])
 sys.stderr.write("%i sample(s) used in total.\n" % N_samples)
 for line in lines[1:]:
     field = line.strip().split("\t")
