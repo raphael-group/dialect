@@ -1,15 +1,61 @@
+diff --git a/README.md b/README.md
+index 7e009d1..1eb77b4 100644
+--- a/README.md
++++ b/README.md
+@@ -68,6 +68,32 @@ To run the standalone application, `cd` to this directory, and run:
+ bin/MutSig2CV <path to mutations> <path to output directory> [params file]
+ ```
+ 
++### DIALECT per-sample runner and exact sample axis
++
++DIALECT's per-sample background export is a result-blind source patch.  Invoke
++it through `run_mutsig_persample(maf, outdir, sample_axis_file)` (or the
++repository's `scripts/run_mutsig_octave.sh`).  The third argument is mandatory;
++the runner refuses the legacy behavior of deriving the cohort from mutation
++rows.
++
++The sample-axis file contains exactly one sample ID per line.  IDs must be
++nonempty, unique, free of leading/trailing whitespace, and lexicographically
++ordered.  Every sample named by the unfiltered mutation input must be present.
++The axis may and should include samples with zero mutation events; those rows
++remain in `M.pat` and in `persample_patients.txt` after mutation filtering.
++
++This patch does not invent backgrounds for zero-event samples.  It retains the
++callscheme finalized by MutSig2CV's native imputation, including its existing
++cohort-level smoothing, and then lets the native patient-neighbor background
++smoothing operate without a DIALECT-specific override.  The explicit-axis core
++path only requires finalized callschemes to be finite and valid.
++
++After chromosome and position normalization, exact duplicate mutation rows are
++removed using the full key patient, normalized chromosome, start, reference
++allele, and effective alternate allele.  Reference and alternate alleles are
++stripped and uppercased before comparison.  The first row for an exact key is
++kept; distinct alternate alleles at one coordinate are preserved.
++
+ MutSig looks for its reference files relative to this directory, so it is essential it is run here.
+ 
+ Each input is decribed below.
 diff --git a/run_mutsig_persample.m b/run_mutsig_persample.m
 new file mode 100644
-index 0000000..49b1d48
+index 0000000..af48256
 --- /dev/null
 +++ b/run_mutsig_persample.m
-@@ -0,0 +1,26 @@
-+function run_mutsig_persample(maf, outdir)
+@@ -0,0 +1,37 @@
++function run_mutsig_persample(maf, outdir, sample_axis_file)
 +% Run the (DIALECT-patched) MutSig2CV v3.11 source on a MAF, dumping the
-+% per-(gene,patient,effect) expected background to <outdir>/persample_bmr.mat.
-+% Uses the reference files vendored with the compiled bundle.
++% per-(gene,patient,effect) expected background to
++% <outdir>/persample_lambda.f32 plus axis metadata.
++% SAMPLE_AXIS_FILE is required: one unique, lexicographically sorted sample ID
++% per line, including samples with zero retained mutation events.  Uses the
++% reference files vendored with the compiled bundle.
 +%
-+%   matlab -batch "run_mutsig_persample('/abs/cohort.maf','/abs/outdir')"
++%   matlab -batch "run_mutsig_persample('/abs/cohort.maf','/abs/outdir','/abs/sample_axis.txt')"
++
++if nargin ~= 3
++  error(['DIALECT requires maf, outdir, and sample_axis_file; refusing the ' ...
++         'legacy mutation-derived patient axis']);
++end
++demand_file(sample_axis_file);
 +
 +here   = fileparts(mfilename('fullpath'));        % .../external/MutSig2CV_src
 +repo   = fileparts(fileparts(here));              % repo root
@@ -27,11 +73,13 @@ index 0000000..49b1d48
 +cleanupObj = onCleanup(@() cd(oldcd)); %#ok<NASGU>
 +
 +if ~exist(outdir, 'dir'), mkdir(outdir); end
-+MutSig2CV(maf, outdir);   % 2-arg: leave P unset so the wrapper uses its defaults
-+fprintf('DIALECT: wrote %s/persample_bmr.mat\n', outdir);
++P = [];
++P.sample_axis_file = sample_axis_file;
++MutSig2CV(maf, outdir, P);
++fprintf('DIALECT: wrote %s/persample_lambda.f32\n', outdir);
 +end
 diff --git a/src/MutSig_2CV_v3_11_core.m b/src/MutSig_2CV_v3_11_core.m
-index b4b4433..8fc8c94 100755
+index b4b4433..68b0982 100755
 --- a/src/MutSig_2CV_v3_11_core.m
 +++ b/src/MutSig_2CV_v3_11_core.m
 @@ -23,8 +23,8 @@ demand_file(covariates_file);
@@ -54,7 +102,20 @@ index b4b4433..8fc8c94 100755
  P = impose_default_value(P,'maxperm',1e5); %to speedup initial screens; need to reset to 1e6 later.
  P = impose_default_value(P,'theta',1);
  P = impose_default_value(P,'keyboard_before_begin',false);
-@@ -81,13 +81,13 @@ M=[];
+@@ -78,16 +78,26 @@ P = impose_default_value(P,'remove_duplicate_patients',1);
+ fprintf('LOADING DATA\n');
+ 
+ M=[];
++dialect_explicit_sample_axis = isfield(P,'sample_axis_file') && ...
++                               ~isempty(P.sample_axis_file) && ...
++                               ~strcmp(P.sample_axis_file,'none');
++if dialect_explicit_sample_axis
++  % Load and validate before any mutation filtering.  The explicit axis is the
++  % cohort universe, including patients with no retained events.
++  dialect_sample_axis = dialect_load_sample_axis(P.sample_axis_file);
++  fprintf('DIALECT: loaded explicit sample axis with %d patients.\n', ...
++          numel(dialect_sample_axis));
++end
  
  % open FWB tracks
  M.FWB = [];
@@ -71,8 +132,34 @@ index b4b4433..8fc8c94 100755
    M.FWB.basewise_coverage.setNullVal(0);
  end
  
-@@ -195,7 +195,7 @@ end
+@@ -178,6 +188,16 @@ for i=1:length(rf)
+   M.mut = rename_field(M.mut,f{matches},rf{i}{1});
+ end
  
++if dialect_explicit_sample_axis
++  [mutation_sample_is_in_axis, ~] = ismember(M.mut.patient, dialect_sample_axis);
++  if ~all(mutation_sample_is_in_axis)
++    missing_mutation_samples = unique(M.mut.patient(~mutation_sample_is_in_axis));
++    fprintf('Mutation samples absent from DIALECT sample axis:\n');
++    pr(missing_mutation_samples);
++    error('Every mutation sample must occur in the DIALECT sample axis');
++  end
++end
++
+ % hg18 liftover (if requested)
+ if strcmp(build, 'hg18'),
+   disp('Performing hg18 liftover...');
+@@ -186,16 +206,9 @@ if strcmp(build, 'hg18'),
+   M.mut = reorder_struct(M.mut, ~isnan(M.mut.pos));
+ end
+ 
+-% remove duplicate mutations
+-[u ui uj] = unique_combos(M.mut.patient,M.mut.chr,M.mut.pos);
+-if length(ui)<slength(M.mut)
+-  fprintf('Keeping %d/%d unique mutations.\n',length(ui),slength(M.mut));
+-  M.mut = reorder_struct(M.mut,ui);
+-end
+-
  % remove duplicate patients
  fprintf('Scanning for duplicate patients...\n');
 -X = new_find_duplicate_samples(M.mut);
@@ -80,29 +167,119 @@ index b4b4433..8fc8c94 100755
  if ~isempty(X.drop)
    fprintf('Removing the following %d duplicate patients:\n',length(X.drop));
    disp(X.drop);
-@@ -606,6 +606,9 @@ fprintf('now       eta                # gene        nmut   nperm  CV          CL
+@@ -277,6 +290,17 @@ end
+ fprintf('Converting mutation data...\n');
+ M.mut.chr = convert_chr(M.mut.chr);
+ M.mut = make_numeric(M.mut,'pos');
++
++% Remove exact duplicate mutation rows only after coordinate normalization,
++% while preserving distinct alleles at the same patient/chromosome/position.
++% NEWBASE is the effective alternate allele computed during initial loading;
++% the helper canonicalizes reference and alternate alleles before comparison.
++[deduplicated_mutations, ui] = dialect_deduplicate_mutations(M.mut);
++if length(ui)<slength(M.mut)
++  fprintf('Keeping %d/%d unique mutations.\n',length(ui),slength(M.mut));
++end
++M.mut = deduplicated_mutations;
++
+ M.mut.newbase_idx = listmap(regexprep(M.mut.newbase,'^(.).*$','$1'), {'A', 'C', 'G', 'T'});
+ M.mut.newbase_idx(M.effect.is_indel(M.mut.effect_idx)) = 5;  % indels get newbase_idx=5
+ idx = find(isnan(M.mut.newbase_idx));
+@@ -286,9 +310,19 @@ if ~isempty(idx)
+ end
+ M.mut = reorder_struct(M.mut, ~isnan(M.mut.chr));
+ 
+-% PATIENTS 
++% PATIENTS
+ 
+-[M.pat.name tmp M.mut.pat_idx] = unique(M.mut.patient);
++if dialect_explicit_sample_axis
++  M.pat.name = dialect_sample_axis;
++  [mutation_sample_is_in_axis, M.mut.pat_idx] = ...
++      ismember(M.mut.patient, M.pat.name);
++  if ~all(mutation_sample_is_in_axis) || any(M.mut.pat_idx < 1)
++    error('DIALECT patient mapping lost a mutation sample from the explicit axis');
++  end
++else
++  % Legacy generic MutSig entry points retain the upstream mutation-derived axis.
++  [M.pat.name tmp M.mut.pat_idx] = unique(M.mut.patient);
++end
+ M.np = slength(M.pat);
+ fprintf('%d patients\n',M.np);
+ if M.np<2, fprintf('WARNING:  MutSig is not applicable to single patients.\n'); end
+@@ -303,15 +337,32 @@ if M.cov.ntype == 1,
+   M.mut = add_helper_is_fields(M.mut); 
+ 
+   pvec = 1:slength(M.pat); 
+-  M.pat.nmut = as_column(histc(M.mut.pat_idx,1:slength(M.pat)));
+-  M.pat.n_coding = as_column(histc(M.mut.pat_idx(M.mut.is_coding), pvec));
+-  M.pat.n_flank = as_column(histc(M.mut.pat_idx(M.mut.is_flank), pvec));
+-  M.pat.n_coding_nonsilent = as_column(histc(M.mut.pat_idx(M.mut.is_coding & ~M.mut.is_silent), pvec));
++  M.pat.nmut = zeros(slength(M.pat),1);
++  M.pat.n_coding = zeros(slength(M.pat),1);
++  M.pat.n_flank = zeros(slength(M.pat),1);
++  M.pat.n_coding_nonsilent = zeros(slength(M.pat),1);
++  if ~isempty(M.mut.pat_idx)
++    M.pat.nmut = as_column(histc(M.mut.pat_idx,pvec));
++  end
++  idx = M.mut.is_coding;
++  if any(idx), M.pat.n_coding = as_column(histc(M.mut.pat_idx(idx),pvec)); end
++  idx = M.mut.is_flank;
++  if any(idx), M.pat.n_flank = as_column(histc(M.mut.pat_idx(idx),pvec)); end
++  idx = M.mut.is_coding & ~M.mut.is_silent;
++  if any(idx)
++    M.pat.n_coding_nonsilent = as_column(histc(M.mut.pat_idx(idx),pvec));
++  end
+   M.pat.fracflank = M.pat.n_flank./M.pat.nmut;
+ else
+   M = impute_callschemes(M);
+ end
+ 
++if dialect_explicit_sample_axis
++  if any(~isfinite(M.pat.callscheme))
++    error('DIALECT callscheme assignment contains non-finite values');
++  end
++end
++
+ if ~all(M.pat.callscheme>=0 & M.pat.callscheme<=3), error('Problem imputing callschemes'); end
+ M.pat.cov_idx = mapacross(M.pat.callscheme,[0 1 2 3],[1 2 3 5]);
+ M.pat = rmfield(M.pat,'callscheme');
+@@ -606,6 +657,12 @@ fprintf('now       eta                # gene        nmut   nperm  CV          CL
  
  if P.keyboard_before_begin, keyboard; end
  
-+% [DIALECT] per-(gene,patient,effect) expected background count (d=1 missense, d=2 nonsense)
-+persample_lambda = zeros(M.ng, M.np, 2, 'single');
++% [DIALECT] per-(gene,patient,effect) expected background count (d=1 missense,
++% d=2 nonsense).  NaN plus an explicit write mask distinguishes native zero
++% rates from gene-loop failures caught by MutSig's legacy per-gene handler.
++persample_lambda = single(nan(M.ng, M.np, 2));
++persample_lambda_written = false(M.ng, 2);
 +
  for g=1:M.ng
   gene_status_reported=false;
   pCVmax = 1; pclust=1; pcons=1; nperm=0; nm=0;
-@@ -813,6 +816,10 @@ for g=1:M.ng
+@@ -813,6 +870,16 @@ for g=1:M.ng
      p = my_hygepdf(0,N_total,n_total,N_signal);  % (2D vectorization was being screwed up by all the error checking in hygepdf.m)
      P0(:,d) = prod(p,2);
      has_mutation(:,d) = sum(n_signal,2)>0;
 +    if d<=2  % [DIALECT] expected bg count = sum_c hypergeometric mean (sample- AND context-specific)
 +      Nt_safe = N_total; Nt_safe(Nt_safe<=0) = inf;
-+      persample_lambda(g,:,d) = single(sum(n_total .* N_signal ./ Nt_safe, 2))';
++      lambda_values = sum(n_total .* N_signal ./ Nt_safe, 2);
++      if any(~isfinite(lambda_values)) || any(lambda_values < 0)
++        error('DIALECT computed an invalid native lambda for gene %s effect %d', ...
++              M.gene.name{g}, d);
++      end
++      persample_lambda(g,:,d) = single(lambda_values)';
++      persample_lambda_written(g,d) = true;
 +    end
    end
    P0(isnan(P0))=1;
    P0(P0>1)=1;
-@@ -1107,6 +1114,24 @@ fprintf('%d genes with q<=0.1\n',sum(M.gene.q<=0.1));
+@@ -1105,8 +1172,28 @@ M.gene.q = calc_fdr_value(M.gene.pmax);
  
+ fprintf('%d genes with q<=0.1\n',sum(M.gene.q<=0.1));
+ 
++dialect_validate_persample_lambda(persample_lambda, persample_lambda_written);
++
  fprintf('Saving results... ');
  
 +% [DIALECT] per-(gene,patient,effect) expected background -> robust raw dump for Python.
@@ -126,6 +303,88 @@ index b4b4433..8fc8c94 100755
  % save categories file
  save_struct(M.categ,[output_dir '/mutcategs.txt']);
  
+diff --git a/src/dialect_deduplicate_mutations.m b/src/dialect_deduplicate_mutations.m
+new file mode 100644
+index 0000000..a498491
+--- /dev/null
++++ b/src/dialect_deduplicate_mutations.m
+@@ -0,0 +1,30 @@
++function [mut, keep_idx] = dialect_deduplicate_mutations(mut)
++% Keep the first row per full somatic-allele key.
++%
++% Coordinate-only deduplication erases valid multiallelic calls.  At this point
++% NEWBASE is MutSig's effective alternate allele (allele 2 when allele 1 equals
++% the reference), so it belongs in the identity key with the reference allele.
++% Canonical DIALECT alleles are stripped and uppercased before comparison.
++
++demand_fields(mut, {'patient','chr','pos','ref_allele','newbase'});
++mut.ref_allele = normalize_alleles(mut.ref_allele, 'reference');
++mut.newbase = normalize_alleles(mut.newbase, 'alternate');
++[~, keep_idx] = unique_combos( ...
++    mut.patient, mut.chr, mut.pos, mut.ref_allele, mut.newbase, 'first');
++mut = reorder_struct(mut, keep_idx);
++end
++
++function alleles = normalize_alleles(alleles, label)
++if ~iscell(alleles)
++  error('DIALECT %s alleles must be a cell array of strings', label);
++end
++for ii = 1:numel(alleles)
++  if ~ischar(alleles{ii})
++    error('DIALECT %s allele %d is not a string', label, ii);
++  end
++  alleles{ii} = upper(strtrim(alleles{ii}));
++  if isempty(alleles{ii}) || any(isspace(alleles{ii}))
++    error('DIALECT %s allele %d is empty or contains whitespace', label, ii);
++  end
++end
++end
+diff --git a/src/dialect_load_sample_axis.m b/src/dialect_load_sample_axis.m
+new file mode 100644
+index 0000000..fc0c28f
+--- /dev/null
++++ b/src/dialect_load_sample_axis.m
+@@ -0,0 +1,23 @@
++function sample_axis = dialect_load_sample_axis(sample_axis_file)
++% Load DIALECT's exact ordered sample universe and fail closed on ambiguity.
++
++demand_file(sample_axis_file);
++sample_axis = load_lines(sample_axis_file);
++sample_axis = as_column(regexprep(sample_axis, '\r$', ''));
++
++if isempty(sample_axis)
++  error('DIALECT sample axis is empty: %s', sample_axis_file);
++end
++if any(cellfun('isempty', sample_axis))
++  error('DIALECT sample axis contains an empty sample ID');
++end
++if ~isequal(sample_axis, strtrim(sample_axis))
++  error('DIALECT sample axis IDs must not have leading or trailing whitespace');
++end
++if numel(unique(sample_axis)) ~= numel(sample_axis)
++  error('DIALECT sample axis IDs must be unique');
++end
++if ~isequal(sample_axis, sort(sample_axis))
++  error('DIALECT sample axis IDs must be lexicographically ordered');
++end
++end
+diff --git a/src/dialect_validate_persample_lambda.m b/src/dialect_validate_persample_lambda.m
+new file mode 100644
+index 0000000..9ef934f
+--- /dev/null
++++ b/src/dialect_validate_persample_lambda.m
+@@ -0,0 +1,11 @@
++function dialect_validate_persample_lambda(lambda, written)
++% Fail closed unless every gene/effect slice has a finite, nonnegative value.
++
++expected_written_size = [size(lambda,1), size(lambda,3)];
++if ~isequal(size(written), expected_written_size) || ~all(written(:))
++  error('DIALECT did not compute every per-gene/effect lambda slice');
++end
++if any(~isfinite(lambda(:))) || any(lambda(:) < 0)
++  error('DIALECT per-sample lambda tensor contains invalid values');
++end
++end
 diff --git a/src/fields.m b/src/fields.m
 new file mode 100644
 index 0000000..90ffbf7
@@ -174,6 +433,51 @@ index 0000000..51f768a
 +h = accumarray([x(keep) - xlo + 1, y(keep) - ylo + 1], 1, ...
 +               [xhi - xlo + 1, yhi - ylo + 1]);
 +end
+diff --git a/src/impute_callschemes.m b/src/impute_callschemes.m
+index fc5ab4c..da58dfe 100644
+--- a/src/impute_callschemes.m
++++ b/src/impute_callschemes.m
+@@ -26,10 +26,31 @@ else
+   end
+ 
+   fprintf('Imputing callschemes\n');
+-  M.patient.nmut = as_column(histc(M.mut.pat_idx,1:slength(M.patient)));
+-  M.patient.n_coding = as_column(histc(M.mut.pat_idx(M.mut.is_coding),1:slength(M.patient)));
+-  M.patient.n_flank = as_column(histc(M.mut.pat_idx(M.mut.is_flank),1:slength(M.patient)));
+-  M.patient.n_coding_nonsilent = as_column(histc(M.mut.pat_idx(M.mut.is_coding & ~M.mut.is_silent),1:slength(M.patient)));
++  % MATLAB returns one zero per bin for HISTC([], bins), while Octave returns
++  % an empty-width matrix.  Initialize explicit zero vectors so native
++  % insufficient-event callscheme handling also works when an event class is
++  % absent (and, in particular, when the explicit axis has zero-event samples).
++  pvec = 1:slength(M.patient);
++  M.patient.nmut = zeros(slength(M.patient),1);
++  M.patient.n_coding = zeros(slength(M.patient),1);
++  M.patient.n_flank = zeros(slength(M.patient),1);
++  M.patient.n_coding_nonsilent = zeros(slength(M.patient),1);
++  if ~isempty(M.mut.pat_idx)
++    M.patient.nmut = as_column(histc(M.mut.pat_idx,pvec));
++  end
++  idx = M.mut.is_coding;
++  if any(idx)
++    M.patient.n_coding = as_column(histc(M.mut.pat_idx(idx),pvec));
++  end
++  idx = M.mut.is_flank;
++  if any(idx)
++    M.patient.n_flank = as_column(histc(M.mut.pat_idx(idx),pvec));
++  end
++  idx = M.mut.is_coding & ~M.mut.is_silent;
++  if any(idx)
++    M.patient.n_coding_nonsilent = ...
++        as_column(histc(M.mut.pat_idx(idx),pvec));
++  end
+   M.patient.fracflank = M.patient.n_flank ./ M.patient.nmut;
+   % 0=coding only;  1=exome+100bp flanks;  2=all capture (no interval list);  3=all genome (WGS)
+ 
+@@ -91,4 +112,3 @@ end
+ 
+ 
+ 
+-
 diff --git a/src/projection_1d_convolutions_fast.m b/src/projection_1d_convolutions_fast.m
 new file mode 100644
 index 0000000..c54e49d
