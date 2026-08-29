@@ -6,6 +6,7 @@ import math
 import os
 import subprocess
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,11 @@ import pytest
 from analysis import mutsig_lambda_co
 from analysis import run_tcga_revision_k500 as runner
 from analysis.mutsig_lambda_co import build_lambda_pmfs
+from dialect.data.revision_fit_policy import (
+    D3ImplementationBinding,
+    MutSigEffectPagesPolicy,
+    MutSigSupportPolicy,
+)
 
 
 def test_secure_runner_read_rejects_hardlinks_and_in_place_mutation(
@@ -4400,8 +4406,14 @@ def test_runner_pins_signed_family_parser_to_actual_k500_implementation(
     )
     approval = object()
     captured = {}
+    d3_checks = []
     monkeypatch.setattr(runner, "_validated_fit_approval", lambda *_args: approval)
     monkeypatch.setattr(runner, "_require_fit_stage_binding", lambda *_args: {})
+    monkeypatch.setattr(
+        runner,
+        "_require_d3_runtime_contract",
+        lambda policy, actual_paths: d3_checks.append((policy, actual_paths)),
+    )
 
     def parse_policy(
         actual_approval,
@@ -4425,6 +4437,8 @@ def test_runner_pins_signed_family_parser_to_actual_k500_implementation(
         "d4": runner.REQUIRED_D4_IMPLEMENTATION,
         "family": runner.REQUIRED_TESTED_FAMILY,
     }
+    assert len(d3_checks) == 1
+    assert d3_checks[0][1] is paths
     assert record == runner.asdict(runner.REQUIRED_TESTED_FAMILY)
 
 
@@ -4440,6 +4454,11 @@ def test_runner_rejects_parser_return_that_drifts_from_implemented_family(
     monkeypatch.setattr(runner, "_require_fit_stage_binding", lambda *_args: {})
     monkeypatch.setattr(
         runner,
+        "_require_d3_runtime_contract",
+        lambda *_args: pytest.fail("D3 must not mask an invalid signed D5 family"),
+    )
+    monkeypatch.setattr(
+        runner,
         "validate_revision_fit_policy",
         lambda *_args, **_kwargs: SimpleNamespace(
             d5=SimpleNamespace(
@@ -4450,6 +4469,297 @@ def test_runner_rejects_parser_return_that_drifts_from_implemented_family(
 
     with pytest.raises(ValueError, match="does not match the runner implementation"):
         runner._signed_tested_family_record(paths)  # noqa: SLF001
+
+
+def _d3_runtime_policy_fixture(
+    source_files: dict[str, str],
+    reviewed_commit: str,
+) -> SimpleNamespace:
+    support = MutSigSupportPolicy(
+        dtype="<f4",
+        effect_pages=MutSigEffectPagesPolicy(M=0, N=1),
+        fallback_or_floor="none",
+        lambda_dtype="native-binary32",
+        layout_canary=runner.MUTSIG_TENSOR_LAYOUT_CANARY,
+        normalization=runner.PRODUCTION_POISSON_NORMALIZATION,
+        order="Fortran-(gene,patient,effect)",
+        predecessor_proof="required-when-tail-endpoint-binds",
+        read_only=True,
+        storage_contract=runner.PRODUCTION_POISSON_STORAGE_CONTRACT,
+        support_contract=runner.PRODUCTION_POISSON_SUPPORT_CONTRACT,
+        support_rule=runner.PRODUCTION_POISSON_SUPPORT_RULE,
+        tail_tolerance=runner.PRODUCTION_POISSON_TAIL_TOLERANCE,
+    )
+    runner_path = "analysis/run_tcga_revision_k500.py"
+    source_snapshot_sha256 = hashlib.sha256(
+        json.dumps(
+            source_files,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode(),
+    ).hexdigest()
+    receipts = {
+        "D4": SimpleNamespace(canonical_artifact_sha256="4" * 64),
+        "D5": SimpleNamespace(canonical_artifact_sha256="5" * 64),
+    }
+    source_contract = {
+        "association_results_read": False,
+        "d4_canonical_artifact_sha256": (receipts["D4"].canonical_artifact_sha256),
+        "d5_canonical_artifact_sha256": (receipts["D5"].canonical_artifact_sha256),
+        "mutsig_minimal_tail_contract": runner.asdict(support),
+        "reviewed_scientific_commit": reviewed_commit,
+        "runner": {
+            "path": runner_path,
+            "sha256": source_files[runner_path],
+        },
+        "schema": "dialect-revision-k500-scientific-source-v1",
+        "source_file_count": len(source_files),
+        "source_files": source_files,
+        "source_snapshot_sha256": source_snapshot_sha256,
+    }
+    source_contract_bytes = (
+        json.dumps(
+            source_contract,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+    binding = D3ImplementationBinding(
+        reviewed_scientific_commit=reviewed_commit,
+        runner_path=runner_path,
+        runner_sha256=source_files[runner_path],
+        source_contract_sha256=hashlib.sha256(source_contract_bytes).hexdigest(),
+        source_file_count=len(source_files),
+        source_snapshot_sha256=source_snapshot_sha256,
+    )
+    return SimpleNamespace(
+        d3=SimpleNamespace(
+            mutsig_support=support,
+            implementation_binding=binding,
+        ),
+        d5=SimpleNamespace(tested_family=runner.REQUIRED_TESTED_FAMILY),
+        receipts=receipts,
+    )
+
+
+def _install_d3_runtime_source_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    source_files: dict[str, str],
+    reviewed_commit: str,
+) -> None:
+    monkeypatch.setattr(runner, "_source_snapshot", lambda _root: source_files)
+    monkeypatch.setattr(runner, "_validated_provider_bundle", lambda _paths: {})
+    monkeypatch.setattr(
+        runner,
+        "_provider_root_receipt",
+        lambda _paths, _provider: {"git_executable": {}},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_git_snapshot",
+        lambda _root, _git: {
+            "dirty": False,
+            "head": reviewed_commit,
+            "status": [],
+        },
+    )
+
+
+def test_runner_accepts_exact_d3_v2_native_support_and_source_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_files = {
+        "analysis/run_tcga_revision_k500.py": "a" * 64,
+        "src/dialect/data/revision_fit_policy.py": "b" * 64,
+    }
+    reviewed_commit = "c" * 40
+    policy = _d3_runtime_policy_fixture(source_files, reviewed_commit)
+    _install_d3_runtime_source_fixture(monkeypatch, source_files, reviewed_commit)
+
+    record = runner._require_d3_runtime_contract(  # noqa: SLF001
+        policy,
+        _with_revision_authority(
+            runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run"),
+            tmp_path,
+        ),
+    )
+
+    assert record["mutsig_support"] == runner.asdict(policy.d3.mutsig_support)
+    assert record["source_contract_sha256"] == (
+        policy.d3.implementation_binding.source_contract_sha256
+    )
+    assert record["tensor_encoding"]["dtype"] == "<f4"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dtype", ">f4"),
+        ("effect_pages", {"M": 1, "N": 0}),
+        ("layout_canary", "different-canary"),
+        ("order", "C-(gene,patient,effect)"),
+        ("read_only", False),
+    ],
+)
+def test_runner_rejects_each_live_native_tensor_semantic_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    source_files = {"analysis/run_tcga_revision_k500.py": "a" * 64}
+    reviewed_commit = "c" * 40
+    policy = _d3_runtime_policy_fixture(source_files, reviewed_commit)
+    tensor = runner._mutsig_tensor_encoding_record(read_only=True)  # noqa: SLF001
+    tensor[field] = value
+
+    def tensor_record(*, read_only: bool) -> dict[str, object]:
+        assert read_only
+        return tensor
+
+    monkeypatch.setattr(
+        runner,
+        "_mutsig_tensor_encoding_record",
+        tensor_record,
+    )
+
+    with pytest.raises(RuntimeError, match="tensor semantics"):
+        runner._require_d3_runtime_contract(  # noqa: SLF001
+            policy,
+            _with_revision_authority(
+                runner.RunPaths(
+                    tmp_path / "source",
+                    tmp_path / "mutsig",
+                    tmp_path / "run",
+                ),
+                tmp_path,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dtype", ">f4"),
+        ("effect_pages", MutSigEffectPagesPolicy(M=1, N=0)),
+        ("fallback_or_floor", "floor"),
+        ("lambda_dtype", "binary64"),
+        ("layout_canary", "different-canary"),
+        ("normalization", "ordinary-sum"),
+        ("order", "C-(gene,patient,effect)"),
+        ("predecessor_proof", "not-required"),
+        ("read_only", False),
+        ("storage_contract", "different-storage"),
+        ("support_contract", "different-support"),
+        ("support_rule", "different-rule"),
+        ("tail_tolerance", 1e-9),
+    ],
+)
+def test_runner_rejects_each_d3_v2_native_support_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    source_files = {"analysis/run_tcga_revision_k500.py": "a" * 64}
+    reviewed_commit = "c" * 40
+    policy = _d3_runtime_policy_fixture(source_files, reviewed_commit)
+    policy.d3.mutsig_support = replace(
+        policy.d3.mutsig_support,
+        **{field: value},
+    )
+    _install_d3_runtime_source_fixture(monkeypatch, source_files, reviewed_commit)
+
+    with pytest.raises(ValueError, match="native-tail contract"):
+        runner._require_d3_runtime_contract(  # noqa: SLF001
+            policy,
+            _with_revision_authority(
+                runner.RunPaths(
+                    tmp_path / "source",
+                    tmp_path / "mutsig",
+                    tmp_path / "run",
+                ),
+                tmp_path,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("reviewed_scientific_commit", "d" * 40, "reviewed_scientific_commit"),
+        ("runner_path", "analysis/other.py", "runner_path"),
+        ("runner_sha256", "d" * 64, "runner_sha256"),
+        ("source_file_count", 3, "source_file_count"),
+        ("source_snapshot_sha256", "d" * 64, "source_snapshot_sha256"),
+        ("source_contract_sha256", "d" * 64, "source-contract digest"),
+    ],
+)
+def test_runner_rejects_each_d3_v2_implementation_binding_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    error: str,
+) -> None:
+    source_files = {"analysis/run_tcga_revision_k500.py": "a" * 64}
+    reviewed_commit = "c" * 40
+    policy = _d3_runtime_policy_fixture(source_files, reviewed_commit)
+    policy.d3.implementation_binding = replace(
+        policy.d3.implementation_binding,
+        **{field: value},
+    )
+    _install_d3_runtime_source_fixture(monkeypatch, source_files, reviewed_commit)
+
+    with pytest.raises(ValueError, match=error):
+        runner._require_d3_runtime_contract(  # noqa: SLF001
+            policy,
+            _with_revision_authority(
+                runner.RunPaths(
+                    tmp_path / "source",
+                    tmp_path / "mutsig",
+                    tmp_path / "run",
+                ),
+                tmp_path,
+            ),
+        )
+
+
+def test_production_runner_rejects_legacy_d3_before_source_or_input_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _with_revision_authority(
+        runner.RunPaths(tmp_path / "source", tmp_path / "mutsig", tmp_path / "run"),
+        tmp_path,
+    )
+    legacy_policy = SimpleNamespace(
+        d3=SimpleNamespace(mutsig_support=None, implementation_binding=None),
+        d5=SimpleNamespace(tested_family=runner.REQUIRED_TESTED_FAMILY),
+    )
+    monkeypatch.setattr(runner, "_validated_input_approval", lambda *_args: object())
+    monkeypatch.setattr(runner, "_validated_fit_approval", lambda *_args: object())
+    monkeypatch.setattr(runner, "_require_fit_stage_binding", lambda *_args: {})
+    monkeypatch.setattr(
+        runner,
+        "validate_revision_fit_policy",
+        lambda *_args, **_kwargs: legacy_policy,
+    )
+
+    def forbidden_read(*_args, **_kwargs):
+        pytest.fail("legacy D3 reached scientific source or canonical input reads")
+
+    monkeypatch.setattr(runner, "_source_snapshot", forbidden_read)
+    monkeypatch.setattr(runner, "_validated_input_bundle", forbidden_read)
+
+    with pytest.raises(ValueError, match="signed D3-v2 MutSig contract"):
+        runner._canonical_input_binding(paths, "CHOL")  # noqa: SLF001
 
 
 def test_frozen_cohort_authority_accepts_stage_scoped_v5_input_and_fit(

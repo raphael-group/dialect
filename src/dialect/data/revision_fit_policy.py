@@ -32,7 +32,11 @@ if TYPE_CHECKING:
 MACHINE_DECISION_SCHEMA: Final = "dialect-revision-machine-decision-v1"
 """Canonical schema shared with the signed D1/D2 decision envelopes."""
 
-D3_CONTRACT: Final = "bmr-provider-hierarchy-v1"
+LEGACY_D3_CONTRACT: Final = "bmr-provider-hierarchy-v1"
+"""Historical v4-only provider hierarchy without the MutSig support binding."""
+
+D3_CONTRACT: Final = "bmr-provider-hierarchy-native-mutsig-support-v2"
+"""Production v5 hierarchy plus exact native-MutSig implementation authority."""
 D4_CONTRACT: Final = "profile-lrt-pvalue-policy-v3"
 D5_CONTRACT: Final = "conjunction-multiplicity-family-policy-v3"
 D6_CONTRACT: Final = "calibration-scope-policy-v1"
@@ -52,6 +56,17 @@ PRIMARY_BMR_PROVIDER: Final = "cbase"
 SENSITIVITY_BMR_PROVIDERS: Final[tuple[str, str]] = ("dig", "mutsig")
 CONJUNCTION_SECONDARY: Final = "secondary"
 CONJUNCTION_OMITTED: Final = "omitted"
+
+MUTSIG_FALLBACK_OR_FLOOR: Final = "none"
+MUTSIG_LAMBDA_DTYPE: Final = "native-binary32"
+MUTSIG_PREDECESSOR_PROOF: Final = "required-when-tail-endpoint-binds"
+MUTSIG_RUNNER_PATH: Final = "analysis/run_tcga_revision_k500.py"
+MUTSIG_SOURCE_COMMIT_PATTERN: Final = re.compile(r"[0-9a-f]{40}")
+MUTSIG_TENSOR_DTYPE: Final = "<f4"
+MUTSIG_TENSOR_LAYOUT_CANARY: Final = (
+    "nonuniform-2x3x2-fortran-gene-patient-effect-m0-n1-v1"
+)
+MUTSIG_TENSOR_ORDER: Final = "Fortran-(gene,patient,effect)"
 
 LRT_TEST_DIRECTION: Final = "nondirectional-two-sided-dependence"
 LRT_REFERENCE_FAMILY: Final = "chi-square"
@@ -144,6 +159,45 @@ class FitPolicyReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class MutSigEffectPagesPolicy:
+    """Native tensor page indices for missense and nonsense effects."""
+
+    M: int
+    N: int
+
+
+@dataclass(frozen=True, slots=True)
+class MutSigSupportPolicy:
+    """Exact prospective native-MutSig finite-support contract signed under D3."""
+
+    fallback_or_floor: str
+    dtype: str
+    effect_pages: MutSigEffectPagesPolicy
+    lambda_dtype: str
+    layout_canary: str
+    normalization: str
+    order: str
+    predecessor_proof: str
+    read_only: bool
+    storage_contract: str
+    support_contract: str
+    support_rule: str
+    tail_tolerance: float
+
+
+@dataclass(frozen=True, slots=True)
+class D3ImplementationBinding:
+    """Reviewed source snapshot transitively signed by the production D3 artifact."""
+
+    reviewed_scientific_commit: str
+    runner_path: str
+    runner_sha256: str
+    source_contract_sha256: str
+    source_file_count: int
+    source_snapshot_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderHierarchyPolicy:
     """D3 primary/sensitivity provider hierarchy."""
 
@@ -152,6 +206,8 @@ class ProviderHierarchyPolicy:
     all_three_conjunction_role: str
     burden_dependent_switching: bool
     rationale: str
+    mutsig_support: MutSigSupportPolicy | None = None
+    implementation_binding: D3ImplementationBinding | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,7 +461,10 @@ def validate_revision_fit_policy(
         envelopes[decision_id] = envelope
         receipts[decision_id] = receipt
 
-    d3 = _parse_d3(envelopes["D3"]["payload"])
+    d3 = _parse_d3(
+        envelopes["D3"]["payload"],
+        contract=str(envelopes["D3"]["contract"]),
+    )
     d4 = _parse_d4(
         envelopes["D4"]["payload"],
         expected_implementation=expected_d4_implementation,
@@ -502,7 +561,11 @@ def _parse_signed_decision(
     _require_sha256(artifact.sha256, f"{decision_id} canonical artifact SHA-256")
 
     envelope = _load_canonical_envelope(content, decision_id)
-    expected_contract = FIT_POLICY_CONTRACTS[decision_id]
+    expected_contract = (
+        LEGACY_D3_CONTRACT
+        if decision_id == "D3" and approval.schema == APPROVAL_SCHEMA
+        else FIT_POLICY_CONTRACTS[decision_id]
+    )
     if envelope["schema"] != MACHINE_DECISION_SCHEMA:
         msg = f"Signed {decision_id} artifact has an unsupported machine schema."
         raise RevisionFitPolicyError(msg)
@@ -529,17 +592,23 @@ def _parse_signed_decision(
     return envelope, receipt
 
 
-def _parse_d3(value: object) -> ProviderHierarchyPolicy:
+def _parse_d3(value: object, *, contract: str) -> ProviderHierarchyPolicy:
     payload = _require_object(value, "D3.payload")
+    expected_keys = {
+        "all_three_conjunction_role",
+        "burden_dependent_switching",
+        "primary_provider",
+        "rationale",
+        "sensitivity_providers",
+    }
+    if contract == D3_CONTRACT:
+        expected_keys.update({"implementation_binding", "mutsig_support"})
+    elif contract != LEGACY_D3_CONTRACT:
+        msg = f"D3 has an unsupported contract: {contract!r}."
+        raise RevisionFitPolicyError(msg)
     _require_exact_keys(
         payload,
-        {
-            "all_three_conjunction_role",
-            "burden_dependent_switching",
-            "primary_provider",
-            "rationale",
-            "sensitivity_providers",
-        },
+        expected_keys,
         "D3.payload",
     )
     primary = _require_exact_value(
@@ -572,6 +641,13 @@ def _parse_d3(value: object) -> ProviderHierarchyPolicy:
     if switching:
         msg = "D3 forbids burden-dependent provider switching."
         raise RevisionFitPolicyError(msg)
+    mutsig_support = None
+    implementation_binding = None
+    if contract == D3_CONTRACT:
+        mutsig_support = _parse_d3_mutsig_support(payload["mutsig_support"])
+        implementation_binding = _parse_d3_implementation_binding(
+            payload["implementation_binding"],
+        )
     return ProviderHierarchyPolicy(
         primary_provider=primary,
         sensitivity_providers=(sensitivities[0], sensitivities[1]),
@@ -582,6 +658,179 @@ def _parse_d3(value: object) -> ProviderHierarchyPolicy:
         ),
         burden_dependent_switching=False,
         rationale=_require_exact_text(payload["rationale"], "D3.payload.rationale"),
+        mutsig_support=mutsig_support,
+        implementation_binding=implementation_binding,
+    )
+
+
+def _parse_d3_mutsig_support(value: object) -> MutSigSupportPolicy:
+    """Parse the exact support semantics; the runner pins its live constants."""
+    support = _require_object(value, "D3.payload.mutsig_support")
+    _require_exact_keys(
+        support,
+        {
+            "dtype",
+            "effect_pages",
+            "fallback_or_floor",
+            "lambda_dtype",
+            "layout_canary",
+            "normalization",
+            "order",
+            "predecessor_proof",
+            "read_only",
+            "storage_contract",
+            "support_contract",
+            "support_rule",
+            "tail_tolerance",
+        },
+        "D3.payload.mutsig_support",
+    )
+    tail_tolerance = _require_positive_finite_float(
+        support["tail_tolerance"],
+        "D3.payload.mutsig_support.tail_tolerance",
+    )
+    read_only = _require_bool(
+        support["read_only"],
+        "D3.payload.mutsig_support.read_only",
+    )
+    if not read_only:
+        msg = "D3.payload.mutsig_support.read_only must be true."
+        raise RevisionFitPolicyError(msg)
+    return MutSigSupportPolicy(
+        fallback_or_floor=_require_exact_value(
+            support["fallback_or_floor"],
+            MUTSIG_FALLBACK_OR_FLOOR,
+            "D3.payload.mutsig_support.fallback_or_floor",
+        ),
+        dtype=_require_exact_value(
+            support["dtype"],
+            MUTSIG_TENSOR_DTYPE,
+            "D3.payload.mutsig_support.dtype",
+        ),
+        effect_pages=_parse_d3_mutsig_effect_pages(support["effect_pages"]),
+        lambda_dtype=_require_exact_value(
+            support["lambda_dtype"],
+            MUTSIG_LAMBDA_DTYPE,
+            "D3.payload.mutsig_support.lambda_dtype",
+        ),
+        layout_canary=_require_exact_value(
+            support["layout_canary"],
+            MUTSIG_TENSOR_LAYOUT_CANARY,
+            "D3.payload.mutsig_support.layout_canary",
+        ),
+        normalization=_require_exact_text(
+            support["normalization"],
+            "D3.payload.mutsig_support.normalization",
+        ),
+        order=_require_exact_value(
+            support["order"],
+            MUTSIG_TENSOR_ORDER,
+            "D3.payload.mutsig_support.order",
+        ),
+        predecessor_proof=_require_exact_value(
+            support["predecessor_proof"],
+            MUTSIG_PREDECESSOR_PROOF,
+            "D3.payload.mutsig_support.predecessor_proof",
+        ),
+        read_only=read_only,
+        storage_contract=_require_exact_text(
+            support["storage_contract"],
+            "D3.payload.mutsig_support.storage_contract",
+        ),
+        support_contract=_require_exact_text(
+            support["support_contract"],
+            "D3.payload.mutsig_support.support_contract",
+        ),
+        support_rule=_require_exact_text(
+            support["support_rule"],
+            "D3.payload.mutsig_support.support_rule",
+        ),
+        tail_tolerance=tail_tolerance,
+    )
+
+
+def _parse_d3_mutsig_effect_pages(value: object) -> MutSigEffectPagesPolicy:
+    pages = _require_object(value, "D3.payload.mutsig_support.effect_pages")
+    _require_exact_keys(
+        pages,
+        {"M", "N"},
+        "D3.payload.mutsig_support.effect_pages",
+    )
+    return MutSigEffectPagesPolicy(
+        M=_require_exact_integer(
+            pages["M"],
+            0,
+            "D3.payload.mutsig_support.effect_pages.M",
+        ),
+        N=_require_exact_integer(
+            pages["N"],
+            1,
+            "D3.payload.mutsig_support.effect_pages.N",
+        ),
+    )
+
+
+def _parse_d3_implementation_binding(value: object) -> D3ImplementationBinding:
+    binding = _require_object(value, "D3.payload.implementation_binding")
+    _require_exact_keys(
+        binding,
+        {
+            "reviewed_scientific_commit",
+            "runner_path",
+            "runner_sha256",
+            "source_contract_sha256",
+            "source_file_count",
+            "source_snapshot_sha256",
+        },
+        "D3.payload.implementation_binding",
+    )
+    commit = _require_exact_text(
+        binding["reviewed_scientific_commit"],
+        "D3.payload.implementation_binding.reviewed_scientific_commit",
+    )
+    if MUTSIG_SOURCE_COMMIT_PATTERN.fullmatch(commit) is None:
+        msg = (
+            "D3.payload.implementation_binding.reviewed_scientific_commit must "
+            "be exactly 40 lowercase hexadecimal characters."
+        )
+        raise RevisionFitPolicyError(msg)
+    runner_path = _require_exact_value(
+        binding["runner_path"],
+        MUTSIG_RUNNER_PATH,
+        "D3.payload.implementation_binding.runner_path",
+    )
+    runner_sha256 = _require_exact_text(
+        binding["runner_sha256"],
+        "D3.payload.implementation_binding.runner_sha256",
+    )
+    source_contract_sha256 = _require_exact_text(
+        binding["source_contract_sha256"],
+        "D3.payload.implementation_binding.source_contract_sha256",
+    )
+    source_snapshot_sha256 = _require_exact_text(
+        binding["source_snapshot_sha256"],
+        "D3.payload.implementation_binding.source_snapshot_sha256",
+    )
+    for label, digest in (
+        ("runner_sha256", runner_sha256),
+        ("source_contract_sha256", source_contract_sha256),
+        ("source_snapshot_sha256", source_snapshot_sha256),
+    ):
+        _require_sha256(digest, f"D3.payload.implementation_binding.{label}")
+    source_file_count = _require_nonnegative_integer(
+        binding["source_file_count"],
+        "D3.payload.implementation_binding.source_file_count",
+    )
+    if source_file_count == 0:
+        msg = "D3 implementation source_file_count must be positive."
+        raise RevisionFitPolicyError(msg)
+    return D3ImplementationBinding(
+        reviewed_scientific_commit=commit,
+        runner_path=runner_path,
+        runner_sha256=runner_sha256,
+        source_contract_sha256=source_contract_sha256,
+        source_file_count=source_file_count,
+        source_snapshot_sha256=source_snapshot_sha256,
     )
 
 

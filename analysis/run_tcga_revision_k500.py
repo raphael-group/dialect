@@ -1981,6 +1981,7 @@ def _signed_tested_family_record(paths: RunPaths) -> dict[str, Any] | None:
     if policy.d5.tested_family != REQUIRED_TESTED_FAMILY:
         msg = "Signed D5 tested family does not match the runner implementation."
         raise ValueError(msg)
+    _require_d3_runtime_contract(policy, paths)
     return asdict(policy.d5.tested_family)
 
 
@@ -2175,6 +2176,7 @@ def _canonical_input_binding(paths: RunPaths, cohort: str) -> dict[str, Any] | N
     if fit_policy.d5.tested_family != REQUIRED_TESTED_FAMILY:
         msg = "Signed D5 tested family does not match the executed K=500 family."
         raise ValueError(msg)
+    _require_d3_runtime_contract(fit_policy, paths)
     validated_input = _validated_input_bundle(
         root,
         _require_lowercase_sha256(
@@ -4693,6 +4695,110 @@ def _load_verified_contract(
 
 def _source_snapshot(repo_root: Path) -> dict[str, str]:
     return {path.as_posix(): _sha256(repo_root / path) for path in SOURCE_FILES}
+
+
+def _d3_source_contract_bytes(payload: object, *, newline: bool) -> bytes:
+    """Match the fit-authority builder's UTF-8 canonicalization exactly."""
+    content = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return content + (b"\n" if newline else b"")
+
+
+def _require_d3_runtime_contract(
+    policy: RevisionFitPolicy,
+    paths: RunPaths,
+) -> dict[str, Any]:
+    """Bind signed D3-v2 support and source receipts to this exact clean runner."""
+    support = policy.d3.mutsig_support
+    binding = policy.d3.implementation_binding
+    if support is None or binding is None:
+        msg = "Production K=500 fitting requires the signed D3-v2 MutSig contract."
+        raise ValueError(msg)
+    tensor = _mutsig_tensor_encoding_record(read_only=True)
+    if (
+        tensor.get("dtype") != "<f4"
+        or tensor.get("effect_pages") != MUTSIG_EFFECT_INDEX
+        or tensor.get("order") != "Fortran-(gene,patient,effect)"
+        or tensor.get("read_only") is not True
+        or tensor.get("layout_canary") != MUTSIG_TENSOR_LAYOUT_CANARY
+    ):
+        msg = "Executed MutSig tensor semantics differ from signed native D3 support."
+        raise RuntimeError(msg)
+    expected_support = {
+        "dtype": tensor["dtype"],
+        "effect_pages": tensor["effect_pages"],
+        "fallback_or_floor": "none",
+        "lambda_dtype": "native-binary32",
+        "layout_canary": tensor["layout_canary"],
+        "normalization": PRODUCTION_POISSON_NORMALIZATION,
+        "order": tensor["order"],
+        "predecessor_proof": "required-when-tail-endpoint-binds",
+        "read_only": tensor["read_only"],
+        "storage_contract": PRODUCTION_POISSON_STORAGE_CONTRACT,
+        "support_contract": PRODUCTION_POISSON_SUPPORT_CONTRACT,
+        "support_rule": PRODUCTION_POISSON_SUPPORT_RULE,
+        "tail_tolerance": PRODUCTION_POISSON_TAIL_TOLERANCE,
+    }
+    if asdict(support) != expected_support:
+        msg = "Signed D3 MutSig support differs from the executed native-tail contract."
+        raise ValueError(msg)
+
+    source_files = _source_snapshot(RUNNER_REPO_ROOT)
+    runner_path = Path(__file__).resolve().relative_to(RUNNER_REPO_ROOT).as_posix()
+    source_snapshot_sha256 = hashlib.sha256(
+        _d3_source_contract_bytes(source_files, newline=False),
+    ).hexdigest()
+    provider = _validated_provider_bundle(paths)
+    provider_receipt = _provider_root_receipt(paths, provider)
+    git = _git_snapshot(RUNNER_REPO_ROOT, provider_receipt["git_executable"])
+    if git["dirty"]:
+        msg = "Signed D3 source authority requires the exact clean reviewed Git tree."
+        raise ValueError(msg)
+    expected_binding = {
+        "reviewed_scientific_commit": git["head"],
+        "runner_path": runner_path,
+        "runner_sha256": source_files[runner_path],
+        "source_file_count": len(source_files),
+        "source_snapshot_sha256": source_snapshot_sha256,
+    }
+    observed_binding = asdict(binding)
+    for key, expected in expected_binding.items():
+        if observed_binding.get(key) != expected:
+            msg = f"Signed D3 implementation binding drifted for {key}."
+            raise ValueError(msg)
+
+    source_contract = {
+        "association_results_read": False,
+        "d4_canonical_artifact_sha256": policy.receipts["D4"].canonical_artifact_sha256,
+        "d5_canonical_artifact_sha256": policy.receipts["D5"].canonical_artifact_sha256,
+        "mutsig_minimal_tail_contract": expected_support,
+        "reviewed_scientific_commit": git["head"],
+        "runner": {
+            "path": runner_path,
+            "sha256": source_files[runner_path],
+        },
+        "schema": "dialect-revision-k500-scientific-source-v1",
+        "source_file_count": len(source_files),
+        "source_files": source_files,
+        "source_snapshot_sha256": source_snapshot_sha256,
+    }
+    source_contract_sha256 = hashlib.sha256(
+        _d3_source_contract_bytes(source_contract, newline=True),
+    ).hexdigest()
+    if binding.source_contract_sha256 != source_contract_sha256:
+        msg = "Signed D3 source-contract digest differs from the live source closure."
+        raise ValueError(msg)
+    return {
+        "implementation_binding": observed_binding,
+        "mutsig_support": expected_support,
+        "source_contract_sha256": source_contract_sha256,
+        "tensor_encoding": tensor,
+    }
 
 
 def _require_pinned_import_roots(implementation: object) -> None:

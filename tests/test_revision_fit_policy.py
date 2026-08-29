@@ -31,6 +31,7 @@ from dialect.data.revision_fit_policy import (
     D6_CONTRACT,
     DIRECTION_CONSENSUS_RULE,
     EFFECT_UNIDENTIFIABLE_POLICY,
+    LEGACY_D3_CONTRACT,
     LRT_STATISTIC_TRANSFORM,
     LRT_VALIDITY_COVERAGE,
     MACHINE_DECISION_SCHEMA,
@@ -141,14 +142,53 @@ def _canonical(value, *, newline=True):
     return content + (b"\n" if newline else b"")
 
 
-def _d3(*, conjunction_role="secondary"):
-    return {
+def _d3(*, conjunction_role="secondary", production=False):
+    payload = {
         "all_three_conjunction_role": conjunction_role,
         "burden_dependent_switching": False,
         "primary_provider": "cbase",
         "rationale": "CBaSE is primary for continuity, not claimed superiority.",
         "sensitivity_providers": ["dig", "mutsig"],
     }
+    if production:
+        payload.update(
+            {
+                "implementation_binding": {
+                    "reviewed_scientific_commit": "a" * 40,
+                    "runner_path": "analysis/run_tcga_revision_k500.py",
+                    "runner_sha256": "b" * 64,
+                    "source_contract_sha256": "c" * 64,
+                    "source_file_count": 39,
+                    "source_snapshot_sha256": "d" * 64,
+                },
+                "mutsig_support": {
+                    "dtype": "<f4",
+                    "effect_pages": {"M": 0, "N": 1},
+                    "fallback_or_floor": "none",
+                    "lambda_dtype": "native-binary32",
+                    "layout_canary": (
+                        "nonuniform-2x3x2-fortran-gene-patient-effect-m0-n1-v1"
+                    ),
+                    "normalization": "per-sample-math.fsum-v1",
+                    "order": "Fortran-(gene,patient,effect)",
+                    "predecessor_proof": "required-when-tail-endpoint-binds",
+                    "read_only": True,
+                    "storage_contract": (
+                        "platform-independent-numeric-array-estimate-with-row-"
+                        "mapping-views-v2"
+                    ),
+                    "support_contract": (
+                        "native-float32-shared-cohort-inclusive-poisson-tail-v1"
+                    ),
+                    "support_rule": (
+                        "K=max(observed_kmax,min{k>=0:Poisson.sf(k,"
+                        "max_selected_native_lambda)<=1e-12})"
+                    ),
+                    "tail_tolerance": 1e-12,
+                },
+            },
+        )
+    return payload
 
 
 def _d4():
@@ -337,13 +377,21 @@ def _d6_none():
     }
 
 
-def _payloads():
-    return {"D3": _d3(), "D4": _d4(), "D5": _d5(), "D6": _d6_narrow()}
+def _payloads(*, production=False):
+    return {
+        "D3": _d3(production=production),
+        "D4": _d4(),
+        "D5": _d5(),
+        "D6": _d6_narrow(),
+    }
 
 
 def _envelope(decision_id, payload):
+    contract = CONTRACTS[decision_id]
+    if decision_id == "D3" and "mutsig_support" not in payload:
+        contract = LEGACY_D3_CONTRACT
     return {
-        "contract": CONTRACTS[decision_id],
+        "contract": contract,
         "decision_id": decision_id,
         "payload": payload,
         "schema": MACHINE_DECISION_SCHEMA,
@@ -432,7 +480,11 @@ def _approval(  # noqa: PLR0913
     )
 
 
-def _validated_v5_fit_approval(tmp_path: Path) -> RevisionApproval:
+def _validated_v5_fit_approval(
+    tmp_path: Path,
+    *,
+    production_d3: bool = True,
+) -> RevisionApproval:
     stage_bindings = {
         FIT_SEALED_TCGA_K500_STAGE: {
             "canonical_input_manifest_sha256": "c" * 64,
@@ -441,7 +493,7 @@ def _validated_v5_fit_approval(tmp_path: Path) -> RevisionApproval:
     }
     artifact_root = tmp_path / "authority"
     artifact_root.mkdir()
-    payloads = _payloads()
+    payloads = _payloads(production=production_d3)
     authorities: list[dict[str, object]] = []
     authority_digests: dict[str, str] = {}
     for decision_id in ("D1", "D2", "D3", "D4", "D5", "D6"):
@@ -628,7 +680,25 @@ def test_validated_v5_fit_authority_flows_into_fit_policy(tmp_path: Path):
     assert tuple(approval.decisions) == ("D1", "D2", "D3", "D4", "D5", "D6")
     assert tuple(policy.receipts) == ("D3", "D4", "D5", "D6")
     assert policy.d3.primary_provider == "cbase"
+    assert policy.d3.mutsig_support is not None
+    assert policy.d3.mutsig_support.dtype == "<f4"
+    assert policy.d3.mutsig_support.effect_pages.M == 0
+    assert policy.d3.mutsig_support.effect_pages.N == 1
+    assert policy.d3.mutsig_support.lambda_dtype == "native-binary32"
+    assert policy.d3.mutsig_support.normalization == "per-sample-math.fsum-v1"
+    assert policy.d3.implementation_binding is not None
+    assert policy.d3.implementation_binding.source_file_count == 39
+    assert policy.d3.implementation_binding.runner_sha256 == "b" * 64
     assert policy.d5.tested_family == EXPECTED_TESTED_FAMILY
+
+
+def test_fit_policy_rejects_legacy_d3_v1_under_production_v5_scope(
+    tmp_path: Path,
+):
+    approval = _validated_v5_fit_approval(tmp_path, production_d3=False)
+
+    with pytest.raises(RevisionFitPolicyError, match="contract must be"):
+        _validate(approval)
 
 
 def test_fit_policy_retains_historical_v4_compatibility():
@@ -637,6 +707,8 @@ def test_fit_policy_retains_historical_v4_compatibility():
     policy = _validate(approval)
 
     assert policy.d4.lrt_contract == LRT_CONTRACT
+    assert policy.d3.mutsig_support is None
+    assert policy.d3.implementation_binding is None
 
 
 @pytest.mark.parametrize(
