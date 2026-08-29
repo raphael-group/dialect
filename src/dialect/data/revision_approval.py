@@ -39,6 +39,18 @@ APPROVAL_SCHEMA: Final = "dialect-revision-coauthor-approval-v4"
 EVIDENCE_LINE_SCHEMA: Final = "DIALECT-REVISION-DECISION-V4"
 """ASCII TSV prefix for one coauthor's exact decision-authority attestation."""
 
+STAGE_SCOPED_APPROVAL_SCHEMA: Final = "dialect-revision-coauthor-approval-v5"
+"""Singleton-stage schema containing only that stage's minimum decisions."""
+
+STAGE_SCOPED_EVIDENCE_LINE_SCHEMA: Final = "DIALECT-REVISION-DECISION-V5"
+"""ASCII TSV prefix for singleton-stage decision attestations."""
+
+APPROVAL_SCHEMAS: Final[tuple[str, str]] = (
+    APPROVAL_SCHEMA,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
+)
+"""Supported approval schemas, oldest first."""
+
 MATERIALIZE_FINAL_INPUTS_STAGE: Final = "materialize-final-inputs"
 FIT_SEALED_TCGA_K500_STAGE: Final = "fit-sealed-tcga-k500"
 INSPECT_TCGA_K500_STAGE: Final = "inspect-tcga-k500"
@@ -267,6 +279,8 @@ class _AttestationContext:
     canonical_artifact_sha256: str
     decision_authority_sha256: str
     artifact_root: Path
+    evidence_line_schema: str
+    exact_evidence_decisions: tuple[str, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,9 +312,38 @@ class _EvidenceMarker:
     order_key: tuple[int, int]
 
 
+def _evidence_line_schema(approval_schema: str) -> str:
+    if approval_schema == APPROVAL_SCHEMA:
+        return EVIDENCE_LINE_SCHEMA
+    if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+        return STAGE_SCOPED_EVIDENCE_LINE_SCHEMA
+    msg = f"Unsupported approval schema: {approval_schema!r}."
+    raise RevisionApprovalError(msg)
+
+
+def _decision_ids_for_schema(
+    approval_schema: str,
+    allowed_stages: tuple[str, ...],
+) -> tuple[str, ...]:
+    if approval_schema == APPROVAL_SCHEMA:
+        return DECISION_IDS
+    if approval_schema != STAGE_SCOPED_APPROVAL_SCHEMA:
+        msg = f"Unsupported approval schema: {approval_schema!r}."
+        raise RevisionApprovalError(msg)
+    if len(allowed_stages) != 1:
+        msg = (
+            "Stage-scoped approval schema v5 requires exactly one allowed stage; "
+            f"observed {list(allowed_stages)}."
+        )
+        raise RevisionApprovalError(msg)
+    return STAGE_MINIMUM_DECISIONS[allowed_stages[0]]
+
+
 def compute_decision_authority_sha256(
     decision: Mapping[str, object],
     artifact_root: Path,
+    *,
+    approval_schema: str = APPROVAL_SCHEMA,
 ) -> str:
     """Compute the non-circular coauthor authority digest for one decision.
 
@@ -315,6 +358,7 @@ def compute_decision_authority_sha256(
         decision: Exact authority fields, optionally plus ``attestations`` and
             ``recorded_by`` from a full manifest decision.
         artifact_root: Directory containing the referenced canonical artifact.
+        approval_schema: Schema governing the decision's exact stage scope.
 
     Returns:
         Lowercase SHA-256 of the canonical operational authority object.
@@ -322,7 +366,11 @@ def compute_decision_authority_sha256(
     Raises:
         RevisionApprovalError: If the decision or artifact fails closed.
     """
-    authority = _parse_public_decision_authority(decision, Path(artifact_root))
+    authority = _parse_public_decision_authority(
+        decision,
+        Path(artifact_root),
+        approval_schema=approval_schema,
+    )
     return _decision_authority_digest(authority)
 
 
@@ -331,6 +379,8 @@ def canonical_decision_evidence_line(
     artifact_root: Path,
     approver: str,
     attested_at_utc: str,
+    *,
+    approval_schema: str = APPROVAL_SCHEMA,
 ) -> str:
     """Return one exact ASCII coauthor evidence line without its trailing LF.
 
@@ -338,15 +388,17 @@ def canonical_decision_evidence_line(
 
         DIALECT-REVISION-DECISION-V4<TAB>approver<TAB>D#<TAB>disposition<TAB>attested-at-utc<TAB>artifact-sha256<TAB>authority-sha256
 
-    A separate coauthor email or machine record may contain prose and multiple
-    such lines, but must contain exactly one matching line for every referenced
-    decision.  Marker lines are validated in canonical approver/D1-D10 order.
+    Under historical v4, a separate coauthor email or machine record may contain
+    prose and multiple such lines, with markers in canonical approver/D1-D10
+    order.  Under stage-scoped v5, each coauthor machine record must instead be
+    exactly the complete ordered minimum-decision lines plus one trailing LF.
 
     Args:
         decision: Exact authority fields, optionally as a full decision object.
         artifact_root: Directory containing the canonical decision artifact.
         approver: Exact coauthor name from :data:`APPROVERS`.
         attested_at_utc: Exact whole-second UTC timestamp asserted by the approver.
+        approval_schema: Schema selecting the authority and evidence-line contract.
 
     Returns:
         Canonical ASCII TSV record without a newline.
@@ -357,12 +409,21 @@ def canonical_decision_evidence_line(
     if approver not in APPROVERS:
         msg = f"Evidence-line approver must be one of {list(APPROVERS)}."
         raise RevisionApprovalError(msg)
-    authority = _parse_public_decision_authority(decision, Path(artifact_root))
+    authority = _parse_public_decision_authority(
+        decision,
+        Path(artifact_root),
+        approval_schema=approval_schema,
+    )
     timestamp = _parse_utc_second_syntax(
         attested_at_utc,
         "evidence-line attested_at_utc",
     )
-    return _canonical_evidence_line(authority, approver, timestamp)
+    return _canonical_evidence_line(
+        authority,
+        approver,
+        timestamp,
+        evidence_line_schema=_evidence_line_schema(approval_schema),
+    )
 
 
 def validate_revision_approval(
@@ -405,6 +466,12 @@ def validate_revision_approval(
             f"{expected_sha256}, observed {observed_manifest_sha256}."
         )
         raise RevisionApprovalError(msg)
+    manifest_receipt = ArtifactReceipt(
+        path=manifest_path.name,
+        sha256=observed_manifest_sha256,
+        size_bytes=len(raw_bytes),
+        content=raw_bytes,
+    )
 
     raw_manifest = _load_canonical_json(raw_bytes)
     manifest = _require_object(raw_manifest, "manifest")
@@ -420,7 +487,7 @@ def validate_revision_approval(
         "manifest",
     )
     schema = _require_exact_text(manifest["schema"], "manifest.schema")
-    if schema != APPROVAL_SCHEMA:
+    if schema not in APPROVAL_SCHEMAS:
         msg = f"Unsupported approval schema: {schema!r}."
         raise RevisionApprovalError(msg)
 
@@ -430,6 +497,7 @@ def validate_revision_approval(
         expected=None,
         allow_empty=True,
     )
+    expected_decision_ids = _decision_ids_for_schema(schema, allowed_stages)
     stage_bindings = _parse_stage_bindings(
         manifest["stage_bindings"],
         "manifest.stage_bindings",
@@ -445,7 +513,20 @@ def validate_revision_approval(
         effective_now,
         manifest_allowed_stages=allowed_stages,
         manifest_stage_bindings=stage_bindings,
+        expected_decision_ids=expected_decision_ids,
+        approval_schema=schema,
     )
+    _require_consistent_artifact_path_receipts(
+        manifest_receipt,
+        source_notice,
+        parsed_decisions,
+    )
+    if schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+        _require_stage_scoped_evidence_closure(
+            parsed_decisions,
+            expected_decision_ids,
+            source_notice,
+        )
     materialize_binding = stage_bindings.get(MATERIALIZE_FINAL_INPUTS_STAGE)
     if materialize_binding is not None and (
         materialize_binding["d1_canonical_artifact_sha256"]
@@ -461,7 +542,7 @@ def validate_revision_approval(
 
     eligible_stages = tuple(
         stage
-        for stage in REVISION_STAGES
+        for stage in allowed_stages
         if all(
             parsed_decisions[decision_id].disposition == GO_DISPOSITION
             for decision_id in STAGE_MINIMUM_DECISIONS[stage]
@@ -504,18 +585,26 @@ def validate_revision_approval(
     )
 
 
-def _parse_decisions(
+def _parse_decisions(  # noqa: PLR0913
     value: object,
     artifact_root: Path,
     now: datetime,
     *,
     manifest_allowed_stages: tuple[str, ...],
     manifest_stage_bindings: Mapping[str, Mapping[str, str]],
+    expected_decision_ids: tuple[str, ...],
+    approval_schema: str,
 ) -> tuple[dict[str, DecisionApproval], dict[str, str]]:
     decisions_raw = _require_list(value, "manifest.decisions")
-    if len(decisions_raw) != len(DECISION_IDS):
+    if len(decisions_raw) != len(expected_decision_ids):
+        expected_label = (
+            "D1-D10"
+            if expected_decision_ids == DECISION_IDS
+            else list(expected_decision_ids)
+        )
         msg = (
-            "manifest.decisions must contain exactly D1-D10; observed "
+            "manifest.decisions must contain exactly "
+            f"{expected_label}; observed "
             f"{len(decisions_raw)} records."
         )
         raise RevisionApprovalError(msg)
@@ -533,6 +622,8 @@ def _parse_decisions(
             now,
             manifest_allowed_stages=manifest_allowed_stages,
             manifest_stage_bindings=manifest_stage_bindings,
+            expected_decision_ids=expected_decision_ids,
+            approval_schema=approval_schema,
         )
         if decision.decision_id in parsed_decisions:
             msg = f"Duplicate decision record: {decision.decision_id}."
@@ -543,11 +634,16 @@ def _parse_decisions(
             _canonical_json_bytes(decision_object, trailing_newline=False),
         ).hexdigest()
 
-    if tuple(observed_order) != DECISION_IDS:
-        missing = sorted(set(DECISION_IDS).difference(observed_order))
-        extra = sorted(set(observed_order).difference(DECISION_IDS))
+    if tuple(observed_order) != expected_decision_ids:
+        missing = sorted(set(expected_decision_ids).difference(observed_order))
+        extra = sorted(set(observed_order).difference(expected_decision_ids))
+        expected_label = (
+            "D1-D10"
+            if expected_decision_ids == DECISION_IDS
+            else list(expected_decision_ids)
+        )
         msg = (
-            "Decision records must be ordered exactly D1-D10; "
+            f"Decision records must be ordered exactly {expected_label}; "
             f"missing={missing}, extra={extra}, observed={observed_order}."
         )
         raise RevisionApprovalError(msg)
@@ -583,6 +679,137 @@ def _parse_source_notice(value: object, artifact_root: Path) -> SourceNotice:
     )
 
 
+def _require_stage_scoped_evidence_closure(
+    decisions: Mapping[str, DecisionApproval],
+    expected_decision_ids: tuple[str, ...],
+    source_notice: SourceNotice,
+) -> None:
+    """Require one identical complete evidence record per approver across decisions."""
+    first_decision = decisions[expected_decision_ids[0]]
+    for approver_index, approver in enumerate(APPROVERS):
+        baseline = first_decision.attestations[approver_index]
+        baseline_evidence = baseline.evidence
+        if baseline_evidence.kind != "coauthor-authored-machine-record":
+            msg = (
+                "Stage-scoped approval evidence must use "
+                "coauthor-authored-machine-record bytes."
+            )
+            raise RevisionApprovalError(msg)
+        baseline_identity = (
+            baseline_evidence.kind,
+            baseline_evidence.locator,
+            baseline_evidence.file.path,
+            baseline_evidence.file.sha256,
+            baseline_evidence.file.content,
+        )
+        for decision_id in expected_decision_ids[1:]:
+            attestation = decisions[decision_id].attestations[approver_index]
+            evidence = attestation.evidence
+            identity = (
+                evidence.kind,
+                evidence.locator,
+                evidence.file.path,
+                evidence.file.sha256,
+                evidence.file.content,
+            )
+            if attestation.approver != approver or identity != baseline_identity:
+                msg = (
+                    "Stage-scoped approval requires one identical complete evidence "
+                    f"record for {approver} across {list(expected_decision_ids)}."
+                )
+                raise RevisionApprovalError(msg)
+            if attestation.attested_at_utc != baseline.attested_at_utc:
+                msg = (
+                    "Stage-scoped approval requires one identical attestation "
+                    f"timestamp for {approver} across {list(expected_decision_ids)}."
+                )
+                raise RevisionApprovalError(msg)
+        expected_lines = [
+            _format_evidence_line(
+                evidence_line_schema=STAGE_SCOPED_EVIDENCE_LINE_SCHEMA,
+                approver=approver,
+                decision_id=decision_id,
+                disposition=decisions[decision_id].disposition,
+                attested_at_utc=decisions[decision_id]
+                .attestations[approver_index]
+                .attested_at_utc,
+                canonical_artifact_sha256=(
+                    decisions[decision_id].canonical_artifact.sha256
+                ),
+                decision_authority_sha256=(
+                    decisions[decision_id].decision_authority_sha256
+                ),
+            )
+            for decision_id in expected_decision_ids
+        ]
+        expected_bytes = ("\n".join(expected_lines) + "\n").encode("ascii")
+        if baseline_evidence.file.content != expected_bytes:
+            msg = (
+                "Stage-scoped approval evidence bytes must equal only the exact "
+                f"canonical {list(expected_decision_ids)} TSV lines plus one LF."
+            )
+            raise RevisionApprovalError(msg)
+        if (
+            approver_index == 0
+            and (
+                source_notice.kind,
+                source_notice.locator,
+                source_notice.file.path,
+                source_notice.file.sha256,
+                source_notice.file.content,
+            )
+            != baseline_identity
+        ):
+            msg = (
+                "Stage-scoped source_notice must be the exact first approver "
+                "machine-record evidence tuple."
+            )
+            raise RevisionApprovalError(msg)
+
+
+def _require_consistent_artifact_path_receipts(
+    manifest_receipt: ArtifactReceipt,
+    source_notice: SourceNotice,
+    decisions: Mapping[str, DecisionApproval],
+) -> None:
+    """Require every repeated relative path to resolve to one byte receipt."""
+    labeled_receipts: list[tuple[str, ArtifactReceipt]] = [
+        ("approval manifest", manifest_receipt),
+        ("manifest.source_notice.file", source_notice.file),
+    ]
+    for decision_id, decision in decisions.items():
+        decision_label = f"manifest.decisions[{decision_id}]"
+        labeled_receipts.append(
+            (f"{decision_label}.canonical_artifact", decision.canonical_artifact),
+        )
+        labeled_receipts.extend(
+            (
+                f"{decision_label}.attestations[{index}].evidence.file",
+                attestation.evidence.file,
+            )
+            for index, attestation in enumerate(decision.attestations)
+        )
+
+    receipts_by_path: dict[str, tuple[str, ArtifactReceipt]] = {}
+    for label, receipt in labeled_receipts:
+        previous = receipts_by_path.setdefault(receipt.path, (label, receipt))
+        previous_label, previous_receipt = previous
+        if (
+            receipt.sha256,
+            receipt.size_bytes,
+            receipt.content,
+        ) != (
+            previous_receipt.sha256,
+            previous_receipt.size_bytes,
+            previous_receipt.content,
+        ):
+            msg = (
+                f"Approval artifact path {receipt.path!r} resolved to inconsistent "
+                f"immutable receipts for {previous_label} and {label}."
+            )
+            raise RevisionApprovalError(msg)
+
+
 def _parse_decision(  # noqa: PLR0913
     value: Mapping[str, object],
     label: str,
@@ -591,9 +818,27 @@ def _parse_decision(  # noqa: PLR0913
     *,
     manifest_allowed_stages: tuple[str, ...],
     manifest_stage_bindings: Mapping[str, Mapping[str, str]],
+    expected_decision_ids: tuple[str, ...],
+    approval_schema: str,
 ) -> DecisionApproval:
     _require_exact_keys(value, set(_DECISION_KEYS), label)
-    authority = _parse_decision_authority(value, label, artifact_root)
+    expected_allowed_stages = (
+        manifest_allowed_stages
+        if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA
+        else None
+    )
+    authority = _parse_decision_authority(
+        value,
+        label,
+        artifact_root,
+        expected_allowed_stages=expected_allowed_stages,
+    )
+    if authority.decision_id not in expected_decision_ids:
+        msg = (
+            f"{label}.decision_id is outside the exact stage-scoped decision set "
+            f"{list(expected_decision_ids)}."
+        )
+        raise RevisionApprovalError(msg)
     if authority.manifest_allowed_stages != manifest_allowed_stages:
         msg = (
             f"{label}.manifest_allowed_stages does not bind the exact top-level "
@@ -619,6 +864,12 @@ def _parse_decision(  # noqa: PLR0913
             canonical_artifact_sha256=authority.canonical_artifact.sha256,
             decision_authority_sha256=authority_sha256,
             artifact_root=artifact_root,
+            evidence_line_schema=_evidence_line_schema(approval_schema),
+            exact_evidence_decisions=(
+                expected_decision_ids
+                if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA
+                else None
+            ),
         ),
     )
     return DecisionApproval(
@@ -643,6 +894,8 @@ def _parse_decision(  # noqa: PLR0913
 def _parse_public_decision_authority(
     value: Mapping[str, object],
     artifact_root: Path,
+    *,
+    approval_schema: str,
 ) -> _DecisionAuthority:
     if not isinstance(value, Mapping):
         msg = "decision must be a mapping."
@@ -657,13 +910,44 @@ def _parse_public_decision_authority(
         if "attestations" in decision or "recorded_by" in decision:
             expected = set(_DECISION_KEYS)
         _require_exact_keys(decision, expected, "decision")
-    return _parse_decision_authority(decision, "decision", artifact_root)
+    _evidence_line_schema(approval_schema)
+    expected_allowed_stages: tuple[str, ...] | None = None
+    if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+        raw_manifest_stages = _parse_stage_list(
+            decision.get("manifest_allowed_stages"),
+            "decision.manifest_allowed_stages",
+            expected=None,
+            allow_empty=False,
+        )
+        expected_decision_ids = _decision_ids_for_schema(
+            approval_schema,
+            raw_manifest_stages,
+        )
+        decision_id = _require_exact_text(
+            decision.get("decision_id"),
+            "decision.decision_id",
+        )
+        if decision_id not in expected_decision_ids:
+            msg = (
+                "decision.decision_id is outside the exact stage-scoped decision "
+                f"set {list(expected_decision_ids)}."
+            )
+            raise RevisionApprovalError(msg)
+        expected_allowed_stages = raw_manifest_stages
+    return _parse_decision_authority(
+        decision,
+        "decision",
+        artifact_root,
+        expected_allowed_stages=expected_allowed_stages,
+    )
 
 
 def _parse_decision_authority(
     value: Mapping[str, object],
     label: str,
     artifact_root: Path,
+    *,
+    expected_allowed_stages: tuple[str, ...] | None = None,
 ) -> _DecisionAuthority:
     decision_id = _require_exact_text(value["decision_id"], f"{label}.decision_id")
     if decision_id not in DECISION_ALLOWED_STAGES:
@@ -699,7 +983,11 @@ def _parse_decision_authority(
     allowed_stages = _parse_stage_list(
         value["allowed_stages"],
         f"{label}.allowed_stages",
-        expected=DECISION_ALLOWED_STAGES[decision_id],
+        expected=(
+            DECISION_ALLOWED_STAGES[decision_id]
+            if expected_allowed_stages is None
+            else expected_allowed_stages
+        ),
         allow_empty=False,
     )
     manifest_allowed_stages = _parse_stage_list(
@@ -775,8 +1063,11 @@ def _canonical_evidence_line(
     authority: _DecisionAuthority,
     approver: str,
     attested_at_utc: str,
+    *,
+    evidence_line_schema: str,
 ) -> str:
     return _format_evidence_line(
+        evidence_line_schema=evidence_line_schema,
         approver=approver,
         decision_id=authority.decision_id,
         disposition=authority.disposition,
@@ -788,6 +1079,7 @@ def _canonical_evidence_line(
 
 def _format_evidence_line(  # noqa: PLR0913
     *,
+    evidence_line_schema: str,
     approver: str,
     decision_id: str,
     disposition: str,
@@ -796,7 +1088,7 @@ def _format_evidence_line(  # noqa: PLR0913
     decision_authority_sha256: str,
 ) -> str:
     line = (
-        f"{EVIDENCE_LINE_SCHEMA}\t{approver}\t{decision_id}\t{disposition}\t"
+        f"{evidence_line_schema}\t{approver}\t{decision_id}\t{disposition}\t"
         f"{attested_at_utc}\t{canonical_artifact_sha256}\t"
         f"{decision_authority_sha256}"
     )
@@ -921,6 +1213,8 @@ def _parse_attestations(
             attested_at_utc=parsed_attestation.attested_at_utc,
             canonical_artifact_sha256=context.canonical_artifact_sha256,
             decision_authority_sha256=context.decision_authority_sha256,
+            evidence_line_schema=context.evidence_line_schema,
+            exact_evidence_decisions=context.exact_evidence_decisions,
         )
     return tuple(parsed)
 
@@ -953,9 +1247,16 @@ def _require_canonical_evidence_line(  # noqa: PLR0913
     attested_at_utc: str,
     canonical_artifact_sha256: str,
     decision_authority_sha256: str,
+    evidence_line_schema: str,
+    exact_evidence_decisions: tuple[str, ...] | None,
 ) -> None:
-    markers = _parse_evidence_markers(evidence, label)
+    markers = _parse_evidence_markers(
+        evidence,
+        label,
+        evidence_line_schema=evidence_line_schema,
+    )
     expected_line = _format_evidence_line(
+        evidence_line_schema=evidence_line_schema,
         approver=approver,
         decision_id=decision_id,
         disposition=disposition,
@@ -971,6 +1272,17 @@ def _require_canonical_evidence_line(  # noqa: PLR0913
             f"for {approver}."
         )
         raise RevisionApprovalError(msg)
+    if exact_evidence_decisions is not None:
+        observed_decisions = tuple(
+            marker.decision_id for marker in markers if marker.approver == approver
+        )
+        if observed_decisions != exact_evidence_decisions:
+            msg = (
+                f"{label}.file must contain exactly the stage-scoped evidence "
+                f"decisions {list(exact_evidence_decisions)} for {approver}; "
+                f"observed {list(observed_decisions)}."
+            )
+            raise RevisionApprovalError(msg)
     matching_count = sum(marker.line == expected_line for marker in markers)
     if matching_count != 1:
         msg = (
@@ -983,6 +1295,8 @@ def _require_canonical_evidence_line(  # noqa: PLR0913
 def _parse_evidence_markers(
     evidence: EvidenceRecord,
     label: str,
+    *,
+    evidence_line_schema: str,
 ) -> tuple[_EvidenceMarker, ...]:
     try:
         text = evidence.file.content.decode("utf-8")
@@ -996,9 +1310,14 @@ def _parse_evidence_markers(
     markers: list[_EvidenceMarker] = []
     observed_pairs: set[tuple[str, str]] = set()
     for line_number, line in enumerate(text.split("\n"), start=1):
-        if EVIDENCE_LINE_SCHEMA not in line:
+        if "DIALECT-REVISION-DECISION-" not in line:
             continue
-        marker = _parse_evidence_marker(line, label, line_number)
+        marker = _parse_evidence_marker(
+            line,
+            label,
+            line_number,
+            evidence_line_schema=evidence_line_schema,
+        )
         pair = (marker.approver, marker.decision_id)
         if pair in observed_pairs:
             msg = (
@@ -1021,13 +1340,21 @@ def _parse_evidence_marker(
     line: str,
     label: str,
     line_number: int,
+    *,
+    evidence_line_schema: str,
 ) -> _EvidenceMarker:
-    marker_prefix = f"{EVIDENCE_LINE_SCHEMA}\t"
+    marker_prefix = f"{evidence_line_schema}\t"
     if not line.startswith(marker_prefix):
-        msg = (
-            f"{label}.file line {line_number} embeds the evidence schema instead "
-            "of using an exact line-start marker."
-        )
+        if line.startswith("DIALECT-REVISION-DECISION-"):
+            msg = (
+                f"{label}.file line {line_number} must use evidence schema "
+                f"{evidence_line_schema!r}."
+            )
+        else:
+            msg = (
+                f"{label}.file line {line_number} embeds the evidence schema instead "
+                "of using an exact line-start marker."
+            )
         raise RevisionApprovalError(msg)
     try:
         line.encode("ascii")
@@ -1035,7 +1362,7 @@ def _parse_evidence_marker(
         msg = f"{label}.file line {line_number} marker must contain ASCII only."
         raise RevisionApprovalError(msg) from error
     fields = line.split("\t")
-    if len(fields) != _EVIDENCE_FIELD_COUNT or fields[0] != EVIDENCE_LINE_SCHEMA:
+    if len(fields) != _EVIDENCE_FIELD_COUNT or fields[0] != evidence_line_schema:
         msg = (
             f"{label}.file line {line_number} must contain exactly seven canonical "
             "TSV fields."
@@ -1091,6 +1418,16 @@ def _require_separate_approval_evidence(
     second_locator = (second.evidence.kind, second.evidence.locator)
     if first_locator == second_locator:
         msg = f"{decision_label} coauthor approvals require distinct evidence locators."
+        raise RevisionApprovalError(msg)
+    shared_path = first.evidence.file.path == second.evidence.file.path
+    if shared_path and (
+        first.evidence.kind != "signed-document"
+        or second.evidence.kind != "signed-document"
+    ):
+        msg = (
+            f"{decision_label} coauthor-authored email or machine-record approvals "
+            "must use separate evidence files with distinct relative paths."
+        )
         raise RevisionApprovalError(msg)
     shared_file = first.evidence.file.sha256 == second.evidence.file.sha256
     if shared_file and (

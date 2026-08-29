@@ -1804,8 +1804,11 @@ def test_public_bundle_api_is_used_for_all_32_no_derived_paths(
         provider,
         "validate_revision_approval",
         lambda *_args: SimpleNamespace(
+            schema=provider.STAGE_SCOPED_APPROVAL_SCHEMA,
             allowed_stages=(provider.MATERIALIZE_FINAL_INPUTS_STAGE,),
             stage_bindings={provider.MATERIALIZE_FINAL_INPUTS_STAGE: {}},
+            decisions={"D1": object(), "D2": object()},
+            decision_digests={"D1": "1" * 64, "D2": "2" * 64},
         ),
     )
     monkeypatch.setattr(provider, "materialized_cohort_binding", bind)
@@ -1835,6 +1838,7 @@ def test_provider_context_rejects_coauthorized_extra_stage(
         provider,
         "validate_revision_approval",
         lambda *_args: SimpleNamespace(
+            schema=provider.STAGE_SCOPED_APPROVAL_SCHEMA,
             allowed_stages=(
                 provider.MATERIALIZE_FINAL_INPUTS_STAGE,
                 "fit-sealed-tcga-k500",
@@ -1843,6 +1847,8 @@ def test_provider_context_rejects_coauthorized_extra_stage(
                 provider.MATERIALIZE_FINAL_INPUTS_STAGE: {},
                 "fit-sealed-tcga-k500": {},
             },
+            decisions={"D1": object(), "D2": object()},
+            decision_digests={"D1": "1" * 64, "D2": "2" * 64},
         ),
     )
     monkeypatch.setattr(
@@ -1853,7 +1859,40 @@ def test_provider_context_rejects_coauthorized_extra_stage(
         ),
     )
 
-    with pytest.raises(provider.ProviderInputError, match="authorizes only"):
+    with pytest.raises(provider.ProviderInputError, match="stage-scoped v5"):
+        provider._canonical_bundle_state(
+            paths,
+            hashes,
+            require_current_execution_environment=True,
+        )
+
+
+def test_provider_context_rejects_historical_v4_overattestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    hashes = provider.IndependentHashes("a" * 64, "b" * 64, "c" * 64, "d" * 64)
+    monkeypatch.setattr(
+        provider,
+        "validate_revision_approval",
+        lambda *_args: SimpleNamespace(
+            schema="dialect-revision-coauthor-approval-v4",
+            allowed_stages=(provider.MATERIALIZE_FINAL_INPUTS_STAGE,),
+            stage_bindings={provider.MATERIALIZE_FINAL_INPUTS_STAGE: {}},
+            decisions={f"D{index}": object() for index in range(1, 11)},
+            decision_digests={f"D{index}": "1" * 64 for index in range(1, 11)},
+        ),
+    )
+    monkeypatch.setattr(
+        provider,
+        "validate_materialized_input_bundle",
+        lambda *_args, **_kwargs: pytest.fail(
+            "canonical bundle must not be opened after v4 overattestation",
+        ),
+    )
+
+    with pytest.raises(provider.ProviderInputError, match="stage-scoped v5"):
         provider._canonical_bundle_state(
             paths,
             hashes,

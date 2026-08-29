@@ -31,6 +31,8 @@ from dialect.data.revision_approval import (
     SOURCE_NOTICE_KINDS,
     STAGE_BINDING_KEYS,
     STAGE_MINIMUM_DECISIONS,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
+    STAGE_SCOPED_EVIDENCE_LINE_SCHEMA,
     RevisionApprovalError,
     canonical_decision_evidence_line,
     compute_decision_authority_sha256,
@@ -68,8 +70,7 @@ def _stage_bindings(decision_sha256: str) -> dict[str, dict[str, str]]:
     bindings = {}
     for stage in REVISION_STAGES:
         bindings[stage] = {
-            key: _sha256(f"{stage}:{key}".encode())
-            for key in STAGE_BINDING_KEYS[stage]
+            key: _sha256(f"{stage}:{key}".encode()) for key in STAGE_BINDING_KEYS[stage]
         }
     bindings[MATERIALIZE_FINAL_INPUTS_STAGE] = {
         "d1_canonical_artifact_sha256": decision_sha256,
@@ -181,6 +182,83 @@ def _write_evidence_and_attestations(
         ]
 
 
+def _stage_scoped_payload(
+    tmp_path: Path,
+    *,
+    stage: str = MATERIALIZE_FINAL_INPUTS_STAGE,
+) -> dict[str, object]:
+    """Return a v5 manifest with only one stage's canonical minimum decisions."""
+    payload = _payload(tmp_path)
+    decision_ids = STAGE_MINIMUM_DECISIONS[stage]
+    payload["schema"] = STAGE_SCOPED_APPROVAL_SCHEMA
+    payload["allowed_stages"] = [stage]
+    payload["stage_bindings"] = {stage: payload["stage_bindings"][stage]}
+    decisions = [
+        next(
+            decision
+            for decision in payload["decisions"]
+            if decision["decision_id"] == decision_id
+        )
+        for decision_id in decision_ids
+    ]
+    for decision in decisions:
+        decision["allowed_stages"] = [stage]
+        decision["manifest_allowed_stages"] = [stage]
+        decision["manifest_stage_bindings"] = copy.deepcopy(
+            payload["stage_bindings"],
+        )
+    evidence_paths = {
+        APPROVERS[0]: "benjamin-evidence-v5.txt",
+        APPROVERS[1]: "uthsav-evidence-v5.txt",
+    }
+    evidence_receipts: dict[str, tuple[str, str]] = {}
+    for approver in APPROVERS:
+        lines = [
+            canonical_decision_evidence_line(
+                decision,
+                tmp_path,
+                approver,
+                _attested_at(approver),
+                approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+            )
+            for decision in decisions
+        ]
+        content = ("\n".join(lines) + "\n").encode("ascii")
+        path = evidence_paths[approver]
+        (tmp_path / path).write_bytes(content)
+        evidence_receipts[approver] = (path, _sha256(content))
+    for decision in decisions:
+        artifact_sha256 = decision["canonical_artifact"]["sha256"]
+        authority_sha256 = compute_decision_authority_sha256(
+            decision,
+            tmp_path,
+            approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+        )
+        decision["attestations"] = [
+            {
+                "approver": approver,
+                "attested_at_utc": _attested_at(approver),
+                "attested_disposition": decision["disposition"],
+                "canonical_artifact_sha256": artifact_sha256,
+                "decision_authority_sha256": authority_sha256,
+                "evidence": {
+                    "file": {
+                        "path": evidence_receipts[approver][0],
+                        "sha256": evidence_receipts[approver][1],
+                    },
+                    "kind": "coauthor-authored-machine-record",
+                    "locator": f"Message-ID <{approver}-v5@example.org>",
+                },
+            }
+            for approver in APPROVERS
+        ]
+    payload["decisions"] = decisions
+    payload["source_notice"] = copy.deepcopy(
+        decisions[0]["attestations"][0]["evidence"],
+    )
+    return payload
+
+
 def _replace_evidence_bytes(
     tmp_path: Path,
     payload: dict[str, object],
@@ -199,6 +277,9 @@ def _replace_evidence_bytes(
         for item in decision["attestations"]:
             if item["approver"] == approver:
                 item["evidence"]["file"]["sha256"] = receipt_sha256
+    source_file = payload["source_notice"]["file"]
+    if source_file["path"] == relative_path:
+        source_file["sha256"] = receipt_sha256
 
 
 def _set_manifest_allowed_stages(
@@ -340,6 +421,194 @@ def test_valid_manifest_authorizes_each_frozen_stage(tmp_path, stage):
     assert set(STAGE_MINIMUM_DECISIONS[stage]).issubset(approval.decisions)
 
 
+def test_stage_scoped_manifest_authorizes_only_exact_d1_d2(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+
+    approval = _validate(
+        tmp_path,
+        payload,
+        stage=MATERIALIZE_FINAL_INPUTS_STAGE,
+    )
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA
+    assert approval.allowed_stages == (MATERIALIZE_FINAL_INPUTS_STAGE,)
+    assert tuple(approval.decisions) == ("D1", "D2")
+    assert tuple(approval.decision_digests) == ("D1", "D2")
+    for decision in approval.decisions.values():
+        assert decision.allowed_stages == (MATERIALIZE_FINAL_INPUTS_STAGE,)
+        assert STAGE_SCOPED_EVIDENCE_LINE_SCHEMA.encode() in (
+            decision.attestations[0].evidence.file.content
+        )
+
+
+@pytest.mark.parametrize("stage", REVISION_STAGES)
+def test_stage_scoped_schema_uses_exact_minimum_for_every_singleton_stage(
+    tmp_path,
+    stage,
+):
+    payload = _stage_scoped_payload(tmp_path, stage=stage)
+
+    approval = _validate(tmp_path, payload, stage=stage)
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA
+    assert approval.allowed_stages == (stage,)
+    assert tuple(approval.decisions) == STAGE_MINIMUM_DECISIONS[stage]
+    assert tuple(approval.decision_digests) == STAGE_MINIMUM_DECISIONS[stage]
+
+
+@pytest.mark.parametrize("attack", ["missing", "extra", "reordered"])
+def test_stage_scoped_manifest_rejects_decision_set_drift(tmp_path, attack):
+    payload = _stage_scoped_payload(tmp_path)
+    if attack == "missing":
+        payload["decisions"].pop()
+    elif attack == "extra":
+        extra = copy.deepcopy(payload["decisions"][-1])
+        extra["decision_id"] = "D3"
+        payload["decisions"].append(extra)
+    else:
+        payload["decisions"].reverse()
+
+    with pytest.raises(
+        RevisionApprovalError,
+        match=r"must contain exactly|ordered exactly",
+    ):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_evidence_rejects_d3_injection(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    path = tmp_path / "benjamin-evidence-v5.txt"
+    content = path.read_bytes()
+    injected = (
+        f"{STAGE_SCOPED_EVIDENCE_LINE_SCHEMA}\t{APPROVERS[0]}\tD3\tgo\t"
+        f"{_attested_at(APPROVERS[0])}\t{'0' * 64}\t{'1' * 64}\n"
+    ).encode("ascii")
+    _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], content + injected)
+
+    with pytest.raises(RevisionApprovalError, match="exactly the stage-scoped"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_evidence_rejects_v4_marker_injection(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    path = tmp_path / "benjamin-evidence-v5.txt"
+    content = path.read_bytes()
+    injected = (
+        f"{EVIDENCE_LINE_SCHEMA}\t{APPROVERS[0]}\tD3\tgo\t"
+        f"{_attested_at(APPROVERS[0])}\t{'0' * 64}\t{'1' * 64}\n"
+    ).encode("ascii")
+    _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], content + injected)
+
+    with pytest.raises(RevisionApprovalError, match="must use evidence schema"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_manifest_rejects_split_evidence_files(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    original = tmp_path / "benjamin-evidence-v5.txt"
+    split = tmp_path / "benjamin-evidence-v5-split.txt"
+    content = original.read_bytes()
+    split.write_bytes(content)
+    d2_attestation = payload["decisions"][1]["attestations"][0]
+    d2_attestation["evidence"]["file"] = {
+        "path": split.name,
+        "sha256": _sha256(content),
+    }
+
+    with pytest.raises(RevisionApprovalError, match="one identical complete evidence"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_manifest_rejects_cross_marker_timestamps(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    original = _attested_at(APPROVERS[0])
+    changed = "2026-08-28T12:01:00Z"
+    path = tmp_path / "benjamin-evidence-v5.txt"
+    content = path.read_bytes()
+    d2_line = content.splitlines()[1]
+    changed_line = d2_line.replace(original.encode(), changed.encode())
+    _replace_evidence_bytes(
+        tmp_path,
+        payload,
+        APPROVERS[0],
+        content.replace(d2_line, changed_line),
+    )
+    payload["decisions"][1]["attestations"][0]["attested_at_utc"] = changed
+
+    with pytest.raises(
+        RevisionApprovalError,
+        match="one identical attestation timestamp",
+    ):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        b"I also adopt D3-D10.\n",
+        b"\nI also adopt D3-D10.\n",
+        b"\n",
+        b"From: Benjamin J. Raphael\n",
+    ],
+)
+def test_stage_scoped_manifest_rejects_any_nonmarker_evidence_bytes(
+    tmp_path,
+    prose,
+):
+    payload = _stage_scoped_payload(tmp_path)
+    path = tmp_path / "benjamin-evidence-v5.txt"
+    content = path.read_bytes()
+    attacked = prose + content if prose.startswith(b"From:") else content + prose
+    _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], attacked)
+
+    with pytest.raises(RevisionApprovalError, match="evidence bytes must equal only"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_manifest_rejects_non_machine_record_evidence_kind(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    for decision in payload["decisions"]:
+        decision["attestations"][0]["evidence"]["kind"] = "signed-document"
+
+    with pytest.raises(RevisionApprovalError, match="machine-record bytes"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_manifest_rejects_separate_source_notice(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    content = (tmp_path / "benjamin-evidence-v5.txt").read_bytes()
+    separate = tmp_path / "separate-source-notice.txt"
+    separate.write_bytes(content)
+    payload["source_notice"]["file"] = {
+        "path": separate.name,
+        "sha256": _sha256(content),
+    }
+
+    with pytest.raises(RevisionApprovalError, match="exact first approver"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_manifest_rejects_multiple_allowed_stages(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    payload["allowed_stages"].append(FIT_SEALED_TCGA_K500_STAGE)
+
+    with pytest.raises(RevisionApprovalError, match="requires exactly one"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_stage_scoped_materialization_cannot_authorize_fit(tmp_path):
+    payload = _stage_scoped_payload(tmp_path)
+    path, digest = _write_manifest(tmp_path, payload)
+
+    with pytest.raises(RevisionApprovalError, match="does not authorize stage"):
+        validate_revision_approval(
+            path,
+            digest,
+            FIT_SEALED_TCGA_K500_STAGE,
+            now=NOW,
+        )
+
+
 def test_returned_authority_is_deeply_immutable(tmp_path):
     approval = _validate(tmp_path, _payload(tmp_path))
 
@@ -440,9 +709,7 @@ def test_recorded_by_is_manifest_pinned_but_outside_coauthor_authority(tmp_path)
 
 def test_attestation_authority_digest_substitution_is_rejected(tmp_path):
     payload = _payload(tmp_path)
-    payload["decisions"][0]["attestations"][0][
-        "decision_authority_sha256"
-    ] = "0" * 64
+    payload["decisions"][0]["attestations"][0]["decision_authority_sha256"] = "0" * 64
 
     with pytest.raises(RevisionApprovalError, match="does not bind every operational"):
         _validate(tmp_path, payload)
@@ -495,9 +762,13 @@ def test_duplicate_evidence_marker_is_rejected(tmp_path):
         APPROVERS[0],
         _attested_at(APPROVERS[0]),
     ).encode()
-    content = (tmp_path / "benjamin-evidence.txt").read_bytes().replace(
-        line,
-        line + b"\n" + line,
+    content = (
+        (tmp_path / "benjamin-evidence.txt")
+        .read_bytes()
+        .replace(
+            line,
+            line + b"\n" + line,
+        )
     )
     _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], content)
 
@@ -514,9 +785,13 @@ def test_conflicting_evidence_marker_for_same_decision_is_rejected(tmp_path):
         _attested_at(APPROVERS[0]),
     ).encode()
     conflicting = line[:-1] + (b"0" if line[-1:] != b"0" else b"1")
-    content = (tmp_path / "benjamin-evidence.txt").read_bytes().replace(
-        line,
-        line + b"\n" + conflicting,
+    content = (
+        (tmp_path / "benjamin-evidence.txt")
+        .read_bytes()
+        .replace(
+            line,
+            line + b"\n" + conflicting,
+        )
     )
     _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], content)
 
@@ -532,9 +807,13 @@ def test_embedded_evidence_marker_substring_is_rejected(tmp_path):
         APPROVERS[0],
         _attested_at(APPROVERS[0]),
     ).encode()
-    content = (tmp_path / "benjamin-evidence.txt").read_bytes().replace(
-        line,
-        b"> quoted: " + line,
+    content = (
+        (tmp_path / "benjamin-evidence.txt")
+        .read_bytes()
+        .replace(
+            line,
+            b"> quoted: " + line,
+        )
     )
     _replace_evidence_bytes(tmp_path, payload, APPROVERS[0], content)
 
@@ -1004,6 +1283,85 @@ def test_coauthor_approvals_require_distinct_evidence_locators(tmp_path):
         _validate(tmp_path, payload)
 
 
+def test_stage_scoped_coauthor_records_reject_one_path_with_two_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _stage_scoped_payload(tmp_path)
+    shared_path = "benjamin-evidence-v5.txt"
+    second_content = (tmp_path / "uthsav-evidence-v5.txt").read_bytes()
+    for decision in payload["decisions"]:
+        decision["attestations"][1]["evidence"]["file"]["path"] = shared_path
+
+    original = approval_module._read_regular_file  # noqa: SLF001
+
+    def swap_snapshot(
+        path: Path,
+        label: str,
+        *,
+        root: Path | None = None,
+    ) -> bytes:
+        if path.name == shared_path and ".attestations[1].evidence.file" in label:
+            return second_content
+        return original(path, label, root=root)
+
+    monkeypatch.setattr(approval_module, "_read_regular_file", swap_snapshot)
+
+    with pytest.raises(RevisionApprovalError, match="distinct relative paths"):
+        _validate(tmp_path, payload, stage=MATERIALIZE_FINAL_INPUTS_STAGE)
+
+
+def test_validator_rejects_inconsistent_receipts_for_one_relative_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload(tmp_path)
+    source_content = (tmp_path / "source-notice.txt").read_bytes()
+    shared_path = "benjamin-evidence.txt"
+    payload["source_notice"]["file"]["path"] = shared_path
+    original = approval_module._read_regular_file  # noqa: SLF001
+
+    def swap_snapshot(
+        path: Path,
+        label: str,
+        *,
+        root: Path | None = None,
+    ) -> bytes:
+        if path.name == shared_path and label == "manifest.source_notice.file":
+            return source_content
+        return original(path, label, root=root)
+
+    monkeypatch.setattr(approval_module, "_read_regular_file", swap_snapshot)
+
+    with pytest.raises(RevisionApprovalError, match="inconsistent immutable receipts"):
+        _validate(tmp_path, payload)
+
+
+def test_validator_rejects_manifest_path_reused_for_another_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload(tmp_path)
+    source_content = (tmp_path / "source-notice.txt").read_bytes()
+    payload["source_notice"]["file"]["path"] = "approval.json"
+    original = approval_module._read_regular_file  # noqa: SLF001
+
+    def swap_snapshot(
+        path: Path,
+        label: str,
+        *,
+        root: Path | None = None,
+    ) -> bytes:
+        if path.name == "approval.json" and label == "manifest.source_notice.file":
+            return source_content
+        return original(path, label, root=root)
+
+    monkeypatch.setattr(approval_module, "_read_regular_file", swap_snapshot)
+
+    with pytest.raises(RevisionApprovalError, match="inconsistent immutable receipts"):
+        _validate(tmp_path, payload)
+
+
 def test_shared_signed_document_supports_distinct_signature_locators(tmp_path):
     payload = _payload(tmp_path)
     attestations = payload["decisions"][0]["attestations"]
@@ -1085,9 +1443,13 @@ def test_evidence_marker_rejects_noncanonical_timestamp(tmp_path) -> None:
         _attested_at(approver).encode(),
         b"2026-08-28T12:00:00.0Z",
     )
-    content = (tmp_path / "benjamin-evidence.txt").read_bytes().replace(
-        line,
-        malformed,
+    content = (
+        (tmp_path / "benjamin-evidence.txt")
+        .read_bytes()
+        .replace(
+            line,
+            malformed,
+        )
     )
     _replace_evidence_bytes(tmp_path, payload, approver, content)
 

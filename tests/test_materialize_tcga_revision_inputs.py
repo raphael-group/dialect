@@ -816,6 +816,7 @@ def synthetic_inputs(  # noqa: PLR0915
     approval_content = _canonical_bytes({"synthetic": "approval"})
     approval_path.write_bytes(approval_content)
     approval = SimpleNamespace(
+        schema=materializer.STAGE_SCOPED_APPROVAL_SCHEMA,
         manifest_sha256=_sha256_bytes(approval_content),
         allowed_stages=(materializer.MATERIALIZE_FINAL_INPUTS_STAGE,),
         stage_bindings={materializer.MATERIALIZE_FINAL_INPUTS_STAGE: {}},
@@ -876,6 +877,7 @@ def test_secure_approval_rejects_coauthorized_extra_stage(
     path.write_bytes(b'{"approval":true}\n')
     digest = _sha256(path)
     coauthorized = SimpleNamespace(
+        schema=materializer.STAGE_SCOPED_APPROVAL_SCHEMA,
         manifest_sha256=digest,
         allowed_stages=(
             materializer.MATERIALIZE_FINAL_INPUTS_STAGE,
@@ -885,6 +887,8 @@ def test_secure_approval_rejects_coauthorized_extra_stage(
             materializer.MATERIALIZE_FINAL_INPUTS_STAGE: {},
             "fit-sealed-tcga-k500": {},
         },
+        decisions={"D1": object(), "D2": object()},
+        decision_digests={"D1": "1" * 64, "D2": "2" * 64},
     )
     monkeypatch.setattr(
         materializer,
@@ -892,7 +896,32 @@ def test_secure_approval_rejects_coauthorized_extra_stage(
         lambda *_args: coauthorized,
     )
 
-    with pytest.raises(materializer.RevisionInputError, match="authorizes only"):
+    with pytest.raises(materializer.RevisionInputError, match="stage-scoped v5"):
+        materializer._secure_approval(path, digest)  # noqa: SLF001
+
+
+def test_secure_approval_rejects_historical_v4_overattestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "approval.json"
+    path.write_bytes(b'{"approval":true}\n')
+    digest = _sha256(path)
+    historical = SimpleNamespace(
+        schema=materializer.approval_data.APPROVAL_SCHEMA,
+        manifest_sha256=digest,
+        allowed_stages=(materializer.MATERIALIZE_FINAL_INPUTS_STAGE,),
+        stage_bindings={materializer.MATERIALIZE_FINAL_INPUTS_STAGE: {}},
+        decisions={f"D{index}": object() for index in range(1, 11)},
+        decision_digests={f"D{index}": "1" * 64 for index in range(1, 11)},
+    )
+    monkeypatch.setattr(
+        materializer,
+        "validate_revision_approval",
+        lambda *_args: historical,
+    )
+
+    with pytest.raises(materializer.RevisionInputError, match="stage-scoped v5"):
         materializer._secure_approval(path, digest)  # noqa: SLF001
 
 

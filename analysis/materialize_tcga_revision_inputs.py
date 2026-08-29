@@ -52,6 +52,7 @@ import dialect.data.tcga as tcga_data
 import dialect.data.variants as variant_data
 from dialect.data.revision_approval import (
     MATERIALIZE_FINAL_INPUTS_STAGE,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
     RevisionApproval,
     validate_revision_approval,
 )
@@ -2418,12 +2419,16 @@ def _secure_approval(
     if before != after or approval.manifest_sha256 != expected_approval_sha256:
         msg = "Approval manifest changed during validation."
         raise RevisionInputError(msg)
-    if approval.allowed_stages != (MATERIALIZE_FINAL_INPUTS_STAGE,) or set(
-        approval.stage_bindings,
-    ) != {MATERIALIZE_FINAL_INPUTS_STAGE}:
+    if (
+        approval.schema != STAGE_SCOPED_APPROVAL_SCHEMA
+        or approval.allowed_stages != (MATERIALIZE_FINAL_INPUTS_STAGE,)
+        or set(approval.stage_bindings) != {MATERIALIZE_FINAL_INPUTS_STAGE}
+        or tuple(approval.decisions) != ("D1", "D2")
+        or tuple(approval.decision_digests) != ("D1", "D2")
+    ):
         msg = (
-            "Canonical input materialization requires an approval whose exact "
-            "stage envelope authorizes only materialize-final-inputs."
+            "Canonical input materialization requires an exact stage-scoped v5 "
+            "D1/D2 authority for only materialize-final-inputs."
         )
         raise RevisionInputError(msg)
     return approval
