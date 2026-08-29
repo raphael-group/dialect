@@ -13,11 +13,16 @@ from dialect.models.assembly import (
     initialize_interaction_objects,
     save_cbase_stats_to_gene_objects,
 )
-from dialect.models.interaction import LRT_CONTRACT, PAIR_FIT_CONTRACT
-
-SINGLE_GENE_COUNT_CONTRACT: Final = (
-    "cohort-total-observed-and-passenger-expected-v1"
+from dialect.models.gene import MARGINAL_FIT_CONTRACT
+from dialect.models.interaction import (
+    LRT_CONTRACT,
+    PAIR_EFFECT_IDENTIFIABILITY_CONTRACT,
+    PAIR_EFFECT_IDENTIFIED_STATUS,
+    PAIR_FIT_CONTRACT,
+    PAIR_IDENTIFIABILITY_RTOL,
 )
+
+SINGLE_GENE_COUNT_CONTRACT: Final = "cohort-total-observed-and-passenger-expected-v1"
 
 _SINGLE_GENE_RESULT_PREFIX_COLUMNS: Final[tuple[str, ...]] = (
     "Gene Name",
@@ -33,8 +38,12 @@ SINGLE_GENE_CBASE_ANNOTATION_COLUMNS: Final[tuple[str, str]] = (
     "CBaSE Pos. Sel. P-Val",
 )
 _SINGLE_GENE_RESULT_SUFFIX_COLUMNS: Final[tuple[str, ...]] = (
+    "MLE Algorithm",
     "MLE Converged",
     "MLE Iterations",
+    "MLE Bracket Width",
+    "MLE Fixed-Point Residual",
+    "MLE KKT Residual",
     "MLE Log Likelihood",
     "Single-Gene LRT Status",
     "LRT Contract",
@@ -61,8 +70,12 @@ SINGLE_GENE_RESULT_COLUMN_SEMANTICS: Final = MappingProxyType(
         ),
         "CBaSE Pos. Sel. Phi": "optional CBaSE positive-selection phi annotation",
         "CBaSE Pos. Sel. P-Val": "optional CBaSE positive-selection p-value",
+        "MLE Algorithm": "machine-readable constrained marginal-fit contract",
         "MLE Converged": "whether the constrained marginal MLE converged",
-        "MLE Iterations": "number of constrained marginal optimizer evaluations",
+        "MLE Iterations": "number of signed-score bisection iterations",
+        "MLE Bracket Width": "final signed-score bracket width",
+        "MLE Fixed-Point Residual": "stable mixture fixed-point residual",
+        "MLE KKT Residual": "total-log-likelihood score KKT residual",
         "MLE Log Likelihood": "maximized single-gene log likelihood",
         "Single-Gene LRT Status": "finite or boundary-null LRT status",
         "LRT Contract": "machine-readable likelihood-ratio-test contract",
@@ -87,6 +100,7 @@ def create_single_gene_results(
     """
     results = []
     for gene in genes:
+        gene.validate_mle_fit()
         log_odds_ratio = gene.compute_log_odds_ratio(gene.pi)
         likelihood_ratio = gene.compute_likelihood_ratio(gene.pi)
         observed_mutations = sum(gene.counts)
@@ -100,13 +114,20 @@ def create_single_gene_results(
             "Observed Mutations": observed_mutations,
             "Expected Mutations": expected_mutations,
             "Obs. - Exp. Mutations": obs_minus_exp_mutations,
+            "MLE Algorithm": gene.mle_algorithm,
             "MLE Converged": gene.mle_converged,
             "MLE Iterations": gene.mle_iterations,
+            "MLE Bracket Width": gene.mle_bracket_width,
+            "MLE Fixed-Point Residual": gene.mle_fixed_point_residual,
+            "MLE KKT Residual": gene.mle_kkt_residual,
             "MLE Log Likelihood": gene.mle_log_likelihood,
             "Single-Gene LRT Status": gene.likelihood_ratio_status,
             "LRT Contract": LRT_CONTRACT,
             "Single-Gene Count Contract": SINGLE_GENE_COUNT_CONTRACT,
         }
+        if row["MLE Algorithm"] != MARGINAL_FIT_CONTRACT:
+            msg = f"Gene {gene.name} has a drifting serialized marginal-fit contract."
+            raise ValueError(msg)
         if cbase_phi_vals_present:
             row.update(
                 {
@@ -135,11 +156,17 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
             interaction.tau_10,
             interaction.tau_11,
         )
-        log_odds_ratio = interaction.compute_log_odds_ratio(taus)
-        wald_statistic = interaction.compute_wald_statistic(taus)
         likelihood_ratio = interaction.likelihood_ratio
         if likelihood_ratio is None:
             likelihood_ratio = interaction.compute_likelihood_ratio(taus)
+        effect_identifiability = interaction.effect_identifiability_status()
+        effect_identifiable = effect_identifiability == PAIR_EFFECT_IDENTIFIED_STATUS
+        log_odds_ratio = (
+            interaction.compute_log_odds_ratio(taus) if effect_identifiable else None
+        )
+        wald_statistic = (
+            interaction.compute_wald_statistic(taus) if effect_identifiable else None
+        )
         rho = interaction.compute_rho_for_direction(taus, likelihood_ratio)
         cm = interaction.compute_contingency_table()
 
@@ -155,8 +182,23 @@ def create_pairwise_results(interactions: list, output_path: str) -> None:
                 "_10_": cm[1, 0],
                 "_01_": cm[0, 1],
                 "_11_": cm[1, 1],
-                "Tau_1X": interaction.tau_10 + interaction.tau_11,
-                "Tau_X1": interaction.tau_01 + interaction.tau_11,
+                "Tau_1X": (
+                    interaction.tau_10 + interaction.tau_11
+                    if effect_identifiable
+                    else None
+                ),
+                "Tau_X1": (
+                    interaction.tau_01 + interaction.tau_11
+                    if effect_identifiable
+                    else None
+                ),
+                "Effect Identifiability": effect_identifiability,
+                "Effect Identifiability Contract": (
+                    PAIR_EFFECT_IDENTIFIABILITY_CONTRACT
+                ),
+                "Effect Identifiability Relative Tolerance": (
+                    PAIR_IDENTIFIABILITY_RTOL
+                ),
                 "Rho": rho,
                 "Log Odds Ratio": log_odds_ratio,
                 "Likelihood Ratio": likelihood_ratio,

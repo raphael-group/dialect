@@ -11,6 +11,16 @@ from dialect import (
     identify_interactions,
 )
 from dialect.bmr.base import BMRResult
+from dialect.models.gene import (
+    MARGINAL_FIT_BRACKET_WIDTH_TOL,
+    MARGINAL_FIT_CONTRACT,
+    MARGINAL_FIT_FIXED_POINT_TOL,
+    MARGINAL_FIT_KKT_TOL,
+)
+from dialect.models.interaction import (
+    PAIR_EFFECT_IDENTIFIABILITY_CONTRACT,
+    PAIR_IDENTIFIABILITY_RTOL,
+)
 
 
 def _write_cohort(tmp_path):
@@ -48,14 +58,31 @@ def test_identify_interactions_returns_frames(tmp_path):
     assert result.single_gene["Expected Mutations"].tolist() == pytest.approx(
         [3.36] * 3,
     )
-    assert result.single_gene["Obs. - Exp. Mutations"].tolist() == pytest.approx([
-        2.64,
-        -0.36,
-        0.64,
-    ])
+    assert result.single_gene["Obs. - Exp. Mutations"].tolist() == pytest.approx(
+        [
+            2.64,
+            -0.36,
+            0.64,
+        ],
+    )
     assert "CBaSE Pos. Sel. Phi" not in result.single_gene
     assert "CBaSE Pos. Sel. P-Val" not in result.single_gene
+    assert set(result.single_gene["MLE Algorithm"]) == {MARGINAL_FIT_CONTRACT}
+    assert result.single_gene["MLE Converged"].all()
+    assert (
+        result.single_gene["MLE Bracket Width"] <= MARGINAL_FIT_BRACKET_WIDTH_TOL
+    ).all()
+    assert (
+        result.single_gene["MLE Fixed-Point Residual"] <= MARGINAL_FIT_FIXED_POINT_TOL
+    ).all()
+    assert (result.single_gene["MLE KKT Residual"] <= MARGINAL_FIT_KKT_TOL).all()
     assert {"Gene A", "Gene B", "Rho"} <= set(result.pairwise.columns)
+    assert set(result.pairwise["Effect Identifiability Contract"]) == {
+        PAIR_EFFECT_IDENTIFIABILITY_CONTRACT,
+    }
+    assert set(result.pairwise["Effect Identifiability Relative Tolerance"]) == {
+        PAIR_IDENTIFIABILITY_RTOL,
+    }
     assert len(result.pairwise) == 3  # 3 choose 2 pairs
     assert (tmp_path / "single_gene_results.csv").exists()
     assert (tmp_path / "pairwise_interaction_results.csv").exists()

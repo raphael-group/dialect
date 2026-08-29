@@ -31,8 +31,8 @@ MACHINE_DECISION_SCHEMA: Final = "dialect-revision-machine-decision-v1"
 """Canonical schema shared with the signed D1/D2 decision envelopes."""
 
 D3_CONTRACT: Final = "bmr-provider-hierarchy-v1"
-D4_CONTRACT: Final = "profile-lrt-pvalue-policy-v1"
-D5_CONTRACT: Final = "conjunction-multiplicity-policy-v1"
+D4_CONTRACT: Final = "profile-lrt-pvalue-policy-v3"
+D5_CONTRACT: Final = "conjunction-multiplicity-family-policy-v3"
 D6_CONTRACT: Final = "calibration-scope-policy-v1"
 
 FIT_POLICY_DECISION_IDS: Final[tuple[str, ...]] = ("D3", "D4", "D5", "D6")
@@ -46,6 +46,8 @@ FIT_POLICY_CONTRACTS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 BMR_PROVIDERS: Final[frozenset[str]] = frozenset({"cbase", "dig", "mutsig"})
+PRIMARY_BMR_PROVIDER: Final = "cbase"
+SENSITIVITY_BMR_PROVIDERS: Final[tuple[str, str]] = ("dig", "mutsig")
 CONJUNCTION_SECONDARY: Final = "secondary"
 CONJUNCTION_OMITTED: Final = "omitted"
 
@@ -56,12 +58,10 @@ LRT_REFERENCE_TAIL: Final = "upper-survival"
 LRT_STATISTIC_TRANSFORM: Final = (
     "max(0,2*(alternative_log_likelihood-null_log_likelihood))"
 )
-LRT_BOUNDARY_HANDLING: Final[frozenset[str]] = frozenset(
-    {"assign-p-one-with-explicit-boundary-status", "fail-cohort"},
+UNDEFINED_RHO_DEGENERATE_NULL_HANDLING: Final = (
+    "assign-p-one-with-explicit-boundary-status"
 )
-LRT_FAILURE_SEMANTICS: Final[frozenset[str]] = frozenset(
-    {"assign-p-one-with-explicit-failure-status", "fail-cohort"},
-)
+TASK_ABORT_NO_PUBLISHED_ROW: Final = "abort-task-no-published-row"
 LRT_VALIDITY_STANDARD: Final = (
     "finite-sample-super-uniformity-under-frozen-analysis-pipeline"
 )
@@ -69,26 +69,43 @@ LRT_VALIDITY_COVERAGE: Final[tuple[str, ...]] = (
     "bmr-estimation",
     "top-k-selection",
     "nuisance-fitting",
-    "boundary-behavior",
+    "fit-support-convergence-failure",
+    "effect-identifiability-and-reference-irregularity",
+    "undefined-rho-degenerate-null-boundary",
     "complete-within-cohort-family",
 )
-LRT_VALIDITY_GATE: Final = (
-    "block-inferential-use-if-absent-invalid-or-inconclusive"
-)
+LRT_VALIDITY_GATE: Final = "block-inferential-use-if-absent-invalid-or-inconclusive"
 
 MAX_P_IUT: Final = "nondirectional-max-p-iut"
 NO_CONJUNCTION: Final = "no-conjunction"
-SET_CONJUNCTION_P_ONE: Final = "set-conjunction-p-to-one"
 NO_CONJUNCTION_COMPONENT_POLICY: Final = "not-applicable-no-conjunction"
-WITHIN_COHORT_FAMILY: Final = (
-    "one-complete-within-cohort-tested-pair-family"
+VALID_CONJUNCTION_COMPONENT_STATUSES: Final[tuple[str, str]] = (
+    "valid-profile-lrt",
+    "valid-degenerate-null-p-one",
 )
-FAILED_HYPOTHESIS_POLICY: Final = "retain-with-p-one"
+CONJUNCTION_P_VALUE_COMBINER: Final = "max(p_cbase,p_dig,p_mutsig)"
+INVALID_CONJUNCTION_COMPONENT: Final = "fail-cohort-conjunction-no-p-value"
+MISSING_CONJUNCTION_COMPONENT: Final = "fail-cohort-conjunction-no-p-value"
+SIGN_DISCORDANCE_POLICY: Final = "retain-max-p-direction-not-unanimous"
+EFFECT_UNIDENTIFIABLE_POLICY: Final = "retain-valid-p-direction-unavailable"
+COMPONENT_FAILURE_SEMANTICS: Final = "task-abort-no-published-row-no-p-one-substitution"
+DIRECTION_PROVIDER_RULE: Final = "rho-negative-me-positive-co-zero-neutral"
+UNDEFINED_RHO_DIRECTION_RULE: Final = "unavailable"
+DIRECTION_CONSENSUS_RULE: Final = "unanimous-me-or-co-else-not-unanimous"
+DIRECTION_REPORTING_LAYER: Final = "descriptive-post-rejection"
+WITHIN_COHORT_FAMILY: Final = "one-complete-within-cohort-tested-pair-family"
+TESTED_FAMILY_TOP_K: Final = 500
+TESTED_FAMILY_FEATURE_RANKING: Final = "descending-total-eligible-mutation-event-count"
+TESTED_FAMILY_TIE_BREAK: Final = "canonical-count-matrix-column-order"
+TESTED_FAMILY_PROVIDER_SUPPORT: Final = "shared-native-cbase-dig-mutsig"
+TESTED_FAMILY_PAIR_CONSTRUCTION: Final = "all-unordered-pairs-of-ordered-feature-axis"
+TESTED_FAMILY_SAME_BASE_POLICY: Final = "exclude-before-fitting-and-testing"
+NO_PRETEST_FILTER: Final = "none"
+DESCRIPTIVE_METHODS: Final[tuple[str, str]] = ("by", "bh")
 INCLUSIVE_THRESHOLD: Final = "inclusive-less-than-or-equal"
 PRIMARY_REPORTING_LAYER: Final = "confirmatory-conditional-on-valid-marginals"
 SENSITIVITY_REPORTING_LAYER: Final = "nominal-sensitivity"
 DESCRIPTIVE_REPORTING_LAYER: Final = "descriptive"
-RHO_ROLE: Final = "descriptive-post-rejection-annotation"
 
 FULL_EXTERNAL: Final = "full-external"
 NARROW_LOCAL: Final = "narrow-local"
@@ -98,7 +115,6 @@ NARROW_CLAIM_SCOPE: Final = "narrow-exact-family-stress-evidence-only"
 NO_EXTENSION_CLAIM_SCOPE: Final = "no-calibration-claims"
 
 _SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
-_SENSITIVITY_PROVIDER_COUNT: Final = 2
 _FULL_REPLICATES_PER_CELL: Final = 1000
 _NARROW_CELL_COUNT: Final = 3
 _NARROW_REPLICATES_PER_CELL: Final = 300
@@ -155,15 +171,66 @@ class LRTValidityEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectIdentifiabilityImplementationContract:
+    """Exact rank certification and nonidentified-effect reporting contract."""
+
+    contract: str
+    relative_tolerance: float
+    status_vocabulary: tuple[str, str, str]
+    identified_status: str
+    nonidentified_statuses: tuple[str, str]
+    nonidentified_effect_blank_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NumericalImplementationContract:
+    """Exact marginal, pair-fit, and effect implementation bound by signed D4."""
+
+    marginal_fit_contract: str
+    marginal_fit_max_iterations: int
+    marginal_fit_total_kkt_tolerance: float
+    marginal_fit_bracket_width_tolerance: float
+    marginal_fit_fixed_point_tolerance: float
+    marginal_fit_flat_likelihood_tie_break: str
+    pair_fit_contract: str
+    pair_fit_max_iterations: int
+    pair_fit_total_kkt_tolerance: float
+    pair_simplex_tolerance: float
+    lrt_nestedness_tolerance: float
+    effect_identifiability: EffectIdentifiabilityImplementationContract
+    rho_contract: str
+    undefined_rho_lrt_tolerance: float
+    log_odds_ratio_contract: str
+
+
+@dataclass(frozen=True, slots=True)
+class D4ImplementationContract:
+    """Caller-pinned implementation contract that signed D4 must match exactly."""
+
+    lrt_contract: str
+    numerical_implementation: NumericalImplementationContract
+
+
+@dataclass(frozen=True, slots=True)
+class FitFailureHandling:
+    """Result-publication behavior for non-inferential fitting failures."""
+
+    fit: str
+    observation_support: str
+    convergence: str
+
+
+@dataclass(frozen=True, slots=True)
 class LRTPolicy:
     """D4 profile-LRT p-value and failure contract."""
 
     lrt_contract: str
+    numerical_implementation: NumericalImplementationContract
     test_direction: str
     reference: LRTReference
     statistic_transform: str
-    boundary_handling: str
-    failure_semantics: str
+    undefined_rho_degenerate_null_handling: str
+    failure_handling: FitFailureHandling
     validity_evidence: LRTValidityEvidence
 
 
@@ -172,9 +239,40 @@ class ConjunctionPolicy:
     """D5 nondirectional conjunction construction or explicit omission."""
 
     mode: str
+    component_order: tuple[str, ...]
+    valid_component_statuses: tuple[str, ...]
+    p_value_combiner: str
     invalid_component: str
     missing_component: str
     sign_discordance: str
+    effect_unidentifiable: str
+    direction_affects_p_or_q: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DirectionAnnotationPolicy:
+    """D5 descriptive rho annotation kept outside inferential p/q values."""
+
+    provider_rule: str
+    undefined_rho_rule: str
+    consensus_rule: str
+    reporting_layer: str
+    directional_fdr_control: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TestedFamilyPolicy:
+    """Exact feature-selection and pair-construction family tested within a cohort."""
+
+    top_k: int
+    feature_ranking: str
+    tie_break: str
+    provider_support: str
+    pair_construction: str
+    same_base_missense_nonsense: str
+    epsilon_pretest_filter: str
+    marginal_effect_pretest_filter: str
+    family: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +283,7 @@ class MultiplicityPolicy:
     sensitivity_method: str
     primary_q_threshold: float
     sensitivity_q_threshold: float
+    descriptive_methods: tuple[str, str]
     descriptive_q_threshold: float
     threshold_comparison: str
     primary_reporting_layer: str
@@ -197,11 +296,10 @@ class ConjunctionMultiplicityPolicy:
     """D5 conjunction, family, multiplicity, and descriptive direction policy."""
 
     conjunction: ConjunctionPolicy
-    family: str
-    failed_hypothesis: str
+    direction_annotation: DirectionAnnotationPolicy
+    tested_family: TestedFamilyPolicy
     multiplicity: MultiplicityPolicy
-    rho_role: str
-    directional_fdr_control: bool
+    component_failure_semantics: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,19 +346,25 @@ class RevisionFitPolicy:
 def validate_revision_fit_policy(
     approval: RevisionApproval,
     *,
-    expected_lrt_contract: str,
+    expected_d4_implementation: D4ImplementationContract,
+    expected_tested_family: TestedFamilyPolicy,
 ) -> RevisionFitPolicy:
     """Parse the exact signed D3--D6 policies from validated approval bytes.
 
     This is a fit-only policy gate.  It requires explicit v4 fit-stage authority and
     ``go`` dispositions for D3--D6; it never upgrades another disposition or stage.
-    The expected implementation LRT contract is supplied by the caller so an artifact
-    cannot authorize a different implementation by naming it itself.
+    The expected implementation and tested-family contracts are supplied by the
+    caller so an artifact cannot authorize a different execution path by naming it
+    itself.
 
     Args:
         approval: Live immutable v4 approval returned by its validator.
-        expected_lrt_contract: Exact LRT implementation contract required by the
+        expected_d4_implementation: Frozen exact LRT, optimizer, tolerance,
+            identifiability, effect-reporting, rho, and LOR contract required by the
             caller that will execute the fit.
+        expected_tested_family: Frozen exact K, feature-ranking, provider-support,
+            pair-construction, and no-pretest-filter contract implemented by the
+            caller.
 
     Returns:
         Frozen typed policies and byte/hash receipts suitable for a runner manifest.
@@ -278,9 +382,11 @@ def validate_revision_fit_policy(
     if FIT_SEALED_TCGA_K500_STAGE not in approval.allowed_stages:
         msg = "Approval does not explicitly authorize the sealed TCGA K=500 fit stage."
         raise RevisionFitPolicyError(msg)
-    expected_lrt_contract = _require_exact_text(
-        expected_lrt_contract,
-        "expected_lrt_contract",
+    expected_d4_implementation = _validate_expected_d4_implementation(
+        expected_d4_implementation,
+    )
+    expected_tested_family = _validate_expected_tested_family(
+        expected_tested_family,
     )
 
     envelopes: dict[str, Mapping[str, object]] = {}
@@ -293,9 +399,12 @@ def validate_revision_fit_policy(
     d3 = _parse_d3(envelopes["D3"]["payload"])
     d4 = _parse_d4(
         envelopes["D4"]["payload"],
-        expected_lrt_contract=expected_lrt_contract,
+        expected_implementation=expected_d4_implementation,
     )
-    d5 = _parse_d5(envelopes["D5"]["payload"])
+    d5 = _parse_d5(
+        envelopes["D5"]["payload"],
+        expected_tested_family=expected_tested_family,
+    )
     d6 = _parse_d6(envelopes["D6"]["payload"])
     _require_conjunction_consistency(d3, d5)
     return RevisionFitPolicy(
@@ -348,10 +457,7 @@ def _parse_signed_decision(
         msg = f"Signed {decision_id} artifact has the wrong decision_id."
         raise RevisionFitPolicyError(msg)
     if envelope["contract"] != expected_contract:
-        msg = (
-            f"Signed {decision_id} artifact contract must be "
-            f"{expected_contract!r}."
-        )
+        msg = f"Signed {decision_id} artifact contract must be {expected_contract!r}."
         raise RevisionFitPolicyError(msg)
     payload = _require_object(envelope["payload"], f"{decision_id}.payload")
     payload_sha256 = hashlib.sha256(
@@ -383,9 +489,9 @@ def _parse_d3(value: object) -> ProviderHierarchyPolicy:
         },
         "D3.payload",
     )
-    primary = _require_enum(
+    primary = _require_exact_value(
         payload["primary_provider"],
-        BMR_PROVIDERS,
+        PRIMARY_BMR_PROVIDER,
         "D3.payload.primary_provider",
     )
     sensitivities_raw = _require_list(
@@ -400,14 +506,10 @@ def _parse_d3(value: object) -> ProviderHierarchyPolicy:
         )
         for index, item in enumerate(sensitivities_raw)
     )
-    expected_sensitivities = BMR_PROVIDERS.difference({primary})
-    if (
-        len(sensitivities) != _SENSITIVITY_PROVIDER_COUNT
-        or set(sensitivities) != expected_sensitivities
-    ):
+    if sensitivities != SENSITIVITY_BMR_PROVIDERS:
         msg = (
-            "D3 sensitivity_providers must contain each non-primary provider "
-            "exactly once in the signed order."
+            "D3 sensitivity_providers must be exactly ['dig', 'mutsig'] in "
+            "the frozen order."
         )
         raise RevisionFitPolicyError(msg)
     switching = _require_bool(
@@ -430,17 +532,168 @@ def _parse_d3(value: object) -> ProviderHierarchyPolicy:
     )
 
 
-def _parse_d4(value: object, *, expected_lrt_contract: str) -> LRTPolicy:
+def _validate_expected_d4_implementation(
+    value: object,
+) -> D4ImplementationContract:
+    """Fail closed if the caller did not supply one coherent typed contract."""
+    if not isinstance(value, D4ImplementationContract):
+        msg = "expected_d4_implementation must be a D4ImplementationContract."
+        raise RevisionFitPolicyError(msg)
+    _require_exact_text(
+        value.lrt_contract,
+        "expected_d4_implementation.lrt_contract",
+    )
+    numerical = value.numerical_implementation
+    if not isinstance(numerical, NumericalImplementationContract):
+        msg = (
+            "expected_d4_implementation.numerical_implementation must be a "
+            "NumericalImplementationContract."
+        )
+        raise RevisionFitPolicyError(msg)
+    _require_exact_text(
+        numerical.marginal_fit_contract,
+        "expected_d4_implementation.numerical_implementation.marginal_fit_contract",
+    )
+    marginal_max_iterations = _require_nonnegative_integer(
+        numerical.marginal_fit_max_iterations,
+        (
+            "expected_d4_implementation.numerical_implementation."
+            "marginal_fit_max_iterations"
+        ),
+    )
+    if marginal_max_iterations == 0:
+        msg = "Expected marginal_fit_max_iterations must be positive."
+        raise RevisionFitPolicyError(msg)
+    _require_exact_text(
+        numerical.marginal_fit_flat_likelihood_tie_break,
+        (
+            "expected_d4_implementation.numerical_implementation."
+            "marginal_fit_flat_likelihood_tie_break"
+        ),
+    )
+    _require_exact_text(
+        numerical.pair_fit_contract,
+        "expected_d4_implementation.numerical_implementation.pair_fit_contract",
+    )
+    max_iterations = _require_nonnegative_integer(
+        numerical.pair_fit_max_iterations,
+        ("expected_d4_implementation.numerical_implementation.pair_fit_max_iterations"),
+    )
+    if max_iterations == 0:
+        msg = "Expected pair_fit_max_iterations must be positive."
+        raise RevisionFitPolicyError(msg)
+    for field_name in (
+        "marginal_fit_total_kkt_tolerance",
+        "marginal_fit_bracket_width_tolerance",
+        "marginal_fit_fixed_point_tolerance",
+        "pair_fit_total_kkt_tolerance",
+        "pair_simplex_tolerance",
+        "lrt_nestedness_tolerance",
+        "undefined_rho_lrt_tolerance",
+    ):
+        _require_positive_finite_float(
+            getattr(numerical, field_name),
+            f"expected_d4_implementation.numerical_implementation.{field_name}",
+        )
+    _require_exact_text(
+        numerical.rho_contract,
+        "expected_d4_implementation.numerical_implementation.rho_contract",
+    )
+    _require_exact_text(
+        numerical.log_odds_ratio_contract,
+        ("expected_d4_implementation.numerical_implementation.log_odds_ratio_contract"),
+    )
+
+    effect = numerical.effect_identifiability
+    if not isinstance(effect, EffectIdentifiabilityImplementationContract):
+        msg = (
+            "expected_d4_implementation numerical effect_identifiability must be "
+            "an EffectIdentifiabilityImplementationContract."
+        )
+        raise RevisionFitPolicyError(msg)
+    _require_exact_text(
+        effect.contract,
+        "expected_d4_implementation effect-identifiability contract",
+    )
+    _require_positive_finite_float(
+        effect.relative_tolerance,
+        "expected_d4_implementation effect-identifiability relative_tolerance",
+    )
+    vocabulary = _require_expected_text_tuple(
+        effect.status_vocabulary,
+        expected_length=3,
+        label="expected_d4_implementation effect-identifiability status_vocabulary",
+    )
+    identified_status = _require_exact_text(
+        effect.identified_status,
+        "expected_d4_implementation effect-identifiability identified_status",
+    )
+    nonidentified_statuses = _require_expected_text_tuple(
+        effect.nonidentified_statuses,
+        expected_length=2,
+        label=(
+            "expected_d4_implementation effect-identifiability nonidentified_statuses"
+        ),
+    )
+    if vocabulary != (identified_status, *nonidentified_statuses):
+        msg = (
+            "Expected effect-identifiability status_vocabulary must contain the "
+            "identified status followed by both nonidentified statuses."
+        )
+        raise RevisionFitPolicyError(msg)
+    _require_expected_text_tuple(
+        effect.nonidentified_effect_blank_fields,
+        expected_length=None,
+        label=(
+            "expected_d4_implementation effect-identifiability "
+            "nonidentified_effect_blank_fields"
+        ),
+    )
+    return value
+
+
+def _validate_expected_tested_family(value: object) -> TestedFamilyPolicy:
+    """Fail closed unless the caller pins the one implemented K=500 family."""
+    if not isinstance(value, TestedFamilyPolicy):
+        msg = "expected_tested_family must be a TestedFamilyPolicy."
+        raise RevisionFitPolicyError(msg)
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("top_k", TESTED_FAMILY_TOP_K),
+        ("feature_ranking", TESTED_FAMILY_FEATURE_RANKING),
+        ("tie_break", TESTED_FAMILY_TIE_BREAK),
+        ("provider_support", TESTED_FAMILY_PROVIDER_SUPPORT),
+        ("pair_construction", TESTED_FAMILY_PAIR_CONSTRUCTION),
+        ("same_base_missense_nonsense", TESTED_FAMILY_SAME_BASE_POLICY),
+        ("epsilon_pretest_filter", NO_PRETEST_FILTER),
+        ("marginal_effect_pretest_filter", NO_PRETEST_FILTER),
+        ("family", WITHIN_COHORT_FAMILY),
+    )
+    for field_name, expected in exact_fields:
+        actual = getattr(value, field_name)
+        label = f"expected_tested_family.{field_name}"
+        if isinstance(expected, int):
+            _require_exact_integer(actual, expected, label)
+        else:
+            _require_exact_value(actual, expected, label)
+    return value
+
+
+def _parse_d4(
+    value: object,
+    *,
+    expected_implementation: D4ImplementationContract,
+) -> LRTPolicy:
     payload = _require_object(value, "D4.payload")
     _require_exact_keys(
         payload,
         {
-            "boundary_handling",
-            "failure_semantics",
+            "failure_handling",
             "lrt_contract",
+            "numerical_implementation",
             "reference",
             "statistic_transform",
             "test_direction",
+            "undefined_rho_degenerate_null_handling",
             "validity_evidence",
         },
         "D4.payload",
@@ -449,12 +702,17 @@ def _parse_d4(value: object, *, expected_lrt_contract: str) -> LRTPolicy:
         payload["lrt_contract"],
         "D4.payload.lrt_contract",
     )
-    if lrt_contract != expected_lrt_contract:
+    if lrt_contract != expected_implementation.lrt_contract:
         msg = (
             "D4 lrt_contract does not bind the implementation contract required "
             "by the caller."
         )
         raise RevisionFitPolicyError(msg)
+
+    numerical = _parse_d4_numerical_implementation(
+        payload["numerical_implementation"],
+        expected=expected_implementation.numerical_implementation,
+    )
 
     reference_raw = _require_object(payload["reference"], "D4.payload.reference")
     _require_exact_keys(
@@ -522,8 +780,35 @@ def _parse_d4(value: object, *, expected_lrt_contract: str) -> LRTPolicy:
         LRT_STATISTIC_TRANSFORM,
         "D4.payload.statistic_transform",
     )
+    failure_raw = _require_object(
+        payload["failure_handling"],
+        "D4.payload.failure_handling",
+    )
+    _require_exact_keys(
+        failure_raw,
+        {"convergence", "fit", "observation_support"},
+        "D4.payload.failure_handling",
+    )
+    failure_handling = FitFailureHandling(
+        fit=_require_exact_value(
+            failure_raw["fit"],
+            TASK_ABORT_NO_PUBLISHED_ROW,
+            "D4.payload.failure_handling.fit",
+        ),
+        observation_support=_require_exact_value(
+            failure_raw["observation_support"],
+            TASK_ABORT_NO_PUBLISHED_ROW,
+            "D4.payload.failure_handling.observation_support",
+        ),
+        convergence=_require_exact_value(
+            failure_raw["convergence"],
+            TASK_ABORT_NO_PUBLISHED_ROW,
+            "D4.payload.failure_handling.convergence",
+        ),
+    )
     return LRTPolicy(
         lrt_contract=lrt_contract,
+        numerical_implementation=numerical,
         test_direction=LRT_TEST_DIRECTION,
         reference=LRTReference(
             family=LRT_REFERENCE_FAMILY,
@@ -531,16 +816,12 @@ def _parse_d4(value: object, *, expected_lrt_contract: str) -> LRTPolicy:
             tail=LRT_REFERENCE_TAIL,
         ),
         statistic_transform=LRT_STATISTIC_TRANSFORM,
-        boundary_handling=_require_enum(
-            payload["boundary_handling"],
-            LRT_BOUNDARY_HANDLING,
-            "D4.payload.boundary_handling",
+        undefined_rho_degenerate_null_handling=_require_exact_value(
+            payload["undefined_rho_degenerate_null_handling"],
+            UNDEFINED_RHO_DEGENERATE_NULL_HANDLING,
+            "D4.payload.undefined_rho_degenerate_null_handling",
         ),
-        failure_semantics=_require_enum(
-            payload["failure_semantics"],
-            LRT_FAILURE_SEMANTICS,
-            "D4.payload.failure_semantics",
-        ),
+        failure_handling=failure_handling,
         validity_evidence=LRTValidityEvidence(
             standard=LRT_VALIDITY_STANDARD,
             covers=coverage,
@@ -549,17 +830,283 @@ def _parse_d4(value: object, *, expected_lrt_contract: str) -> LRTPolicy:
     )
 
 
-def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
+def _parse_d4_numerical_implementation(
+    value: object,
+    *,
+    expected: NumericalImplementationContract,
+) -> NumericalImplementationContract:
+    numerical = _require_object(value, "D4.payload.numerical_implementation")
+    _require_exact_keys(
+        numerical,
+        {
+            "effect_identifiability",
+            "log_odds_ratio_contract",
+            "lrt_nestedness_tolerance",
+            "marginal_fit_bracket_width_tolerance",
+            "marginal_fit_contract",
+            "marginal_fit_fixed_point_tolerance",
+            "marginal_fit_flat_likelihood_tie_break",
+            "marginal_fit_max_iterations",
+            "marginal_fit_total_kkt_tolerance",
+            "pair_fit_contract",
+            "pair_fit_max_iterations",
+            "pair_fit_total_kkt_tolerance",
+            "pair_simplex_tolerance",
+            "rho_contract",
+            "undefined_rho_lrt_tolerance",
+        },
+        "D4.payload.numerical_implementation",
+    )
+    effect_raw = _require_object(
+        numerical["effect_identifiability"],
+        "D4.payload.numerical_implementation.effect_identifiability",
+    )
+    _require_exact_keys(
+        effect_raw,
+        {
+            "contract",
+            "identified_status",
+            "nonidentified_effect_blank_fields",
+            "nonidentified_statuses",
+            "relative_tolerance",
+            "status_vocabulary",
+        },
+        "D4.payload.numerical_implementation.effect_identifiability",
+    )
+    vocabulary = _require_signed_text_sequence(
+        effect_raw["status_vocabulary"],
+        label=(
+            "D4.payload.numerical_implementation.effect_identifiability."
+            "status_vocabulary"
+        ),
+    )
+    nonidentified_statuses = _require_signed_text_sequence(
+        effect_raw["nonidentified_statuses"],
+        label=(
+            "D4.payload.numerical_implementation.effect_identifiability."
+            "nonidentified_statuses"
+        ),
+    )
+    blank_fields = _require_signed_text_sequence(
+        effect_raw["nonidentified_effect_blank_fields"],
+        label=(
+            "D4.payload.numerical_implementation.effect_identifiability."
+            "nonidentified_effect_blank_fields"
+        ),
+    )
+    comparisons: tuple[tuple[object, object, str], ...] = (
+        (
+            numerical["marginal_fit_contract"],
+            expected.marginal_fit_contract,
+            "marginal_fit_contract",
+        ),
+        (
+            numerical["marginal_fit_max_iterations"],
+            expected.marginal_fit_max_iterations,
+            "marginal_fit_max_iterations",
+        ),
+        (
+            numerical["marginal_fit_total_kkt_tolerance"],
+            expected.marginal_fit_total_kkt_tolerance,
+            "marginal_fit_total_kkt_tolerance",
+        ),
+        (
+            numerical["marginal_fit_bracket_width_tolerance"],
+            expected.marginal_fit_bracket_width_tolerance,
+            "marginal_fit_bracket_width_tolerance",
+        ),
+        (
+            numerical["marginal_fit_fixed_point_tolerance"],
+            expected.marginal_fit_fixed_point_tolerance,
+            "marginal_fit_fixed_point_tolerance",
+        ),
+        (
+            numerical["marginal_fit_flat_likelihood_tie_break"],
+            expected.marginal_fit_flat_likelihood_tie_break,
+            "marginal_fit_flat_likelihood_tie_break",
+        ),
+        (
+            numerical["pair_fit_contract"],
+            expected.pair_fit_contract,
+            "pair_fit_contract",
+        ),
+        (
+            numerical["pair_fit_max_iterations"],
+            expected.pair_fit_max_iterations,
+            "pair_fit_max_iterations",
+        ),
+        (
+            numerical["pair_fit_total_kkt_tolerance"],
+            expected.pair_fit_total_kkt_tolerance,
+            "pair_fit_total_kkt_tolerance",
+        ),
+        (
+            numerical["pair_simplex_tolerance"],
+            expected.pair_simplex_tolerance,
+            "pair_simplex_tolerance",
+        ),
+        (
+            numerical["lrt_nestedness_tolerance"],
+            expected.lrt_nestedness_tolerance,
+            "lrt_nestedness_tolerance",
+        ),
+        (numerical["rho_contract"], expected.rho_contract, "rho_contract"),
+        (
+            numerical["undefined_rho_lrt_tolerance"],
+            expected.undefined_rho_lrt_tolerance,
+            "undefined_rho_lrt_tolerance",
+        ),
+        (
+            numerical["log_odds_ratio_contract"],
+            expected.log_odds_ratio_contract,
+            "log_odds_ratio_contract",
+        ),
+        (
+            effect_raw["contract"],
+            expected.effect_identifiability.contract,
+            "effect_identifiability.contract",
+        ),
+        (
+            effect_raw["relative_tolerance"],
+            expected.effect_identifiability.relative_tolerance,
+            "effect_identifiability.relative_tolerance",
+        ),
+        (
+            effect_raw["identified_status"],
+            expected.effect_identifiability.identified_status,
+            "effect_identifiability.identified_status",
+        ),
+        (
+            vocabulary,
+            expected.effect_identifiability.status_vocabulary,
+            "effect_identifiability.status_vocabulary",
+        ),
+        (
+            nonidentified_statuses,
+            expected.effect_identifiability.nonidentified_statuses,
+            "effect_identifiability.nonidentified_statuses",
+        ),
+        (
+            blank_fields,
+            expected.effect_identifiability.nonidentified_effect_blank_fields,
+            "effect_identifiability.nonidentified_effect_blank_fields",
+        ),
+    )
+    for actual, required, suffix in comparisons:
+        _require_exact_value(
+            actual,
+            required,
+            f"D4.payload.numerical_implementation.{suffix}",
+        )
+    return expected
+
+
+def _parse_d5_direction_annotation(
+    value: object,
+    *,
+    mode: str,
+) -> DirectionAnnotationPolicy:
+    """Parse rho direction as a descriptive layer independent of p/q values."""
+    direction = _require_object(value, "D5.payload.direction_annotation")
+    _require_exact_keys(
+        direction,
+        {
+            "consensus_rule",
+            "directional_fdr_control",
+            "provider_rule",
+            "reporting_layer",
+            "undefined_rho_rule",
+        },
+        "D5.payload.direction_annotation",
+    )
+    expected_consensus_rule = (
+        DIRECTION_CONSENSUS_RULE
+        if mode == MAX_P_IUT
+        else NO_CONJUNCTION_COMPONENT_POLICY
+    )
+    exact_fields = (
+        ("provider_rule", DIRECTION_PROVIDER_RULE),
+        ("undefined_rho_rule", UNDEFINED_RHO_DIRECTION_RULE),
+        ("consensus_rule", expected_consensus_rule),
+        ("reporting_layer", DIRECTION_REPORTING_LAYER),
+    )
+    for key, expected in exact_fields:
+        _require_exact_value(
+            direction[key],
+            expected,
+            f"D5.payload.direction_annotation.{key}",
+        )
+    directional_fdr = _require_bool(
+        direction["directional_fdr_control"],
+        "D5.payload.direction_annotation.directional_fdr_control",
+    )
+    if directional_fdr:
+        msg = "D5 forbids a directional FDR-control claim from descriptive rho."
+        raise RevisionFitPolicyError(msg)
+    return DirectionAnnotationPolicy(
+        provider_rule=DIRECTION_PROVIDER_RULE,
+        undefined_rho_rule=UNDEFINED_RHO_DIRECTION_RULE,
+        consensus_rule=expected_consensus_rule,
+        reporting_layer=DIRECTION_REPORTING_LAYER,
+        directional_fdr_control=False,
+    )
+
+
+def _parse_d5_tested_family(
+    value: object,
+    *,
+    expected: TestedFamilyPolicy,
+) -> TestedFamilyPolicy:
+    family = _require_object(value, "D5.payload.tested_family")
+    _require_exact_keys(
+        family,
+        {
+            "epsilon_pretest_filter",
+            "family",
+            "feature_ranking",
+            "marginal_effect_pretest_filter",
+            "pair_construction",
+            "provider_support",
+            "same_base_missense_nonsense",
+            "tie_break",
+            "top_k",
+        },
+        "D5.payload.tested_family",
+    )
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("top_k", expected.top_k),
+        ("feature_ranking", expected.feature_ranking),
+        ("tie_break", expected.tie_break),
+        ("provider_support", expected.provider_support),
+        ("pair_construction", expected.pair_construction),
+        ("same_base_missense_nonsense", expected.same_base_missense_nonsense),
+        ("epsilon_pretest_filter", expected.epsilon_pretest_filter),
+        ("marginal_effect_pretest_filter", expected.marginal_effect_pretest_filter),
+        ("family", expected.family),
+    )
+    for field_name, expected_value in exact_fields:
+        label = f"D5.payload.tested_family.{field_name}"
+        if isinstance(expected_value, int):
+            _require_exact_integer(family[field_name], expected_value, label)
+        else:
+            _require_exact_value(family[field_name], expected_value, label)
+    return expected
+
+
+def _parse_d5(
+    value: object,
+    *,
+    expected_tested_family: TestedFamilyPolicy,
+) -> ConjunctionMultiplicityPolicy:
     payload = _require_object(value, "D5.payload")
     _require_exact_keys(
         payload,
         {
+            "component_failure_semantics",
             "conjunction",
-            "directional_fdr_control",
-            "failed_hypothesis",
-            "family",
+            "direction_annotation",
             "multiplicity",
-            "rho_role",
+            "tested_family",
         },
         "D5.payload",
     )
@@ -569,7 +1116,17 @@ def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
     )
     _require_exact_keys(
         conjunction_raw,
-        {"invalid_component", "missing_component", "mode", "sign_discordance"},
+        {
+            "component_order",
+            "direction_affects_p_or_q",
+            "effect_unidentifiable",
+            "invalid_component",
+            "missing_component",
+            "mode",
+            "p_value_combiner",
+            "sign_discordance",
+            "valid_component_statuses",
+        },
         "D5.payload.conjunction",
     )
     mode = _require_enum(
@@ -577,18 +1134,123 @@ def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
         {MAX_P_IUT, NO_CONJUNCTION},
         "D5.payload.conjunction.mode",
     )
-    expected_component_policy = (
-        SET_CONJUNCTION_P_ONE
-        if mode == MAX_P_IUT
-        else NO_CONJUNCTION_COMPONENT_POLICY
-    )
-    component_policies: dict[str, str] = {}
-    for key in ("invalid_component", "missing_component", "sign_discordance"):
-        component_policies[key] = _require_exact_value(
-            conjunction_raw[key],
-            expected_component_policy,
-            f"D5.payload.conjunction.{key}",
+    if mode == MAX_P_IUT:
+        component_order = tuple(
+            _require_enum(
+                item,
+                BMR_PROVIDERS,
+                f"D5.payload.conjunction.component_order[{index}]",
+            )
+            for index, item in enumerate(
+                _require_list(
+                    conjunction_raw["component_order"],
+                    "D5.payload.conjunction.component_order",
+                ),
+            )
         )
+        if (
+            len(component_order) != len(BMR_PROVIDERS)
+            or set(
+                component_order,
+            )
+            != BMR_PROVIDERS
+        ):
+            msg = (
+                "D5 conjunction component_order must contain each BMR provider "
+                "exactly once."
+            )
+            raise RevisionFitPolicyError(msg)
+        valid_component_statuses = _require_signed_text_sequence(
+            conjunction_raw["valid_component_statuses"],
+            label="D5.payload.conjunction.valid_component_statuses",
+        )
+        _require_exact_value(
+            valid_component_statuses,
+            VALID_CONJUNCTION_COMPONENT_STATUSES,
+            "D5.payload.conjunction.valid_component_statuses",
+        )
+        p_value_combiner = _require_exact_value(
+            conjunction_raw["p_value_combiner"],
+            CONJUNCTION_P_VALUE_COMBINER,
+            "D5.payload.conjunction.p_value_combiner",
+        )
+        invalid_component = _require_exact_value(
+            conjunction_raw["invalid_component"],
+            INVALID_CONJUNCTION_COMPONENT,
+            "D5.payload.conjunction.invalid_component",
+        )
+        missing_component = _require_exact_value(
+            conjunction_raw["missing_component"],
+            MISSING_CONJUNCTION_COMPONENT,
+            "D5.payload.conjunction.missing_component",
+        )
+        sign_discordance = _require_exact_value(
+            conjunction_raw["sign_discordance"],
+            SIGN_DISCORDANCE_POLICY,
+            "D5.payload.conjunction.sign_discordance",
+        )
+        effect_unidentifiable = _require_exact_value(
+            conjunction_raw["effect_unidentifiable"],
+            EFFECT_UNIDENTIFIABLE_POLICY,
+            "D5.payload.conjunction.effect_unidentifiable",
+        )
+        component_failure_semantics = _require_exact_value(
+            payload["component_failure_semantics"],
+            COMPONENT_FAILURE_SEMANTICS,
+            "D5.payload.component_failure_semantics",
+        )
+    else:
+        _require_exact_value(
+            conjunction_raw["component_order"],
+            [],
+            "D5.payload.conjunction.component_order",
+        )
+        _require_exact_value(
+            conjunction_raw["valid_component_statuses"],
+            [],
+            "D5.payload.conjunction.valid_component_statuses",
+        )
+        component_order = ()
+        valid_component_statuses = ()
+        component_policies = (
+            "p_value_combiner",
+            "invalid_component",
+            "missing_component",
+            "sign_discordance",
+            "effect_unidentifiable",
+        )
+        for key in component_policies:
+            _require_exact_value(
+                conjunction_raw[key],
+                NO_CONJUNCTION_COMPONENT_POLICY,
+                f"D5.payload.conjunction.{key}",
+            )
+        p_value_combiner = NO_CONJUNCTION_COMPONENT_POLICY
+        invalid_component = NO_CONJUNCTION_COMPONENT_POLICY
+        missing_component = NO_CONJUNCTION_COMPONENT_POLICY
+        sign_discordance = NO_CONJUNCTION_COMPONENT_POLICY
+        effect_unidentifiable = NO_CONJUNCTION_COMPONENT_POLICY
+        component_failure_semantics = _require_exact_value(
+            payload["component_failure_semantics"],
+            NO_CONJUNCTION_COMPONENT_POLICY,
+            "D5.payload.component_failure_semantics",
+        )
+    direction_affects_p_or_q = _require_bool(
+        conjunction_raw["direction_affects_p_or_q"],
+        "D5.payload.conjunction.direction_affects_p_or_q",
+    )
+    if direction_affects_p_or_q:
+        msg = "D5 forbids rho direction from changing conjunction p- or q-values."
+        raise RevisionFitPolicyError(msg)
+
+    direction_annotation = _parse_d5_direction_annotation(
+        payload["direction_annotation"],
+        mode=mode,
+    )
+    tested_family = _parse_d5_tested_family(
+        payload["tested_family"],
+        expected=expected_tested_family,
+    )
 
     multiplicity_raw = _require_object(
         payload["multiplicity"],
@@ -597,6 +1259,7 @@ def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
     _require_exact_keys(
         multiplicity_raw,
         {
+            "descriptive_methods",
             "descriptive_q_threshold",
             "descriptive_reporting_layer",
             "primary_method",
@@ -608,6 +1271,15 @@ def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
             "threshold_comparison",
         },
         "D5.payload.multiplicity",
+    )
+    descriptive_methods = _require_signed_text_sequence(
+        multiplicity_raw["descriptive_methods"],
+        label="D5.payload.multiplicity.descriptive_methods",
+    )
+    _require_exact_value(
+        descriptive_methods,
+        DESCRIPTIVE_METHODS,
+        "D5.payload.multiplicity.descriptive_methods",
     )
     exact_multiplicity_values: tuple[tuple[str, object], ...] = (
         ("primary_method", "by"),
@@ -626,42 +1298,33 @@ def _parse_d5(value: object) -> ConjunctionMultiplicityPolicy:
             expected,
             f"D5.payload.multiplicity.{key}",
         )
-    _require_exact_value(payload["family"], WITHIN_COHORT_FAMILY, "D5.payload.family")
-    _require_exact_value(
-        payload["failed_hypothesis"],
-        FAILED_HYPOTHESIS_POLICY,
-        "D5.payload.failed_hypothesis",
-    )
-    _require_exact_value(payload["rho_role"], RHO_ROLE, "D5.payload.rho_role")
-    directional_fdr = _require_bool(
-        payload["directional_fdr_control"],
-        "D5.payload.directional_fdr_control",
-    )
-    if directional_fdr:
-        msg = "D5 forbids a directional FDR-control claim from descriptive rho."
-        raise RevisionFitPolicyError(msg)
     return ConjunctionMultiplicityPolicy(
         conjunction=ConjunctionPolicy(
             mode=mode,
-            invalid_component=component_policies["invalid_component"],
-            missing_component=component_policies["missing_component"],
-            sign_discordance=component_policies["sign_discordance"],
+            component_order=component_order,
+            valid_component_statuses=valid_component_statuses,
+            p_value_combiner=p_value_combiner,
+            invalid_component=invalid_component,
+            missing_component=missing_component,
+            sign_discordance=sign_discordance,
+            effect_unidentifiable=effect_unidentifiable,
+            direction_affects_p_or_q=False,
         ),
-        family=WITHIN_COHORT_FAMILY,
-        failed_hypothesis=FAILED_HYPOTHESIS_POLICY,
+        direction_annotation=direction_annotation,
+        tested_family=tested_family,
         multiplicity=MultiplicityPolicy(
             primary_method="by",
             sensitivity_method="bh",
             primary_q_threshold=0.01,
             sensitivity_q_threshold=0.01,
+            descriptive_methods=DESCRIPTIVE_METHODS,
             descriptive_q_threshold=0.05,
             threshold_comparison=INCLUSIVE_THRESHOLD,
             primary_reporting_layer=PRIMARY_REPORTING_LAYER,
             sensitivity_reporting_layer=SENSITIVITY_REPORTING_LAYER,
             descriptive_reporting_layer=DESCRIPTIVE_REPORTING_LAYER,
         ),
-        rho_role=RHO_ROLE,
-        directional_fdr_control=False,
+        component_failure_semantics=component_failure_semantics,
     )
 
 
@@ -832,6 +1495,14 @@ def _require_conjunction_consistency(
     if d5.conjunction.mode != expected_mode:
         msg = "D3 conjunction role and D5 conjunction mode are inconsistent."
         raise RevisionFitPolicyError(msg)
+    if expected_mode == MAX_P_IUT and d5.conjunction.component_order != (
+        d3.primary_provider,
+        *d3.sensitivity_providers,
+    ):
+        msg = (
+            "D3 provider hierarchy and D5 conjunction component order are inconsistent."
+        )
+        raise RevisionFitPolicyError(msg)
 
 
 def _load_canonical_envelope(
@@ -898,8 +1569,7 @@ def _parse_finite_float(value: str) -> float:
 def _reject_surrogates(value: object, label: str) -> None:
     if isinstance(value, str):
         if any(
-            _SURROGATE_MIN <= ord(character) <= _SURROGATE_MAX
-            for character in value
+            _SURROGATE_MIN <= ord(character) <= _SURROGATE_MAX for character in value
         ):
             msg = f"{label} contains an invalid Unicode surrogate."
             raise RevisionFitPolicyError(msg)
@@ -1008,6 +1678,42 @@ def _require_exact_integer(value: object, expected: int, label: str) -> int:
         msg = f"{label} must equal {expected}; observed {actual}."
         raise RevisionFitPolicyError(msg)
     return actual
+
+
+def _require_positive_finite_float(value: object, label: str) -> float:
+    if not isinstance(value, float) or not math.isfinite(value) or value <= 0:
+        msg = f"{label} must be a positive finite JSON float."
+        raise RevisionFitPolicyError(msg)
+    return value
+
+
+def _require_expected_text_tuple(
+    value: object,
+    *,
+    expected_length: int | None,
+    label: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, tuple) or not value:
+        msg = f"{label} must be a nonempty tuple of exact strings."
+        raise RevisionFitPolicyError(msg)
+    if expected_length is not None and len(value) != expected_length:
+        msg = f"{label} must contain exactly {expected_length} entries."
+        raise RevisionFitPolicyError(msg)
+    result = tuple(
+        _require_exact_text(item, f"{label}[{index}]")
+        for index, item in enumerate(value)
+    )
+    if len(set(result)) != len(result):
+        msg = f"{label} must not contain duplicate entries."
+        raise RevisionFitPolicyError(msg)
+    return result
+
+
+def _require_signed_text_sequence(value: object, *, label: str) -> tuple[str, ...]:
+    return tuple(
+        _require_exact_text(item, f"{label}[{index}]")
+        for index, item in enumerate(_require_list(value, label))
+    )
 
 
 def _require_exact_value(

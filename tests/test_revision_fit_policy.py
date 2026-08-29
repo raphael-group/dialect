@@ -1,9 +1,10 @@
 import copy
 import hashlib
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from types import MappingProxyType
 
+import numpy as np
 import pytest
 
 from dialect.data.revision_approval import (
@@ -15,10 +16,14 @@ from dialect.data.revision_approval import (
     SourceNotice,
 )
 from dialect.data.revision_fit_policy import (
+    COMPONENT_FAILURE_SEMANTICS,
+    CONJUNCTION_P_VALUE_COMBINER,
     D3_CONTRACT,
     D4_CONTRACT,
     D5_CONTRACT,
     D6_CONTRACT,
+    DIRECTION_CONSENSUS_RULE,
+    EFFECT_UNIDENTIFIABLE_POLICY,
     LRT_STATISTIC_TRANSFORM,
     LRT_VALIDITY_COVERAGE,
     MACHINE_DECISION_SCHEMA,
@@ -26,11 +31,90 @@ from dialect.data.revision_fit_policy import (
     NARROW_LOCAL,
     NO_CONJUNCTION,
     NO_EXTENSION,
+    TASK_ABORT_NO_PUBLISHED_ROW,
+    UNDEFINED_RHO_DEGENERATE_NULL_HANDLING,
+    VALID_CONJUNCTION_COMPONENT_STATUSES,
+    D4ImplementationContract,
+    EffectIdentifiabilityImplementationContract,
+    NumericalImplementationContract,
     RevisionFitPolicyError,
     validate_revision_fit_policy,
 )
+from dialect.data.revision_fit_policy import (
+    TestedFamilyPolicy as FamilyPolicyContract,
+)
 
 LRT_CONTRACT = "driver-independence-constrained-mle-v1"
+MARGINAL_FIT_CONTRACT = "deterministic-concave-score-bisection-total-kkt-v1"
+MARGINAL_FIT_MAX_ITERATIONS = 1000
+MARGINAL_FIT_TOTAL_KKT_TOLERANCE = 1e-8
+MARGINAL_FIT_BRACKET_WIDTH_TOLERANCE = 1e-12
+MARGINAL_FIT_FIXED_POINT_TOLERANCE = 1e-8
+MARGINAL_FIT_FLAT_LIKELIHOOD_TIE_BREAK = "pi-zero"
+PAIR_FIT_CONTRACT = "deterministic-simplex-coordinate-ascent-total-kkt-v2"
+PAIR_FIT_MAX_ITERATIONS = 1000
+PAIR_FIT_TOTAL_KKT_TOLERANCE = 1e-8
+PAIR_SIMPLEX_TOLERANCE = 1e-12
+LRT_NESTEDNESS_TOLERANCE = 1e-8
+EFFECT_IDENTIFIABILITY_CONTRACT = "full-affine-rank-relative-svd-1e-12-conservative-v1"
+EFFECT_IDENTIFIED_STATUS = "full-affine-rank"
+EFFECT_RANK_DEFICIENT_STATUS = "rank-deficient"
+EFFECT_UNDERFLOW_STATUS = "rank-not-certified-underflow"
+NONIDENTIFIED_EFFECT_BLANK_FIELDS = (
+    "Tau_1X",
+    "Tau_X1",
+    "Rho",
+    "Log Odds Ratio",
+    "Wald Statistic",
+)
+RHO_CONTRACT = "marshall-olkin-identifiable-finite-or-degenerate-null-v2"
+UNDEFINED_RHO_LRT_TOLERANCE = 1e-8
+LOG_ODDS_RATIO_CONTRACT = "conventional-latent-odds-00x11-over-01x10-identifiable-v2"
+EXPECTED_D4_IMPLEMENTATION = D4ImplementationContract(
+    lrt_contract=LRT_CONTRACT,
+    numerical_implementation=NumericalImplementationContract(
+        marginal_fit_contract=MARGINAL_FIT_CONTRACT,
+        marginal_fit_max_iterations=MARGINAL_FIT_MAX_ITERATIONS,
+        marginal_fit_total_kkt_tolerance=MARGINAL_FIT_TOTAL_KKT_TOLERANCE,
+        marginal_fit_bracket_width_tolerance=(MARGINAL_FIT_BRACKET_WIDTH_TOLERANCE),
+        marginal_fit_fixed_point_tolerance=MARGINAL_FIT_FIXED_POINT_TOLERANCE,
+        marginal_fit_flat_likelihood_tie_break=(MARGINAL_FIT_FLAT_LIKELIHOOD_TIE_BREAK),
+        pair_fit_contract=PAIR_FIT_CONTRACT,
+        pair_fit_max_iterations=PAIR_FIT_MAX_ITERATIONS,
+        pair_fit_total_kkt_tolerance=PAIR_FIT_TOTAL_KKT_TOLERANCE,
+        pair_simplex_tolerance=PAIR_SIMPLEX_TOLERANCE,
+        lrt_nestedness_tolerance=LRT_NESTEDNESS_TOLERANCE,
+        effect_identifiability=EffectIdentifiabilityImplementationContract(
+            contract=EFFECT_IDENTIFIABILITY_CONTRACT,
+            relative_tolerance=PAIR_SIMPLEX_TOLERANCE,
+            status_vocabulary=(
+                EFFECT_IDENTIFIED_STATUS,
+                EFFECT_RANK_DEFICIENT_STATUS,
+                EFFECT_UNDERFLOW_STATUS,
+            ),
+            identified_status=EFFECT_IDENTIFIED_STATUS,
+            nonidentified_statuses=(
+                EFFECT_RANK_DEFICIENT_STATUS,
+                EFFECT_UNDERFLOW_STATUS,
+            ),
+            nonidentified_effect_blank_fields=NONIDENTIFIED_EFFECT_BLANK_FIELDS,
+        ),
+        rho_contract=RHO_CONTRACT,
+        undefined_rho_lrt_tolerance=UNDEFINED_RHO_LRT_TOLERANCE,
+        log_odds_ratio_contract=LOG_ODDS_RATIO_CONTRACT,
+    ),
+)
+EXPECTED_TESTED_FAMILY = FamilyPolicyContract(
+    top_k=500,
+    feature_ranking="descending-total-eligible-mutation-event-count",
+    tie_break="canonical-count-matrix-column-order",
+    provider_support="shared-native-cbase-dig-mutsig",
+    pair_construction="all-unordered-pairs-of-ordered-feature-axis",
+    same_base_missense_nonsense="exclude-before-fitting-and-testing",
+    epsilon_pretest_filter="none",
+    marginal_effect_pretest_filter="none",
+    family="one-complete-within-cohort-tested-pair-family",
+)
 CONTRACTS = {
     "D3": D3_CONTRACT,
     "D4": D4_CONTRACT,
@@ -62,9 +146,49 @@ def _d3(*, conjunction_role="secondary"):
 
 def _d4():
     return {
-        "boundary_handling": "assign-p-one-with-explicit-boundary-status",
-        "failure_semantics": "assign-p-one-with-explicit-failure-status",
+        "failure_handling": {
+            "convergence": TASK_ABORT_NO_PUBLISHED_ROW,
+            "fit": TASK_ABORT_NO_PUBLISHED_ROW,
+            "observation_support": TASK_ABORT_NO_PUBLISHED_ROW,
+        },
         "lrt_contract": LRT_CONTRACT,
+        "numerical_implementation": {
+            "effect_identifiability": {
+                "contract": EFFECT_IDENTIFIABILITY_CONTRACT,
+                "identified_status": EFFECT_IDENTIFIED_STATUS,
+                "nonidentified_effect_blank_fields": list(
+                    NONIDENTIFIED_EFFECT_BLANK_FIELDS,
+                ),
+                "nonidentified_statuses": [
+                    EFFECT_RANK_DEFICIENT_STATUS,
+                    EFFECT_UNDERFLOW_STATUS,
+                ],
+                "relative_tolerance": PAIR_SIMPLEX_TOLERANCE,
+                "status_vocabulary": [
+                    EFFECT_IDENTIFIED_STATUS,
+                    EFFECT_RANK_DEFICIENT_STATUS,
+                    EFFECT_UNDERFLOW_STATUS,
+                ],
+            },
+            "log_odds_ratio_contract": LOG_ODDS_RATIO_CONTRACT,
+            "lrt_nestedness_tolerance": LRT_NESTEDNESS_TOLERANCE,
+            "marginal_fit_bracket_width_tolerance": (
+                MARGINAL_FIT_BRACKET_WIDTH_TOLERANCE
+            ),
+            "marginal_fit_contract": MARGINAL_FIT_CONTRACT,
+            "marginal_fit_fixed_point_tolerance": (MARGINAL_FIT_FIXED_POINT_TOLERANCE),
+            "marginal_fit_flat_likelihood_tie_break": (
+                MARGINAL_FIT_FLAT_LIKELIHOOD_TIE_BREAK
+            ),
+            "marginal_fit_max_iterations": MARGINAL_FIT_MAX_ITERATIONS,
+            "marginal_fit_total_kkt_tolerance": (MARGINAL_FIT_TOTAL_KKT_TOLERANCE),
+            "pair_fit_contract": PAIR_FIT_CONTRACT,
+            "pair_fit_max_iterations": PAIR_FIT_MAX_ITERATIONS,
+            "pair_fit_total_kkt_tolerance": PAIR_FIT_TOTAL_KKT_TOLERANCE,
+            "pair_simplex_tolerance": PAIR_SIMPLEX_TOLERANCE,
+            "rho_contract": RHO_CONTRACT,
+            "undefined_rho_lrt_tolerance": UNDEFINED_RHO_LRT_TOLERANCE,
+        },
         "reference": {
             "degrees_of_freedom": 1,
             "family": "chi-square",
@@ -72,6 +196,9 @@ def _d4():
         },
         "statistic_transform": LRT_STATISTIC_TRANSFORM,
         "test_direction": "nondirectional-two-sided-dependence",
+        "undefined_rho_degenerate_null_handling": (
+            UNDEFINED_RHO_DEGENERATE_NULL_HANDLING
+        ),
         "validity_evidence": {
             "covers": list(LRT_VALIDITY_COVERAGE),
             "gate": "block-inferential-use-if-absent-invalid-or-inconclusive",
@@ -82,36 +209,73 @@ def _d4():
     }
 
 
-def _d5(*, mode=MAX_P_IUT):
-    component_policy = (
-        "set-conjunction-p-to-one"
-        if mode == MAX_P_IUT
-        else "not-applicable-no-conjunction"
+def _d5(*, mode=MAX_P_IUT, component_order=None):
+    enabled = mode == MAX_P_IUT
+    not_applicable = "not-applicable-no-conjunction"
+    component_order = (
+        ["cbase", "dig", "mutsig"] if component_order is None else component_order
     )
     return {
+        "component_failure_semantics": (
+            "task-abort-no-published-row-no-p-one-substitution"
+            if enabled
+            else not_applicable
+        ),
         "conjunction": {
-            "invalid_component": component_policy,
-            "missing_component": component_policy,
+            "component_order": component_order if enabled else [],
+            "direction_affects_p_or_q": False,
+            "effect_unidentifiable": (
+                "retain-valid-p-direction-unavailable" if enabled else not_applicable
+            ),
+            "invalid_component": (
+                "fail-cohort-conjunction-no-p-value" if enabled else not_applicable
+            ),
+            "missing_component": (
+                "fail-cohort-conjunction-no-p-value" if enabled else not_applicable
+            ),
             "mode": mode,
-            "sign_discordance": component_policy,
+            "p_value_combiner": (
+                "max(p_cbase,p_dig,p_mutsig)" if enabled else not_applicable
+            ),
+            "sign_discordance": (
+                "retain-max-p-direction-not-unanimous" if enabled else not_applicable
+            ),
+            "valid_component_statuses": (
+                ["valid-profile-lrt", "valid-degenerate-null-p-one"] if enabled else []
+            ),
         },
-        "directional_fdr_control": False,
-        "failed_hypothesis": "retain-with-p-one",
-        "family": "one-complete-within-cohort-tested-pair-family",
+        "direction_annotation": {
+            "consensus_rule": (
+                "unanimous-me-or-co-else-not-unanimous" if enabled else not_applicable
+            ),
+            "directional_fdr_control": False,
+            "provider_rule": "rho-negative-me-positive-co-zero-neutral",
+            "reporting_layer": "descriptive-post-rejection",
+            "undefined_rho_rule": "unavailable",
+        },
         "multiplicity": {
+            "descriptive_methods": ["by", "bh"],
             "descriptive_q_threshold": 0.05,
             "descriptive_reporting_layer": "descriptive",
             "primary_method": "by",
             "primary_q_threshold": 0.01,
-            "primary_reporting_layer": (
-                "confirmatory-conditional-on-valid-marginals"
-            ),
+            "primary_reporting_layer": ("confirmatory-conditional-on-valid-marginals"),
             "sensitivity_method": "bh",
             "sensitivity_q_threshold": 0.01,
             "sensitivity_reporting_layer": "nominal-sensitivity",
             "threshold_comparison": "inclusive-less-than-or-equal",
         },
-        "rho_role": "descriptive-post-rejection-annotation",
+        "tested_family": {
+            "epsilon_pretest_filter": "none",
+            "family": "one-complete-within-cohort-tested-pair-family",
+            "feature_ranking": "descending-total-eligible-mutation-event-count",
+            "marginal_effect_pretest_filter": "none",
+            "pair_construction": "all-unordered-pairs-of-ordered-feature-axis",
+            "provider_support": "shared-native-cbase-dig-mutsig",
+            "same_base_missense_nonsense": "exclude-before-fitting-and-testing",
+            "tie_break": "canonical-count-matrix-column-order",
+            "top_k": 500,
+        },
     }
 
 
@@ -264,7 +428,8 @@ def _approval(  # noqa: PLR0913
 def _validate(approval):
     return validate_revision_fit_policy(
         approval,
-        expected_lrt_contract=LRT_CONTRACT,
+        expected_d4_implementation=EXPECTED_D4_IMPLEMENTATION,
+        expected_tested_family=EXPECTED_TESTED_FAMILY,
     )
 
 
@@ -285,9 +450,30 @@ def test_valid_policy_returns_frozen_typed_payloads_and_exact_receipts():
     assert policy.d3.primary_provider == "cbase"
     assert policy.d3.sensitivity_providers == ("dig", "mutsig")
     assert policy.d4.lrt_contract == LRT_CONTRACT
+    assert policy.d4.numerical_implementation == (
+        EXPECTED_D4_IMPLEMENTATION.numerical_implementation
+    )
     assert policy.d4.reference.degrees_of_freedom == 1
+    assert policy.d4.failure_handling.fit == TASK_ABORT_NO_PUBLISHED_ROW
+    assert policy.d4.undefined_rho_degenerate_null_handling == (
+        UNDEFINED_RHO_DEGENERATE_NULL_HANDLING
+    )
     assert policy.d5.conjunction.mode == MAX_P_IUT
+    assert policy.d5.conjunction.component_order == ("cbase", "dig", "mutsig")
+    assert (
+        policy.d5.conjunction.valid_component_statuses
+        == VALID_CONJUNCTION_COMPONENT_STATUSES
+    )
+    assert policy.d5.conjunction.p_value_combiner == CONJUNCTION_P_VALUE_COMBINER
+    assert policy.d5.conjunction.direction_affects_p_or_q is False
+    assert policy.d5.conjunction.effect_unidentifiable == (EFFECT_UNIDENTIFIABLE_POLICY)
+    assert policy.d5.direction_annotation.consensus_rule == DIRECTION_CONSENSUS_RULE
+    assert policy.d5.direction_annotation.directional_fdr_control is False
+    assert policy.d5.component_failure_semantics == COMPONENT_FAILURE_SEMANTICS
+    assert policy.d5.tested_family == EXPECTED_TESTED_FAMILY
     assert policy.d5.multiplicity.primary_q_threshold == 0.01
+    assert policy.d5.multiplicity.descriptive_methods == ("by", "bh")
+    assert policy.d5.multiplicity.descriptive_q_threshold == 0.05
     assert policy.d6.path == NARROW_LOCAL
     assert tuple(policy.receipts) == ("D3", "D4", "D5", "D6")
     d3_receipt = policy.receipts["D3"]
@@ -295,9 +481,12 @@ def test_valid_policy_returns_frozen_typed_payloads_and_exact_receipts():
     assert d3_receipt.canonical_artifact_sha256 == (
         approval.decisions["D3"].canonical_artifact.sha256
     )
-    assert d3_receipt.payload_sha256 == hashlib.sha256(
-        _canonical(_d3(), newline=False),
-    ).hexdigest()
+    assert (
+        d3_receipt.payload_sha256
+        == hashlib.sha256(
+            _canonical(_d3(), newline=False),
+        ).hexdigest()
+    )
     assert d3_receipt.payload["sensitivity_providers"] == ("dig", "mutsig")
     with pytest.raises(TypeError):
         policy.receipts["D7"] = d3_receipt
@@ -307,26 +496,38 @@ def test_valid_policy_returns_frozen_typed_payloads_and_exact_receipts():
         policy.d3.primary_provider = "dig"
 
 
-@pytest.mark.parametrize(
-    ("primary", "sensitivities"),
-    [
-        ("cbase", ["mutsig", "dig"]),
-        ("dig", ["cbase", "mutsig"]),
-        ("mutsig", ["dig", "cbase"]),
-    ],
-)
-def test_d3_accepts_any_primary_and_preserves_signed_sensitivity_order(
+@pytest.mark.parametrize("primary", ["dig", "mutsig"])
+def test_d3_rejects_non_cbase_primary(
     primary,
-    sensitivities,
 ):
     payloads = _payloads()
     payloads["D3"]["primary_provider"] = primary
+    sensitivities = sorted({"cbase", "dig", "mutsig"}.difference({primary}))
     payloads["D3"]["sensitivity_providers"] = sensitivities
+    payloads["D5"] = _d5(component_order=[primary, *sensitivities])
 
-    policy = _validate(_approval(payloads))
+    with pytest.raises(RevisionFitPolicyError, match="primary_provider"):
+        _validate(_approval(payloads))
 
-    assert policy.d3.primary_provider == primary
-    assert policy.d3.sensitivity_providers == tuple(sensitivities)
+
+@pytest.mark.parametrize(
+    "sensitivities",
+    [
+        ["mutsig", "dig"],
+        ["dig"],
+        ["dig", "mutsig", "cbase"],
+        ["dig", "dig"],
+    ],
+)
+def test_d3_rejects_reordered_missing_extra_or_duplicate_sensitivities(
+    sensitivities,
+):
+    payloads = _payloads()
+    payloads["D3"]["sensitivity_providers"] = sensitivities
+    payloads["D5"] = _d5(component_order=["cbase", *sensitivities])
+
+    with pytest.raises(RevisionFitPolicyError, match=r"exactly.*frozen order"):
+        _validate(_approval(payloads))
 
 
 @pytest.mark.parametrize("d6", [_d6_full(), _d6_narrow(), _d6_none()])
@@ -429,6 +630,22 @@ def test_envelope_schema_id_and_contract_are_exact(field, value):
         _validate(approval)
 
 
+def test_d5_v2_contract_remains_invalid_after_family_binding_upgrade():
+    envelope = _envelope("D5", _d5())
+    envelope["contract"] = "conjunction-multiplicity-policy-v2"
+
+    with pytest.raises(RevisionFitPolicyError, match="family-policy-v3"):
+        _validate(_approval(raw_artifacts={"D5": _canonical(envelope)}))
+
+
+def test_d4_v2_contract_remains_invalid_after_marginal_fit_binding_upgrade():
+    envelope = _envelope("D4", _d4())
+    envelope["contract"] = "profile-lrt-pvalue-policy-v2"
+
+    with pytest.raises(RevisionFitPolicyError, match="policy-v3"):
+        _validate(_approval(raw_artifacts={"D4": _canonical(envelope)}))
+
+
 def test_envelope_and_payload_reject_unknown_or_missing_fields():
     envelope = _envelope("D3", _d3())
     envelope["comment"] = "not signed by the contract"
@@ -436,8 +653,62 @@ def test_envelope_and_payload_reject_unknown_or_missing_fields():
         _validate(_approval(raw_artifacts={"D3": _canonical(envelope)}))
 
     payloads = _payloads()
-    del payloads["D5"]["family"]
+    del payloads["D5"]["tested_family"]
     with pytest.raises(RevisionFitPolicyError, match="missing"):
+        _validate(_approval(payloads))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("top_k", 499),
+        ("top_k", True),
+        ("feature_ranking", "descending-distinct-mutated-sample-count"),
+        ("tie_break", "lexical-feature-order"),
+        ("provider_support", "union-cbase-dig-mutsig"),
+        ("pair_construction", "significant-pairs-only"),
+        ("same_base_missense_nonsense", "retain"),
+        ("epsilon_pretest_filter", "epsilon-positive-only"),
+        ("marginal_effect_pretest_filter", "nonzero-marginals-only"),
+        ("family", "one-family-per-direction"),
+    ],
+)
+def test_d5_tested_family_rejects_every_semantic_drift(field, value):
+    with pytest.raises(RevisionFitPolicyError, match=field):
+        _validate(_changed("D5", "tested_family", field, value=value))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "top_k",
+        "feature_ranking",
+        "tie_break",
+        "provider_support",
+        "pair_construction",
+        "same_base_missense_nonsense",
+        "epsilon_pretest_filter",
+        "marginal_effect_pretest_filter",
+        "family",
+    ],
+)
+def test_d5_tested_family_requires_every_exact_key(field):
+    payloads = _payloads()
+    del payloads["D5"]["tested_family"][field]
+
+    with pytest.raises(RevisionFitPolicyError, match=r"missing.*" + field):
+        _validate(_approval(payloads))
+
+
+def test_d5_tested_family_and_multiplicity_reject_unknown_selection_fields():
+    payloads = _payloads()
+    payloads["D5"]["tested_family"]["post_hoc_filter"] = "none"
+    with pytest.raises(RevisionFitPolicyError, match="unknown"):
+        _validate(_approval(payloads))
+
+    payloads = _payloads()
+    payloads["D5"]["multiplicity"]["selected_q_method"] = "by"
+    with pytest.raises(RevisionFitPolicyError, match="unknown"):
         _validate(_approval(payloads))
 
 
@@ -500,8 +771,16 @@ def test_invalid_utf8_and_escaped_surrogates_are_rejected():
     ("path", "value", "message"),
     [
         (("primary_provider",), "other", "primary_provider"),
-        (("sensitivity_providers",), ["dig", "dig"], "each non-primary"),
-        (("sensitivity_providers",), ["cbase", "dig"], "each non-primary"),
+        (
+            ("sensitivity_providers",),
+            ["dig", "dig"],
+            "exactly.*frozen order",
+        ),
+        (
+            ("sensitivity_providers",),
+            ["cbase", "dig"],
+            "exactly.*frozen order",
+        ),
         (("burden_dependent_switching",), True, "forbids burden-dependent"),
         (("burden_dependent_switching",), 0, "JSON boolean"),
         (("rationale",), " ", "nonblank exact string"),
@@ -522,8 +801,10 @@ def test_d3_rejects_uncontrolled_hierarchy(path, value, message):
         (("reference", "degrees_of_freedom"), True),
         (("reference", "tail"), "lower"),
         (("statistic_transform",), "2*(alt-null)"),
-        (("boundary_handling",), "ignore"),
-        (("failure_semantics",), "drop-row"),
+        (("undefined_rho_degenerate_null_handling",), "ignore"),
+        (("failure_handling", "fit"), "set-p-one"),
+        (("failure_handling", "observation_support"), "drop-row"),
+        (("failure_handling", "convergence"), "publish-partial-row"),
         (("validity_evidence", "standard"), "asymptotic-hope"),
         (("validity_evidence", "gate"), "warn-only"),
         (("validity_evidence", "covers"), list(reversed(LRT_VALIDITY_COVERAGE))),
@@ -540,10 +821,180 @@ def test_d4_binds_expected_lrt_contract_supplied_by_caller():
     with pytest.raises(RevisionFitPolicyError, match="required by the caller"):
         validate_revision_fit_policy(
             approval,
-            expected_lrt_contract="different-implementation-v1",
+            expected_d4_implementation=replace(
+                EXPECTED_D4_IMPLEMENTATION,
+                lrt_contract="different-implementation-v1",
+            ),
+            expected_tested_family=EXPECTED_TESTED_FAMILY,
         )
     with pytest.raises(RevisionFitPolicyError, match="nonblank exact string"):
-        validate_revision_fit_policy(approval, expected_lrt_contract=" ")
+        validate_revision_fit_policy(
+            approval,
+            expected_d4_implementation=replace(
+                EXPECTED_D4_IMPLEMENTATION,
+                lrt_contract=" ",
+            ),
+            expected_tested_family=EXPECTED_TESTED_FAMILY,
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("marginal_fit_contract",), "different-marginal-fit-v1"),
+        (("marginal_fit_max_iterations",), 999),
+        (("marginal_fit_total_kkt_tolerance",), 1e-7),
+        (("marginal_fit_bracket_width_tolerance",), 1e-11),
+        (("marginal_fit_fixed_point_tolerance",), 1e-7),
+        (("marginal_fit_flat_likelihood_tie_break",), "pi-one"),
+        (("pair_fit_contract",), "different-fit-v1"),
+        (("pair_fit_max_iterations",), 999),
+        (("pair_fit_total_kkt_tolerance",), 1e-7),
+        (("pair_simplex_tolerance",), 1e-11),
+        (("lrt_nestedness_tolerance",), 1e-7),
+        (("rho_contract",), "different-rho-v1"),
+        (("undefined_rho_lrt_tolerance",), 1e-7),
+        (("log_odds_ratio_contract",), "different-lor-v1"),
+        (
+            ("effect_identifiability", "contract"),
+            "different-identifiability-v1",
+        ),
+        (("effect_identifiability", "relative_tolerance"), 1e-11),
+        (
+            ("effect_identifiability", "identified_status"),
+            "rank-deficient",
+        ),
+        (
+            ("effect_identifiability", "status_vocabulary"),
+            [
+                EFFECT_IDENTIFIED_STATUS,
+                EFFECT_UNDERFLOW_STATUS,
+                EFFECT_RANK_DEFICIENT_STATUS,
+            ],
+        ),
+        (
+            ("effect_identifiability", "nonidentified_statuses"),
+            [EFFECT_UNDERFLOW_STATUS, EFFECT_RANK_DEFICIENT_STATUS],
+        ),
+        (
+            ("effect_identifiability", "nonidentified_effect_blank_fields"),
+            list(reversed(NONIDENTIFIED_EFFECT_BLANK_FIELDS)),
+        ),
+    ],
+)
+def test_d4_signed_numerical_implementation_must_match_runner_exactly(path, value):
+    payloads = _payloads()
+    target = payloads["D4"]["numerical_implementation"]
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = value
+
+    with pytest.raises(RevisionFitPolicyError, match="must equal"):
+        _validate(_approval(payloads))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "marginal_fit_contract",
+        "marginal_fit_max_iterations",
+        "marginal_fit_total_kkt_tolerance",
+        "marginal_fit_bracket_width_tolerance",
+        "marginal_fit_fixed_point_tolerance",
+        "marginal_fit_flat_likelihood_tie_break",
+    ],
+)
+def test_d4_marginal_fit_contract_requires_every_exact_key(field):
+    payloads = _payloads()
+    del payloads["D4"]["numerical_implementation"][field]
+
+    with pytest.raises(RevisionFitPolicyError, match=r"missing.*" + field):
+        _validate(_approval(payloads))
+
+
+def test_d4_marginal_fit_contract_rejects_unknown_key():
+    payloads = _payloads()
+    payloads["D4"]["numerical_implementation"]["marginal_fit_seed"] = 0
+
+    with pytest.raises(RevisionFitPolicyError, match="unknown"):
+        _validate(_approval(payloads))
+
+
+def test_d4_rejects_wrong_expected_contract_type_and_incoherent_statuses():
+    approval = _approval()
+    with pytest.raises(RevisionFitPolicyError, match="D4ImplementationContract"):
+        validate_revision_fit_policy(
+            approval,
+            expected_d4_implementation=LRT_CONTRACT,
+            expected_tested_family=EXPECTED_TESTED_FAMILY,
+        )
+
+    numerical = EXPECTED_D4_IMPLEMENTATION.numerical_implementation
+    effect = replace(
+        numerical.effect_identifiability,
+        nonidentified_statuses=(
+            EFFECT_UNDERFLOW_STATUS,
+            EFFECT_RANK_DEFICIENT_STATUS,
+        ),
+    )
+    with pytest.raises(RevisionFitPolicyError, match="status_vocabulary"):
+        validate_revision_fit_policy(
+            approval,
+            expected_d4_implementation=replace(
+                EXPECTED_D4_IMPLEMENTATION,
+                numerical_implementation=replace(
+                    numerical,
+                    effect_identifiability=effect,
+                ),
+            ),
+            expected_tested_family=EXPECTED_TESTED_FAMILY,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("marginal_fit_contract", " ", "nonblank exact string"),
+        ("marginal_fit_max_iterations", 0, "must be positive"),
+        ("marginal_fit_max_iterations", True, "nonnegative JSON integer"),
+        ("marginal_fit_total_kkt_tolerance", 0.0, "positive finite"),
+        ("marginal_fit_bracket_width_tolerance", np.inf, "positive finite"),
+        ("marginal_fit_fixed_point_tolerance", np.nan, "positive finite"),
+        ("marginal_fit_flat_likelihood_tie_break", " ", "nonblank exact string"),
+    ],
+)
+def test_d4_rejects_invalid_expected_marginal_fit_contract(field, value, message):
+    numerical = replace(
+        EXPECTED_D4_IMPLEMENTATION.numerical_implementation,
+        **{field: value},
+    )
+
+    with pytest.raises(RevisionFitPolicyError, match=message):
+        validate_revision_fit_policy(
+            _approval(),
+            expected_d4_implementation=replace(
+                EXPECTED_D4_IMPLEMENTATION,
+                numerical_implementation=numerical,
+            ),
+            expected_tested_family=EXPECTED_TESTED_FAMILY,
+        )
+
+
+def test_d5_rejects_wrong_or_drifting_caller_tested_family_contract():
+    approval = _approval()
+    with pytest.raises(RevisionFitPolicyError, match="TestedFamilyPolicy"):
+        validate_revision_fit_policy(
+            approval,
+            expected_d4_implementation=EXPECTED_D4_IMPLEMENTATION,
+            expected_tested_family={"top_k": 500},
+        )
+
+    with pytest.raises(RevisionFitPolicyError, match=r"expected_tested_family\.top_k"):
+        validate_revision_fit_policy(
+            approval,
+            expected_d4_implementation=EXPECTED_D4_IMPLEMENTATION,
+            expected_tested_family=replace(EXPECTED_TESTED_FAMILY, top_k=499),
+        )
 
 
 @pytest.mark.parametrize(
@@ -551,17 +1002,31 @@ def test_d4_binds_expected_lrt_contract_supplied_by_caller():
     [
         (("conjunction", "invalid_component"), "drop-component"),
         (("conjunction", "missing_component"), "drop-pair"),
-        (("conjunction", "sign_discordance"), "majority-vote"),
-        (("family",), "significant-pairs-only"),
-        (("failed_hypothesis",), "omit"),
+        (("conjunction", "component_order"), ["cbase", "dig", "dig"]),
+        (
+            ("conjunction", "valid_component_statuses"),
+            ["valid-degenerate-null-p-one", "valid-profile-lrt"],
+        ),
+        (("conjunction", "p_value_combiner"), "minimum"),
+        (("conjunction", "sign_discordance"), "set-conjunction-p-to-one"),
+        (("conjunction", "effect_unidentifiable"), "set-p-one"),
+        (("conjunction", "direction_affects_p_or_q"), True),
+        (("component_failure_semantics",), "retain-with-p-one"),
+        (("direction_annotation", "provider_rule"), "rho-sign-majority"),
+        (("direction_annotation", "undefined_rho_rule"), "neutral"),
+        (("direction_annotation", "consensus_rule"), "majority-me-or-co"),
+        (("direction_annotation", "reporting_layer"), "confirmatory"),
+        (("direction_annotation", "directional_fdr_control"), True),
+        (("tested_family", "family"), "significant-pairs-only"),
         (("multiplicity", "primary_method"), "bh"),
         (("multiplicity", "sensitivity_method"), "by"),
         (("multiplicity", "primary_q_threshold"), 0.0100001),
         (("multiplicity", "primary_q_threshold"), True),
         (("multiplicity", "descriptive_q_threshold"), 0.1),
+        (("multiplicity", "descriptive_methods"), ["bh", "by"]),
+        (("multiplicity", "descriptive_methods"), ["by"]),
+        (("multiplicity", "descriptive_methods"), ["by", "bh", "bonferroni"]),
         (("multiplicity", "threshold_comparison"), "strict-less-than"),
-        (("rho_role",), "directional-test"),
-        (("directional_fdr_control",), True),
     ],
 )
 def test_d5_rejects_partial_families_ad_hoc_multiplicity_or_direction(path, value):
@@ -573,11 +1038,33 @@ def test_d5_no_conjunction_requires_explicit_not_applicable_component_policies()
     payloads = _payloads()
     payloads["D3"] = _d3(conjunction_role="omitted")
     payloads["D5"] = _d5(mode=NO_CONJUNCTION)
-    payloads["D5"]["conjunction"]["missing_component"] = (
-        "set-conjunction-p-to-one"
-    )
+    payloads["D5"]["conjunction"]["missing_component"] = "retain-with-p-one"
 
     with pytest.raises(RevisionFitPolicyError, match="not-applicable-no-conjunction"):
+        _validate(_approval(payloads))
+
+
+def test_d5_no_conjunction_has_no_smuggled_components_or_consensus_rule():
+    payloads = _payloads()
+    payloads["D3"] = _d3(conjunction_role="omitted")
+    payloads["D5"] = _d5(mode=NO_CONJUNCTION)
+
+    policy = _validate(_approval(payloads))
+
+    assert policy.d5.conjunction.component_order == ()
+    assert policy.d5.conjunction.valid_component_statuses == ()
+    assert policy.d5.conjunction.p_value_combiner == ("not-applicable-no-conjunction")
+    assert policy.d5.direction_annotation.consensus_rule == (
+        "not-applicable-no-conjunction"
+    )
+    assert policy.d5.component_failure_semantics == ("not-applicable-no-conjunction")
+
+
+def test_d3_and_d5_provider_orders_must_agree():
+    payloads = _payloads()
+    payloads["D5"] = _d5(component_order=["cbase", "mutsig", "dig"])
+
+    with pytest.raises(RevisionFitPolicyError, match="provider hierarchy"):
         _validate(_approval(payloads))
 
 
