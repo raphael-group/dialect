@@ -60,6 +60,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -86,11 +87,24 @@ from analysis.materialize_tcga_revision_provider_inputs import (
     validate_materialized_provider_cohort_input,
     validate_materialized_provider_input_bundle,
 )
-from analysis.mutsig_lambda_co import build_lambda_pmfs, load_lambda
+from analysis.mutsig_lambda_co import (
+    PRODUCTION_POISSON_NORMALIZATION,
+    PRODUCTION_POISSON_STORAGE_CONTRACT,
+    PRODUCTION_POISSON_SUPPORT_CONTRACT,
+    PRODUCTION_POISSON_SUPPORT_RULE,
+    PRODUCTION_POISSON_TAIL_TOLERANCE,
+    build_native_poisson_pmfs,
+    build_poisson_support_contract,
+    estimate_native_poisson_pmf_storage,
+    validate_poisson_support_contract,
+)
 from dialect.data.revision_approval import (
+    APPROVAL_SCHEMA,
     DECISION_IDS,
     FIT_SEALED_TCGA_K500_STAGE,
     MATERIALIZE_FINAL_INPUTS_STAGE,
+    STAGE_MINIMUM_DECISIONS,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
     DecisionApproval,
     RevisionApproval,
     validate_revision_approval,
@@ -127,7 +141,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
     from typing import TextIO
 
-SCHEMA_VERSION = "2.0.0"
+# Version 3 is intentionally incompatible with observed-kmax-truncated MutSig PMFs.
+SCHEMA_VERSION = "3.0.0"
 TOP_K = 500
 BMRS = ("cbase", "dig", "mutsig")
 TESTED_FAMILY_FEATURE_RANKING = "descending-total-eligible-mutation-event-count"
@@ -249,6 +264,10 @@ MUTSIG_MAF_BINDING_REQUIREMENT = (
 )
 MUTSIG_PATCH_PATH = Path("external/mutsig2cv_octave_dialect.patch")
 MUTSIG_RUNNER_PATH = Path("scripts/run_mutsig_octave.sh")
+MUTSIG_NATIVE_FWRITE_ENDIAN_CONTRACT = (
+    "octave-native-fwrite-little-endian-host-required-v1"
+)
+MUTSIG_TENSOR_LAYOUT_CANARY = "nonuniform-2x3x2-fortran-gene-patient-effect-m0-n1-v1"
 MUTSIG_RECEIPT_KEYS = frozenset(
     {
         "schema_version",
@@ -458,6 +477,47 @@ class RunPaths:
     expected_canonical_input_sha256: str | None = None
     provider_input_root: Path | None = None
     expected_provider_input_manifest_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class ScientificFileSnapshot:
+    """Immutable bytes and descriptor stat captured by one stable file read."""
+
+    label: str
+    path: Path
+    content: bytes
+    stat_result: os.stat_result
+
+    def record(self) -> dict[str, Any]:
+        """Return the public receipt derived from these exact captured bytes."""
+        return {
+            "path": self.path.as_posix(),
+            "bytes": len(self.content),
+            "ctime_ns": self.stat_result.st_ctime_ns,
+            "device": self.stat_result.st_dev,
+            "inode": self.stat_result.st_ino,
+            "mtime_ns": self.stat_result.st_mtime_ns,
+            "mode": self.stat_result.st_mode,
+            "nlink": self.stat_result.st_nlink,
+            "sha256": hashlib.sha256(self.content).hexdigest(),
+            "uid": self.stat_result.st_uid,
+        }
+
+
+@dataclass(frozen=True)
+class CohortScientificSnapshot:
+    """One parse-once scientific snapshot used by all contract computations."""
+
+    files: Mapping[str, ScientificFileSnapshot]
+    counts: pd.DataFrame
+    authoritative_samples: tuple[str, ...]
+    cbase_pmfs: Mapping[str, Mapping[int, float]]
+    dig_pmfs: Mapping[str, Mapping[int, float]]
+    mutsig_metadata: Mapping[str, int]
+    mutsig_genes: tuple[str, ...]
+    mutsig_patients: tuple[str, ...]
+    mutsig_lambdas: np.ndarray
+    mutsig_receipt: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -1390,6 +1450,58 @@ def _read_secure_regular_bytes(path: Path, *, label: str) -> bytes:
     return content
 
 
+def _read_visible_regular_with_stat(
+    path: Path,
+    *,
+    label: str,
+) -> tuple[bytes, os.stat_result]:
+    """Read a stable file and prove the persistent path still names its inode."""
+    _require_safe_basename(path.name, label=label)
+    parent_fd = _open_secure_directory(path.parent, label=f"{label} parent")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path.name, flags, dir_fd=parent_fd)
+        try:
+            before = os.fstat(descriptor)
+            if not stat_module.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                msg = f"{label} must be a single-link regular file."
+                raise ValueError(msg)
+            chunks = []
+            while chunk := os.read(descriptor, _HASH_CHUNK_BYTES):
+                chunks.append(chunk)
+            content = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if (
+                _stable_regular_stat_signature(after)
+                != _stable_regular_stat_signature(before)
+                or len(content) != before.st_size
+            ):
+                msg = f"{label} changed during its visible-entry readback."
+                raise ValueError(msg)
+            _require_regular_entry_identity(
+                parent_fd,
+                path.name,
+                descriptor,
+                label=label,
+            )
+            _require_directory_path_identity(
+                path.parent,
+                parent_fd,
+                label=f"{label} parent",
+            )
+            visible = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if _stable_regular_stat_signature(
+                visible,
+            ) != _stable_regular_stat_signature(before):
+                msg = f"{label} visible path changed during readback."
+                raise ValueError(msg)
+            return content, before
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_fd)
+
+
 def _hash_secure_regular_with_stat(
     path: Path,
     *,
@@ -1825,11 +1937,29 @@ def _validated_fit_approval(
     manifest: Path,
     expected_sha256: str,
 ) -> RevisionApproval:
-    return validate_revision_approval(
+    approval = validate_revision_approval(
         manifest,
         expected_sha256,
         FIT_SEALED_TCGA_K500_STAGE,
     )
+    _require_stage_scoped_fit_approval(approval)
+    return approval
+
+
+def _require_stage_scoped_fit_approval(
+    approval: RevisionApproval,
+) -> None:
+    """Require production v5 fit authority with exactly the D1-D6 scope."""
+    required_decisions = STAGE_MINIMUM_DECISIONS[FIT_SEALED_TCGA_K500_STAGE]
+    if (
+        approval.schema != STAGE_SCOPED_APPROVAL_SCHEMA
+        or tuple(approval.decisions) != required_decisions
+    ):
+        msg = (
+            "Production K=500 fitting requires the stage-scoped v5 fit approval "
+            "with exactly D1-D6."
+        )
+        raise ValueError(msg)
 
 
 def _signed_tested_family_record(paths: RunPaths) -> dict[str, Any] | None:
@@ -1879,7 +2009,7 @@ def _fit_policy_record(policy: RevisionFitPolicy) -> dict[str, Any]:
 def _decision_reauthorization_record(
     decision: DecisionApproval,
 ) -> dict[str, Any]:
-    """Return decision semantics that must remain exact across approval stages."""
+    """Return stage-independent semantics that must match on reauthorization."""
     return {
         "decision_id": decision.decision_id,
         "disposition": decision.disposition,
@@ -1894,7 +2024,6 @@ def _decision_reauthorization_record(
         "rerun_or_reuse_consequence": decision.rerun_or_reuse_consequence,
         "permitted_claims": decision.permitted_claims,
         "forbidden_claims": decision.forbidden_claims,
-        "allowed_stages": decision.allowed_stages,
     }
 
 
@@ -1971,6 +2100,7 @@ def _require_fit_stage_binding(
 ) -> dict[str, str]:
     """Bind fit authority to the two independently pinned input roots."""
     if isinstance(approval, RevisionApproval):
+        _require_stage_scoped_fit_approval(approval)
         allowed_stages: object = approval.allowed_stages
         bindings: object = approval.stage_bindings
     else:
@@ -2210,6 +2340,7 @@ def _approval_manifest_decisions(  # noqa: PLR0913
     expected_sha256: str,
     expected_stage: str,
     expected_decision_ids: tuple[str, ...],
+    allowed_schemas: tuple[str, ...],
     label: str,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if not isinstance(authority, dict) or set(authority) != {
@@ -2233,15 +2364,37 @@ def _approval_manifest_decisions(  # noqa: PLR0913
         label=f"{label} approval manifest",
     )
     manifest = _read_json(expected_path)
+    schema = manifest.get("schema")
+    allowed_stages = manifest.get("allowed_stages")
     decisions = manifest.get("decisions")
+    if schema not in allowed_schemas:
+        msg = f"Pinned {label} approval has an invalid schema."
+        raise ValueError(msg)
+    if schema == APPROVAL_SCHEMA:
+        canonical_decision_ids = DECISION_IDS
+        valid_stage_envelope = allowed_stages == [expected_stage]
+    elif schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+        minimum_decisions = STAGE_MINIMUM_DECISIONS.get(expected_stage)
+        if minimum_decisions is None or expected_decision_ids != minimum_decisions:
+            msg = f"Pinned {label} approval expected decision scope is invalid."
+            raise ValueError(msg)
+        canonical_decision_ids = expected_decision_ids
+        valid_stage_envelope = allowed_stages == [expected_stage]
+    else:
+        msg = f"Pinned {label} approval expects an unsupported schema."
+        raise ValueError(msg)
+    if not valid_stage_envelope:
+        msg = f"Pinned {label} approval has an invalid stage envelope."
+        raise ValueError(msg)
     if not isinstance(decisions, list) or [
         decision.get("decision_id") if isinstance(decision, dict) else None
         for decision in decisions
-    ] != list(DECISION_IDS):
+    ] != list(canonical_decision_ids):
         msg = f"Pinned {label} approval has a noncanonical decision sequence."
         raise ValueError(msg)
+    decision_by_id = {decision["decision_id"]: decision for decision in decisions}
     observed = {
-        decision_id: _json_sha256(decisions[DECISION_IDS.index(decision_id)])
+        decision_id: _json_sha256(decision_by_id[decision_id])
         for decision_id in expected_decision_ids
     }
     expected = authority["decision_digests"]
@@ -2755,6 +2908,7 @@ def _verify_frozen_cohort_authority(
         expected_sha256=expected_input_sha256,
         expected_stage=MATERIALIZE_FINAL_INPUTS_STAGE,
         expected_decision_ids=("D1", "D2"),
+        allowed_schemas=(STAGE_SCOPED_APPROVAL_SCHEMA,),
         label="input",
     )
     _require_materialize_stage_binding(input_manifest)
@@ -2764,6 +2918,7 @@ def _verify_frozen_cohort_authority(
         expected_sha256=expected_fit_sha256,
         expected_stage=FIT_SEALED_TCGA_K500_STAGE,
         expected_decision_ids=("D1", "D2", "D3", "D4", "D5", "D6"),
+        allowed_schemas=(STAGE_SCOPED_APPROVAL_SCHEMA,),
         label="fit",
     )
     _require_fit_stage_binding(fit_manifest, paths)
@@ -2957,6 +3112,9 @@ def _require_tested_family_contract(
     require_signed_k500: bool,
 ) -> None:
     """Cross-check family metadata against the actual selection and pair universe."""
+    if contract.get("schema_version") != SCHEMA_VERSION:
+        msg = "Cohort contract schema version is incompatible with this runner."
+        raise ValueError(msg)
     top_k = contract.get("top_k")
     implemented = _implemented_tested_family(top_k)
     if contract.get("tested_family") != asdict(implemented):
@@ -2989,6 +3147,64 @@ def _require_tested_family_contract(
     if tuple(BMRS) != ("cbase", "dig", "mutsig"):
         msg = "Runner BMR provider order does not match tested-family support."
         raise RuntimeError(msg)
+    mutsig_pmf = contract.get("mutsig_pmf_contract")
+    if not isinstance(mutsig_pmf, dict):
+        msg = "Cohort contract lacks the closed MutSig PMF support contract."
+        raise TypeError(msg)
+    max_native_lambda = mutsig_pmf.get("max_selected_native_lambda")
+    observed_kmax = mutsig_pmf.get("observed_kmax")
+    if (
+        not isinstance(max_native_lambda, (int, float))
+        or isinstance(max_native_lambda, bool)
+        or not isinstance(observed_kmax, int)
+        or isinstance(observed_kmax, bool)
+    ):
+        msg = "Cohort MutSig PMF support coordinates are invalid."
+        raise TypeError(msg)
+    canonical_mutsig_pmf = validate_poisson_support_contract(
+        mutsig_pmf,
+        max_native_lambda=float(max_native_lambda),
+        observed_kmax=observed_kmax,
+    )
+    if (
+        canonical_mutsig_pmf["contract"] != PRODUCTION_POISSON_SUPPORT_CONTRACT
+        or canonical_mutsig_pmf["support_rule"] != PRODUCTION_POISSON_SUPPORT_RULE
+        or canonical_mutsig_pmf["normalization"] != PRODUCTION_POISSON_NORMALIZATION
+        or canonical_mutsig_pmf["tail_tolerance"] != PRODUCTION_POISSON_TAIL_TOLERANCE
+        or canonical_mutsig_pmf["effect_pages"] != MUTSIG_EFFECT_INDEX
+    ):
+        msg = "Runner MutSig PMF constants drifted from the production contract."
+        raise RuntimeError(msg)
+    samples = contract.get("samples")
+    sample_count = samples.get("count") if isinstance(samples, dict) else None
+    storage = contract.get("mutsig_pmf_storage_contract")
+    if (
+        not isinstance(sample_count, int)
+        or isinstance(sample_count, bool)
+        or not isinstance(storage, dict)
+    ):
+        msg = "Cohort contract lacks its MutSig PMF storage estimate."
+        raise TypeError(msg)
+    expected_storage = estimate_native_poisson_pmf_storage(
+        len(features),
+        sample_count,
+        canonical_mutsig_pmf["inclusive_support_k"],
+    )
+    if (
+        storage != expected_storage
+        or storage.get("contract") != PRODUCTION_POISSON_STORAGE_CONTRACT
+    ):
+        msg = "Cohort MutSig PMF storage estimate drifted from its frozen axes."
+        raise ValueError(msg)
+    mutsig_inputs = contract.get("inputs", {}).get("mutsig", {})
+    tensor_encoding = (
+        mutsig_inputs.get("tensor_encoding")
+        if isinstance(mutsig_inputs, dict)
+        else None
+    )
+    if tensor_encoding != _mutsig_tensor_encoding_record(read_only=True):
+        msg = "Cohort MutSig native-endian tensor encoding contract drifted."
+        raise ValueError(msg)
     if require_signed_k500:
         authority = contract.get("revision_input_authority")
         fit_policy = (
@@ -3031,7 +3247,10 @@ def _parse_counts_csv(raw: bytes, *, label: str) -> pd.DataFrame:
     ):
         msg = f"Count matrix values must be finite nonnegative integers: {label}"
         raise ValueError(msg)
-    return numeric.astype(np.int64)
+    counts = numeric.astype(np.int64)
+    for block in counts._mgr.blocks:  # noqa: SLF001
+        block.values.flags.writeable = False  # noqa: PD011
+    return counts
 
 
 def _read_counts(path: Path) -> pd.DataFrame:
@@ -3089,8 +3308,13 @@ def _load_strict_pmfs(path: Path) -> dict[str, dict[int, float]]:
     )
 
 
-def _read_canonical_utf8_lines(path: Path, *, label: str) -> list[str]:
-    raw = _read_secure_regular_bytes(path, label=label)
+def _parse_canonical_utf8_lines(
+    raw: bytes,
+    *,
+    path: Path,
+    label: str,
+) -> list[str]:
+    """Parse one canonical UTF-8/LF sidecar from already captured bytes."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -3103,9 +3327,22 @@ def _read_canonical_utf8_lines(path: Path, *, label: str) -> list[str]:
     return values
 
 
-def _read_mutsig_metadata(path: Path) -> dict[str, int]:
+def _read_canonical_utf8_lines(path: Path, *, label: str) -> list[str]:
+    return _parse_canonical_utf8_lines(
+        _read_secure_regular_bytes(path, label=label),
+        path=path,
+        label=label,
+    )
+
+
+def _parse_mutsig_metadata(raw: bytes, *, path: Path) -> dict[str, int]:
+    """Parse MutSig dimensions from the snapshot rather than reopening a path."""
     fields: dict[str, int] = {}
-    for line in _read_canonical_utf8_lines(path, label="MutSig metadata"):
+    for line in _parse_canonical_utf8_lines(
+        raw,
+        path=path,
+        label="MutSig metadata",
+    ):
         pieces = line.split("\t")
         if len(pieces) != 2 or pieces[0] in fields or not pieces[1].isdigit():
             msg = f"Invalid MutSig metadata row in {path}"
@@ -3120,8 +3357,26 @@ def _read_mutsig_metadata(path: Path) -> dict[str, int]:
     return fields
 
 
-def _read_axis(path: Path, expected: int, *, label: str) -> list[str]:
-    values = _read_canonical_utf8_lines(path, label=f"MutSig {label} axis")
+def _read_mutsig_metadata(path: Path) -> dict[str, int]:
+    return _parse_mutsig_metadata(
+        _read_secure_regular_bytes(path, label="MutSig metadata"),
+        path=path,
+    )
+
+
+def _parse_axis(
+    raw: bytes,
+    expected: int,
+    *,
+    path: Path,
+    label: str,
+) -> list[str]:
+    """Parse one unique MutSig axis from already captured bytes."""
+    values = _parse_canonical_utf8_lines(
+        raw,
+        path=path,
+        label=f"MutSig {label} axis",
+    )
     if len(values) != expected or any(
         not value or value != value.strip() for value in values
     ):
@@ -3133,9 +3388,17 @@ def _read_axis(path: Path, expected: int, *, label: str) -> list[str]:
     return values
 
 
-def _read_authoritative_sample_axis(path: Path) -> list[str]:
-    """Read the materialized axis in its canonical UTF-8/LF byte convention."""
-    raw = _read_secure_regular_bytes(path, label="MutSig axis")
+def _read_axis(path: Path, expected: int, *, label: str) -> list[str]:
+    return _parse_axis(
+        _read_secure_regular_bytes(path, label=f"MutSig {label} axis"),
+        expected,
+        path=path,
+        label=label,
+    )
+
+
+def _parse_authoritative_sample_axis(raw: bytes, *, path: Path) -> list[str]:
+    """Parse the canonical materialized tumor axis from snapshot bytes."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -3161,10 +3424,22 @@ def _read_authoritative_sample_axis(path: Path) -> list[str]:
     return values
 
 
-def _read_mutsig_receipt(path: Path) -> dict[str, str]:
-    """Read the receipt published last by the tracked MutSig runner."""
+def _read_authoritative_sample_axis(path: Path) -> list[str]:
+    """Read the materialized axis in its canonical UTF-8/LF byte convention."""
+    return _parse_authoritative_sample_axis(
+        _read_secure_regular_bytes(path, label="MutSig axis"),
+        path=path,
+    )
+
+
+def _parse_mutsig_receipt(raw: bytes, *, path: Path) -> dict[str, str]:
+    """Parse the closed MutSig receipt from already captured bytes."""
     fields: dict[str, str] = {}
-    for line in _read_canonical_utf8_lines(path, label="MutSig receipt"):
+    for line in _parse_canonical_utf8_lines(
+        raw,
+        path=path,
+        label="MutSig receipt",
+    ):
         pieces = line.split("\t")
         if len(pieces) != 2 or not pieces[0] or not pieces[1] or pieces[0] in fields:
             msg = f"Invalid MutSig receipt row in {path}"
@@ -3181,16 +3456,261 @@ def _read_mutsig_receipt(path: Path) -> dict[str, str]:
     return fields
 
 
-def _validate_mutsig_receipt(
+def _read_mutsig_receipt(path: Path) -> dict[str, str]:
+    """Read the receipt published last by the tracked MutSig runner."""
+    return _parse_mutsig_receipt(
+        _read_secure_regular_bytes(path, label="MutSig receipt"),
+        path=path,
+    )
+
+
+def _require_little_endian_mutsig_platform() -> dict[str, str]:
+    """Reject hosts that cannot interpret the producer's native-endian fwrite."""
+    if sys.byteorder != "little":
+        msg = (
+            "MutSig production input is native-endian Octave fwrite output; "
+            "this runner requires sys.byteorder == 'little'."
+        )
+        raise RuntimeError(msg)
+    return {
+        "contract": MUTSIG_NATIVE_FWRITE_ENDIAN_CONTRACT,
+        "producer_fwrite_byte_order": "native",
+        "required_consumer_sys_byteorder": "little",
+        "observed_consumer_sys_byteorder": sys.byteorder,
+    }
+
+
+def _reshape_mutsig_lambda_bytes(
+    raw: bytes,
+    dimensions: Mapping[str, int],
+    *,
+    path: Path,
+) -> np.ndarray:
+    """Return one read-only ``<f4`` Fortran gene/patient/effect tensor view."""
+    ng = dimensions["ng"]
+    patient_count = dimensions["np"]
+    effect_count = dimensions["neff"]
+    expected_bytes = ng * patient_count * effect_count * np.dtype("<f4").itemsize
+    if len(raw) != expected_bytes:
+        msg = (
+            f"MutSig lambda tensor has {len(raw)} bytes; metadata requires "
+            f"{expected_bytes}: {path}"
+        )
+        raise ValueError(msg)
+    tensor = np.frombuffer(raw, dtype="<f4").reshape(
+        (ng, patient_count, effect_count),
+        order="F",
+    )
+    tensor.flags.writeable = False
+    if tensor.dtype != np.dtype("<f4") or not tensor.flags.f_contiguous:
+        msg = "MutSig lambda tensor lost its little-endian Fortran layout."
+        raise RuntimeError(msg)
+    return tensor
+
+
+def _require_mutsig_tensor_layout_canary() -> str:
+    """Exercise a nonuniform tensor that detects C-order and M/N page swaps."""
+    expected = np.empty((2, 3, 2), dtype="<f4", order="F")
+    for gene_position in range(2):
+        for patient_position in range(3):
+            for effect_position in range(2):
+                expected[gene_position, patient_position, effect_position] = (
+                    100 * gene_position + 10 * patient_position + effect_position + 0.25
+                )
+    parsed = _reshape_mutsig_lambda_bytes(
+        expected.tobytes(order="F"),
+        {"ng": 2, "np": 3, "neff": 2},
+        path=Path("<internal-layout-canary>"),
+    )
+    if (
+        MUTSIG_EFFECT_INDEX != {"M": 0, "N": 1}
+        or not np.array_equal(parsed, expected)
+        or float(parsed[1, 2, MUTSIG_EFFECT_INDEX["M"]]) != 120.25
+        or float(parsed[1, 2, MUTSIG_EFFECT_INDEX["N"]]) != 121.25
+        or parsed.flags.writeable
+    ):
+        msg = "MutSig nonuniform tensor layout canary failed."
+        raise RuntimeError(msg)
+    return MUTSIG_TENSOR_LAYOUT_CANARY
+
+
+def _mutsig_tensor_encoding_record(*, read_only: bool) -> dict[str, Any]:
+    """Return the exact native-fwrite interpretation bound into each contract."""
+    return {
+        **_require_little_endian_mutsig_platform(),
+        "dtype": "<f4",
+        "effect_pages": dict(MUTSIG_EFFECT_INDEX),
+        "layout_canary": _require_mutsig_tensor_layout_canary(),
+        "order": "Fortran-(gene,patient,effect)",
+        "read_only": read_only,
+    }
+
+
+def _freeze_pmfs(
+    pmfs: dict[str, dict[int, float]],
+) -> Mapping[str, Mapping[int, float]]:
+    """Freeze parsed PMFs so every later stage consumes the same objects."""
+    return MappingProxyType(
+        {
+            feature: MappingProxyType(dict(probabilities))
+            for feature, probabilities in pmfs.items()
+        },
+    )
+
+
+def _snapshot_scientific_file(path: Path, *, label: str) -> ScientificFileSnapshot:
+    """Capture exactly one stable descriptor read for one scientific input."""
+    content, observed = _read_secure_regular_with_stat(path, label=label)
+    return ScientificFileSnapshot(label, path, content, observed)
+
+
+def _build_cohort_scientific_snapshot(
+    *,
+    count_path: Path,
+    sample_axis_path: Path,
+    cbase_path: Path,
+    dig_path: Path,
+    mutsig_dir: Path,
+) -> CohortScientificSnapshot:
+    """Read and parse the complete cohort scientific input set exactly once."""
+    _require_little_endian_mutsig_platform()
+    _require_mutsig_tensor_layout_canary()
+    paths = {
+        "counts": (count_path, "count matrix"),
+        "sample_axis": (sample_axis_path, "authoritative sample axis"),
+        "cbase": (cbase_path, "CBaSE PMFs"),
+        "dig": (dig_path, "DIG PMFs"),
+        "mutsig_metadata": (
+            mutsig_dir / "persample_meta.txt",
+            "MutSig metadata",
+        ),
+        "mutsig_genes": (
+            mutsig_dir / "persample_genes.txt",
+            "MutSig gene axis",
+        ),
+        "mutsig_patients": (
+            mutsig_dir / "persample_patients.txt",
+            "MutSig patient axis",
+        ),
+        "mutsig_lambda": (
+            mutsig_dir / "persample_lambda.f32",
+            "MutSig lambda tensor",
+        ),
+        "mutsig_receipt": (
+            mutsig_dir / "persample_receipt.tsv",
+            "MutSig receipt",
+        ),
+    }
+    files = {
+        name: _snapshot_scientific_file(path, label=label)
+        for name, (path, label) in paths.items()
+    }
+    metadata_file = files["mutsig_metadata"]
+    metadata = _parse_mutsig_metadata(
+        metadata_file.content,
+        path=metadata_file.path,
+    )
+    genes_file = files["mutsig_genes"]
+    genes = _parse_axis(
+        genes_file.content,
+        metadata["ng"],
+        path=genes_file.path,
+        label="gene",
+    )
+    patients_file = files["mutsig_patients"]
+    patients = _parse_axis(
+        patients_file.content,
+        metadata["np"],
+        path=patients_file.path,
+        label="patient",
+    )
+    lambda_file = files["mutsig_lambda"]
+    lambdas = _reshape_mutsig_lambda_bytes(
+        lambda_file.content,
+        metadata,
+        path=lambda_file.path,
+    )
+    counts_file = files["counts"]
+    sample_axis_file = files["sample_axis"]
+    cbase_file = files["cbase"]
+    dig_file = files["dig"]
+    receipt_file = files["mutsig_receipt"]
+    return CohortScientificSnapshot(
+        files=MappingProxyType(files),
+        counts=_parse_counts_csv(
+            counts_file.content,
+            label=counts_file.path.as_posix(),
+        ),
+        authoritative_samples=tuple(
+            _parse_authoritative_sample_axis(
+                sample_axis_file.content,
+                path=sample_axis_file.path,
+            ),
+        ),
+        cbase_pmfs=_freeze_pmfs(
+            _parse_strict_pmfs_csv(
+                cbase_file.content,
+                label=cbase_file.path.as_posix(),
+            ),
+        ),
+        dig_pmfs=_freeze_pmfs(
+            _parse_strict_pmfs_csv(
+                dig_file.content,
+                label=dig_file.path.as_posix(),
+            ),
+        ),
+        mutsig_metadata=MappingProxyType(metadata),
+        mutsig_genes=tuple(genes),
+        mutsig_patients=tuple(patients),
+        mutsig_lambdas=lambdas,
+        mutsig_receipt=MappingProxyType(
+            _parse_mutsig_receipt(receipt_file.content, path=receipt_file.path),
+        ),
+    )
+
+
+def _stable_stat_coordinates(observed: os.stat_result) -> tuple[int, ...]:
+    """Return stat fields that bind a snapshot to the persistent path object."""
+    return (
+        observed.st_dev,
+        observed.st_ino,
+        observed.st_mode,
+        observed.st_nlink,
+        observed.st_uid,
+        observed.st_size,
+        observed.st_mtime_ns,
+        observed.st_ctime_ns,
+    )
+
+
+def _verify_scientific_snapshot_paths(snapshot: CohortScientificSnapshot) -> None:
+    """Reject any persistent path replacement after snapshot-based computation."""
+    for name, frozen in snapshot.files.items():
+        current, observed = _read_visible_regular_with_stat(
+            frozen.path,
+            label=f"final scientific snapshot readback {name}",
+        )
+        observed_stat = _stable_stat_coordinates(observed)
+        frozen_stat = _stable_stat_coordinates(frozen.stat_result)
+        if current != frozen.content or observed_stat != frozen_stat:
+            msg = (
+                "Scientific input changed or was replaced after its immutable "
+                f"snapshot: {frozen.path}"
+            )
+            raise ValueError(msg)
+
+
+def _validate_mutsig_receipt(  # noqa: PLR0913
     mutsig_dir: Path,
     dimensions: dict[str, int],
     artifact_records: dict[str, dict[str, Any]],
     *,
+    receipt: Mapping[str, str],
+    receipt_record: dict[str, Any],
     authoritative_axis_sha256: str,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """Validate input/source provenance and every receipt-bound sidecar."""
     receipt_path = mutsig_dir / "persample_receipt.tsv"
-    receipt = _read_mutsig_receipt(receipt_path)
     if receipt["schema_version"] != MUTSIG_RECEIPT_SCHEMA_VERSION:
         msg = f"Unsupported MutSig receipt schema in {receipt_path}"
         raise ValueError(msg)
@@ -3251,37 +3771,26 @@ def _validate_mutsig_receipt(
         if receipt[key] != artifact_records[artifact]["sha256"]:
             msg = f"MutSig receipt hash does not match {artifact}: {receipt_path}"
             raise ValueError(msg)
-    return receipt, _file_record(receipt_path)
+    return dict(receipt), receipt_record
 
 
 def _mutsig_contract(
+    snapshot: CohortScientificSnapshot,
     mutsig_dir: Path,
     count_samples: Sequence[str],
     *,
     authoritative_axis_sha256: str,
 ) -> tuple[set[str], dict[str, Any]]:
-    meta_path = mutsig_dir / "persample_meta.txt"
-    genes_path = mutsig_dir / "persample_genes.txt"
-    patients_path = mutsig_dir / "persample_patients.txt"
-    lambda_path = mutsig_dir / "persample_lambda.f32"
-    fields = _read_mutsig_metadata(meta_path)
-    genes = _read_axis(genes_path, fields["ng"], label="gene")
-    patients = _read_axis(patients_path, fields["np"], label="patient")
-    expected_bytes = fields["ng"] * fields["np"] * fields["neff"] * 4
-    lambda_record = _file_record(lambda_path)
-    if lambda_record["bytes"] != expected_bytes:
-        msg = (
-            f"MutSig lambda tensor has {lambda_record['bytes']} bytes; "
-            f"metadata requires {expected_bytes}: {lambda_path}"
-        )
-        raise ValueError(msg)
+    fields = dict(snapshot.mutsig_metadata)
+    genes = snapshot.mutsig_genes
+    patients = snapshot.mutsig_patients
     ordered_count_samples = [str(sample) for sample in count_samples]
     patient_position = {patient: position for position, patient in enumerate(patients)}
     count_sample_set = set(ordered_count_samples)
     patient_set = set(patients)
     missing = [sample for sample in ordered_count_samples if sample not in patient_set]
     extra = [patient for patient in patients if patient not in count_sample_set]
-    if ordered_count_samples != patients:
+    if ordered_count_samples != list(patients):
         msg = (
             "Count-matrix sample axis must exactly equal the ordered MutSig patient "
             f"axis; missing_in_mutsig={missing[:5]}, extra_in_mutsig={extra[:5]}, "
@@ -3293,15 +3802,17 @@ def _mutsig_contract(
     ]
     ordered_axis_sha256 = _sequence_sha256(ordered_count_samples)
     artifact_records = {
-        "lambda": lambda_record,
-        "metadata": _file_record(meta_path),
-        "genes": _file_record(genes_path),
-        "patients": _file_record(patients_path),
+        "lambda": snapshot.files["mutsig_lambda"].record(),
+        "metadata": snapshot.files["mutsig_metadata"].record(),
+        "genes": snapshot.files["mutsig_genes"].record(),
+        "patients": snapshot.files["mutsig_patients"].record(),
     }
     receipt, receipt_record = _validate_mutsig_receipt(
         mutsig_dir,
         fields,
         artifact_records,
+        receipt=snapshot.mutsig_receipt,
+        receipt_record=snapshot.files["mutsig_receipt"].record(),
         authoritative_axis_sha256=authoritative_axis_sha256,
     )
     return set(genes), {
@@ -3333,6 +3844,9 @@ def _mutsig_contract(
             "ordered_mutsig_ids_sha256": ordered_axis_sha256,
             "ordered_mapping_sha256": _sequence_sha256(mapping),
         },
+        "tensor_encoding": _mutsig_tensor_encoding_record(
+            read_only=not snapshot.mutsig_lambdas.flags.writeable,
+        ),
         "files": {**artifact_records, "receipt": receipt_record},
     }
 
@@ -3347,23 +3861,24 @@ def _shared_pmf_has_observation_support(
     )
 
 
-def build_full_support_universe(
+def build_full_support_universe(  # noqa: PLR0913
     counts: pd.DataFrame,
     *,
-    cbase_pmfs: dict[str, dict[int, float]],
-    dig_pmfs: dict[str, dict[int, float]],
-    mutsig_dir: Path,
+    cbase_pmfs: Mapping[str, Mapping[int, float]],
+    dig_pmfs: Mapping[str, Mapping[int, float]],
+    mutsig_lambdas: np.ndarray,
+    mutsig_genes: Sequence[str],
+    mutsig_patients: Sequence[str],
 ) -> tuple[set[str], dict[str, Any]]:
     """Return features with native, full observation support in all three BMRs."""
-    lambdas, mutsig_genes, mutsig_patients = load_lambda(mutsig_dir)
-    if not np.isfinite(lambdas).all() or (lambdas < 0).any():
-        msg = f"MutSig lambda values must be finite and nonnegative: {mutsig_dir}"
+    if not np.isfinite(mutsig_lambdas).all() or (mutsig_lambdas < 0).any():
+        msg = "MutSig lambda values must be finite and nonnegative."
         raise ValueError(msg)
     if len(mutsig_genes) != len(set(mutsig_genes)):
-        msg = f"MutSig gene identifiers must be unique: {mutsig_dir}"
+        msg = "MutSig gene identifiers must be unique."
         raise ValueError(msg)
     if len(mutsig_patients) != len(set(mutsig_patients)):
-        msg = f"MutSig patient identifiers must be unique: {mutsig_dir}"
+        msg = "MutSig patient identifiers must be unique."
         raise ValueError(msg)
     gene_position = {gene: position for position, gene in enumerate(mutsig_genes)}
     patient_position = {
@@ -3414,7 +3929,7 @@ def build_full_support_universe(
                 reasons.append(
                     {"provider": "dig", "reason": "zero_observation_support"},
                 )
-            lambda_values = lambdas[
+            lambda_values = mutsig_lambdas[
                 gene_position[base],
                 sample_positions,
                 MUTSIG_EFFECT_INDEX[effect],
@@ -3646,21 +4161,29 @@ def build_cohort_contract(
         cbase_path = provider_binding["cbase_pmfs"]["path"]
         dig_path = provider_binding["dig_pmfs"]["path"]
         mutsig_dir = provider_binding["mutsig_root"]
-    counts = _read_counts(count_path)
+    snapshot = _build_cohort_scientific_snapshot(
+        count_path=count_path,
+        sample_axis_path=sample_axis_path,
+        cbase_path=cbase_path,
+        dig_path=dig_path,
+        mutsig_dir=mutsig_dir,
+    )
+    counts = snapshot.counts
     ordered_count_samples = [str(sample) for sample in counts.index]
-    authoritative_samples = _read_authoritative_sample_axis(sample_axis_path)
+    authoritative_samples = list(snapshot.authoritative_samples)
     if ordered_count_samples != authoritative_samples:
         msg = (
             "Count-matrix sample axis must exactly equal authoritative "
             f"sample_axis.txt for {cohort}."
         )
         raise ValueError(msg)
-    authoritative_axis_sha256 = _sha256(sample_axis_path)
-    cbase_pmfs = _load_strict_pmfs(cbase_path)
-    dig_pmfs = _load_strict_pmfs(dig_path)
+    authoritative_axis_sha256 = snapshot.files["sample_axis"].record()["sha256"]
+    cbase_pmfs = snapshot.cbase_pmfs
+    dig_pmfs = snapshot.dig_pmfs
     cbase_features = set(cbase_pmfs)
     dig_features = set(dig_pmfs)
     mutsig_genes, mutsig = _mutsig_contract(
+        snapshot,
         mutsig_dir,
         ordered_count_samples,
         authoritative_axis_sha256=authoritative_axis_sha256,
@@ -3699,7 +4222,9 @@ def build_cohort_contract(
         counts,
         cbase_pmfs=cbase_pmfs,
         dig_pmfs=dig_pmfs,
-        mutsig_dir=mutsig_dir,
+        mutsig_lambdas=snapshot.mutsig_lambdas,
+        mutsig_genes=snapshot.mutsig_genes,
+        mutsig_patients=snapshot.mutsig_patients,
     )
     features, totals = select_common_features(
         counts,
@@ -3711,9 +4236,38 @@ def build_cohort_contract(
     )
     selected_counts = counts.loc[:, features]
     selected_observed_kmax = int(selected_counts.to_numpy().max(initial=0))
+    selected_native_rates = _selected_mutsig_native_rates(
+        snapshot.mutsig_lambdas,
+        snapshot.mutsig_genes,
+        snapshot.mutsig_patients,
+        ordered_count_samples,
+        features,
+    )
+    mutsig_pmf_contract = build_poisson_support_contract(
+        _max_selected_native_lambda(selected_native_rates),
+        selected_observed_kmax,
+    )
+    mutsig_pmf_storage_contract = estimate_native_poisson_pmf_storage(
+        len(features),
+        len(selected_counts),
+        mutsig_pmf_contract["inclusive_support_k"],
+    )
+    selected_pmfs: dict[str, Mapping[str, Any]] = {
+        "cbase": MappingProxyType(
+            {feature: cbase_pmfs[feature] for feature in features},
+        ),
+        "dig": MappingProxyType(
+            {feature: dig_pmfs[feature] for feature in features},
+        ),
+        "mutsig": MappingProxyType(
+            build_native_poisson_pmfs(
+                selected_native_rates,
+                mutsig_pmf_contract,
+            ),
+        ),
+    }
     support_audit = {}
-    for bmr in BMRS:
-        pmfs = _task_pmfs(paths, Task(cohort, bmr), selected_counts, features)
+    for bmr, pmfs in selected_pmfs.items():
         support_audit[bmr] = audit_background_support(
             selected_counts,
             features,
@@ -3777,20 +4331,14 @@ def build_cohort_contract(
             "selected_features": len(features),
         },
         "full_support_universe": support_universe,
-        "mutsig_pmf_contract": {
-            "native_lambda_only": True,
-            "lambda_floor": None,
-            "selected_observed_count_min": 0,
-            "selected_observed_count_max": selected_observed_kmax,
-            "poisson_count_keys": [0, selected_observed_kmax],
-            "truncated_pmf_renormalized": True,
-        },
+        "mutsig_pmf_contract": mutsig_pmf_contract,
+        "mutsig_pmf_storage_contract": mutsig_pmf_storage_contract,
         "observed_count_support_audit": support_audit,
         "inputs": {
-            "counts": _file_record(count_path),
-            "sample_axis": _file_record(sample_axis_path),
-            "cbase": _file_record(cbase_path),
-            "dig": _file_record(dig_path),
+            "counts": snapshot.files["counts"].record(),
+            "sample_axis": snapshot.files["sample_axis"].record(),
+            "cbase": snapshot.files["cbase"].record(),
+            "dig": snapshot.files["dig"].record(),
             "mutsig": mutsig,
         },
     }
@@ -3803,6 +4351,7 @@ def build_cohort_contract(
     )
     _require_exact_sample_axis(contract)
     _require_full_observation_support(contract)
+    _verify_scientific_snapshot_paths(snapshot)
     return contract
 
 
@@ -3821,6 +4370,7 @@ def _ensure_contract(
     top_k: int = TOP_K,
 ) -> dict[str, Any]:
     current = build_cohort_contract(paths, cohort, top_k=top_k)
+    _verify_contract_scientific_records(current)
     path = _contract_path(paths, cohort)
     if path.exists():
         existing = _read_json(path)
@@ -3840,6 +4390,18 @@ def _read_frozen_record_bytes(record: object, *, label: str) -> bytes:
     allowed_schemas = (
         {"bytes", "path", "sha256"},
         {"bytes", "mtime_ns", "path", "sha256"},
+        {
+            "bytes",
+            "ctime_ns",
+            "device",
+            "inode",
+            "mode",
+            "mtime_ns",
+            "nlink",
+            "path",
+            "sha256",
+            "uid",
+        },
     )
     if not isinstance(record, dict) or set(record) not in allowed_schemas:
         msg = f"Frozen {label} has an invalid file-record schema."
@@ -3857,21 +4419,118 @@ def _read_frozen_record_bytes(record: object, *, label: str) -> bytes:
         record["sha256"],
         label=f"{path} frozen SHA-256",
     )
-    content = _read_secure_regular_bytes(path, label=f"frozen {label}")
+    content, observed = _read_visible_regular_with_stat(
+        path,
+        label=f"frozen {label}",
+    )
     if len(content) != expected_bytes:
         msg = f"Frozen {label} byte length changed after preflight: {path}"
         raise ValueError(msg)
     if hashlib.sha256(content).hexdigest() != expected_sha256:
         msg = f"Frozen {label} hash changed after preflight: {path}"
         raise ValueError(msg)
+    if "inode" in record:
+        expected_stat = (
+            record["device"],
+            record["inode"],
+            record["mode"],
+            record["nlink"],
+            record["uid"],
+            record["bytes"],
+            record["mtime_ns"],
+            record["ctime_ns"],
+        )
+        if expected_stat != _stable_stat_coordinates(observed):
+            msg = f"Frozen {label} path identity changed after preflight: {path}"
+            raise ValueError(msg)
     return content
+
+
+def _verify_contract_scientific_records(contract: Mapping[str, Any]) -> None:
+    """Perform the final path readback immediately before contract publication."""
+    inputs = contract.get("inputs")
+    mutsig = inputs.get("mutsig") if isinstance(inputs, dict) else None
+    mutsig_files = mutsig.get("files") if isinstance(mutsig, dict) else None
+    if (
+        not isinstance(inputs, dict)
+        or not isinstance(mutsig_files, dict)
+        or set(mutsig_files) != {"genes", "lambda", "metadata", "patients", "receipt"}
+    ):
+        msg = "Cohort contract lacks the complete scientific input record set."
+        raise TypeError(msg)
+    records = {
+        "counts": inputs.get("counts"),
+        "sample_axis": inputs.get("sample_axis"),
+        "cbase": inputs.get("cbase"),
+        "dig": inputs.get("dig"),
+        **{f"mutsig_{name}": record for name, record in mutsig_files.items()},
+    }
+    for name, record in records.items():
+        _read_frozen_record_bytes(record, label=f"pre-publication {name}")
+
+
+def _selected_mutsig_native_rates(
+    lambdas: np.ndarray,
+    genes: Sequence[str],
+    patients: Sequence[str],
+    sample_ids: Sequence[str],
+    features: Sequence[str],
+) -> dict[str, np.ndarray]:
+    """Select exact float32 MutSig rates on the frozen feature and sample axes."""
+    if lambdas.dtype != np.dtype("<f4"):
+        msg = "MutSig lambda tensor is not frozen little-endian float32."
+        raise TypeError(msg)
+    if not np.isfinite(lambdas).all() or (lambdas < 0).any():
+        msg = "MutSig lambda tensor contains an invalid native rate."
+        raise ValueError(msg)
+    gene_index = {gene: index for index, gene in enumerate(genes)}
+    patient_index = {patient: index for index, patient in enumerate(patients)}
+    try:
+        sample_positions = [patient_index[str(sample)] for sample in sample_ids]
+    except KeyError:
+        msg = "Frozen MutSig patient axis does not cover the count matrix."
+        raise ValueError(msg) from None
+
+    rates_by_feature: dict[str, np.ndarray] = {}
+    for feature in features:
+        base, effect = feature.rsplit("_", 1)
+        if base not in gene_index or effect not in MUTSIG_EFFECT_INDEX:
+            msg = "Frozen MutSig gene axis does not cover the feature contract."
+            raise ValueError(msg)
+        rates = np.asarray(
+            lambdas[
+                gene_index[base],
+                sample_positions,
+                MUTSIG_EFFECT_INDEX[effect],
+            ],
+            dtype="<f4",
+        )
+        rates.flags.writeable = False
+        rates_by_feature[feature] = rates
+    return rates_by_feature
+
+
+def _max_selected_native_lambda(rates_by_feature: Mapping[str, np.ndarray]) -> float:
+    """Return the exact binary32 maximum as an exactly representable Python float."""
+    if not rates_by_feature:
+        msg = "MutSig support requires at least one selected native feature."
+        raise ValueError(msg)
+    return max(
+        float(rates.max(initial=np.float32(0))) for rates in rates_by_feature.values()
+    )
 
 
 def _mutsig_pmfs_from_frozen_bytes(
     inputs: dict[str, Any],
     counts: pd.DataFrame,
     features: list[str],
+    pmf_contract: Mapping[str, object],
 ) -> dict[str, Any]:
+    if inputs.get("tensor_encoding") != _mutsig_tensor_encoding_record(
+        read_only=True,
+    ):
+        msg = "Frozen MutSig tensor encoding contract is invalid."
+        raise ValueError(msg)
     files = inputs.get("files")
     if not isinstance(files, dict) or set(files) != {
         "genes",
@@ -3889,68 +4548,45 @@ def _mutsig_pmfs_from_frozen_bytes(
         label="MutSig patient axis",
     )
     lambda_raw = _read_frozen_record_bytes(files["lambda"], label="MutSig lambda")
-    _read_frozen_record_bytes(files["receipt"], label="MutSig receipt")
-    try:
-        metadata = dict(
-            line.split("\t")
-            for line in metadata_raw.decode("utf-8").splitlines()
-            if line
-        )
-        if set(metadata) != {"ng", "np", "neff"}:
-            raise ValueError  # noqa: TRY301
-        ng, patient_count, neff = (
-            int(metadata["ng"]),
-            int(metadata["np"]),
-            int(metadata["neff"]),
-        )
-        genes = genes_raw.decode("utf-8").splitlines()
-        patients = patients_raw.decode("utf-8").splitlines()
-    except (UnicodeDecodeError, TypeError, ValueError):
-        msg = "Frozen MutSig axes or metadata are invalid."
-        raise ValueError(msg) from None
-    if (
-        ng <= 0
-        or patient_count <= 0
-        or neff != 2
-        or len(genes) != ng
-        or len(patients) != patient_count
-        or len(set(genes)) != ng
-        or len(set(patients)) != patient_count
-    ):
-        msg = "Frozen MutSig tensor axes do not match metadata."
-        raise ValueError(msg)
-    float_size = np.dtype("<f4").itemsize
-    if len(lambda_raw) != ng * patient_count * neff * float_size:
-        msg = "Frozen MutSig lambda byte length does not match metadata."
-        raise ValueError(msg)
-    lambdas = np.frombuffer(lambda_raw, dtype="<f4").reshape(
-        (ng, patient_count, neff),
-        order="F",
+    receipt_raw = _read_frozen_record_bytes(files["receipt"], label="MutSig receipt")
+    metadata_path = Path(str(files["metadata"]["path"]))
+    genes_path = Path(str(files["genes"]["path"]))
+    patients_path = Path(str(files["patients"]["path"]))
+    lambda_path = Path(str(files["lambda"]["path"]))
+    receipt_path = Path(str(files["receipt"]["path"]))
+    metadata = _parse_mutsig_metadata(metadata_raw, path=metadata_path)
+    genes = _parse_axis(
+        genes_raw,
+        metadata["ng"],
+        path=genes_path,
+        label="gene",
     )
-    gene_index = {gene: index for index, gene in enumerate(genes)}
-    patient_index = {patient: index for index, patient in enumerate(patients)}
-    try:
-        sample_positions = [patient_index[str(sample)] for sample in counts.index]
-    except KeyError:
-        msg = "Frozen MutSig patient axis does not cover the count matrix."
-        raise ValueError(msg) from None
-    kmax = int(counts.loc[:, features].to_numpy().max(initial=0))
-    support = np.arange(kmax + 1)
-    pmfs: dict[str, Any] = {}
-    for feature in features:
-        base, effect = feature.rsplit("_", 1)
-        if base not in gene_index or effect not in {"M", "N"}:
-            msg = "Frozen MutSig gene axis does not cover the feature contract."
-            raise ValueError(msg)
-        effect_index = 0 if effect == "M" else 1
-        rates = lambdas[gene_index[base], sample_positions, effect_index].astype(float)
-        if not np.isfinite(rates).all() or (rates < 0).any():
-            msg = "Frozen MutSig lambda contains an invalid rate."
-            raise ValueError(msg)
-        values = poisson.pmf(support[None, :], rates[:, None])
-        values /= values.sum(axis=1, keepdims=True)
-        pmfs[feature] = [dict(enumerate(row)) for row in values]
-    return pmfs
+    patients = _parse_axis(
+        patients_raw,
+        metadata["np"],
+        path=patients_path,
+        label="patient",
+    )
+    _parse_mutsig_receipt(receipt_raw, path=receipt_path)
+    lambdas = _reshape_mutsig_lambda_bytes(
+        lambda_raw,
+        metadata,
+        path=lambda_path,
+    )
+    rates_by_feature = _selected_mutsig_native_rates(
+        lambdas,
+        genes,
+        patients,
+        [str(sample) for sample in counts.index],
+        features,
+    )
+    observed_kmax = int(counts.loc[:, features].to_numpy().max(initial=0))
+    validate_poisson_support_contract(
+        pmf_contract,
+        max_native_lambda=_max_selected_native_lambda(rates_by_feature),
+        observed_kmax=observed_kmax,
+    )
+    return build_native_poisson_pmfs(rates_by_feature, pmf_contract)
 
 
 def _load_frozen_scientific_inputs(
@@ -3981,7 +4617,16 @@ def _load_frozen_scientific_inputs(
         if not isinstance(mutsig_inputs, dict):
             msg = "Frozen MutSig input contract is invalid."
             raise TypeError(msg)
-        pmfs = _mutsig_pmfs_from_frozen_bytes(mutsig_inputs, counts, features)
+        pmf_contract = contract.get("mutsig_pmf_contract")
+        if not isinstance(pmf_contract, dict):
+            msg = "Frozen MutSig input contract lacks its PMF support contract."
+            raise TypeError(msg)
+        pmfs = _mutsig_pmfs_from_frozen_bytes(
+            mutsig_inputs,
+            counts,
+            features,
+            pmf_contract,
+        )
     return counts, pmfs
 
 
@@ -4478,31 +5123,32 @@ def _require_corrected_lrt() -> tuple[str, str, str, str, str, str, str]:
     )
 
 
-def _task_pmfs(
+def _task_pmfs(  # noqa: PLR0913
     paths: RunPaths,
     task: Task,
     counts: pd.DataFrame,
     features: list[str],
     *,
     contract: dict[str, Any] | None = None,
+    mutsig_pmf_contract: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     if contract is not None:
-        inputs = contract.get("inputs")
-        if not isinstance(inputs, dict):
-            msg = "Frozen task contract lacks input receipts."
-            raise TypeError(msg)
-        cbase_path = Path(str(inputs["cbase"]["path"]))
-        dig_path = Path(str(inputs["dig"]["path"]))
-        mutsig_dir = Path(str(inputs["mutsig"]["files"]["lambda"]["path"])).parent
-    elif _revision_authority_is_configured(paths):
+        frozen_counts, pmfs = _load_frozen_scientific_inputs(contract, task.bmr)
+        if (
+            list(frozen_counts.index) != list(counts.index)
+            or list(features) != list(contract.get("features", []))
+            or not frozen_counts.loc[:, features].equals(counts.loc[:, features])
+        ):
+            msg = "Frozen task inputs differ from the requested scientific axes."
+            raise ValueError(msg)
+        return pmfs
+    if _revision_authority_is_configured(paths):
         provider_binding = _provider_cohort_binding(paths, task.cohort)
         cohort_dir = provider_binding["cohort_root"]
-        mutsig_dir = provider_binding["mutsig_root"]
         cbase_path = cohort_dir / "bmr_pmfs.csv"
         dig_path = cohort_dir / "bmr_pmfs.dig.csv"
     else:
         cohort_dir = paths.source_root / task.cohort
-        mutsig_dir = paths.mutsig_root / task.cohort
         cbase_path = cohort_dir / "bmr_pmfs.csv"
         dig_path = cohort_dir / "bmr_pmfs.dig.csv"
     if task.bmr in {"cbase", "dig"}:
@@ -4514,19 +5160,14 @@ def _task_pmfs(
             raise ValueError(msg)
         return {feature: all_pmfs[feature] for feature in features}
 
-    selected_counts = counts.loc[:, features]
-    kmax = int(selected_counts.to_numpy().max(initial=0))
-    return build_lambda_pmfs(
-        features,
-        selected_counts.index,
-        mutsig_dir,
-        None,
-        kmax,
-        allow_cbase_fallback=False,
-        require_all_features=True,
-        require_all_samples=True,
-        lambda_floor=None,
-    )
+    if mutsig_pmf_contract is not None:
+        msg = (
+            "Path-based MutSig PMF construction is disabled; use the frozen "
+            "cohort input contract."
+        )
+        raise RuntimeError(msg)
+    msg = "Production MutSig PMFs require a frozen cohort input contract."
+    raise TypeError(msg)
 
 
 def _build_genes(
@@ -5344,6 +5985,9 @@ def validate_task_output(  # noqa: PLR0913
                 "task-manifest-missing",  # noqa: EM101
                 "validate-output",
             )
+        if manifest.get("schema_version") != SCHEMA_VERSION:
+            msg = f"Task manifest schema version is incompatible: {task_dir}"
+            raise ValueError(msg)
         if manifest.get("exit_status") != 0:
             msg = f"Completed task does not record exit_status=0: {task_dir}"
             raise ValueError(msg)
@@ -5382,6 +6026,16 @@ def validate_task_output(  # noqa: PLR0913
         )
         if manifest.get("provider_input_root_receipt") != expected_provider_receipt:
             msg = f"Task provider-root provenance is invalid: {task_dir}"
+            raise ValueError(msg)
+        if manifest.get("mutsig_pmf_contract") != contract.get(
+            "mutsig_pmf_contract",
+        ):
+            msg = f"Task MutSig PMF provenance is invalid: {task_dir}"
+            raise ValueError(msg)
+        if manifest.get("mutsig_pmf_storage_contract") != contract.get(
+            "mutsig_pmf_storage_contract",
+        ):
+            msg = f"Task MutSig PMF storage provenance is invalid: {task_dir}"
             raise ValueError(msg)
         if manifest.get("consumed_input_sha256") != _consumed_input_hashes(
             contract,
@@ -5609,10 +6263,7 @@ def execute_task(
         features = [str(feature) for feature in contract["features"]]
         counts = counts.loc[:, features]
         observed_kmax = int(counts.to_numpy().max(initial=0))
-        if (
-            observed_kmax
-            != contract["mutsig_pmf_contract"]["selected_observed_count_max"]
-        ):
+        if observed_kmax != contract["mutsig_pmf_contract"]["observed_kmax"]:
             msg = "Selected observed count support changed after preflight."
             raise ValueError(msg)  # noqa: TRY301
         if list(pmfs) != features:
@@ -5660,6 +6311,8 @@ def execute_task(
             "contract_sha256": contract_sha256,
             "native_support_only": True,
             "mutsig_cbase_feature_fallback": False,
+            "mutsig_pmf_contract": contract["mutsig_pmf_contract"],
+            "mutsig_pmf_storage_contract": contract["mutsig_pmf_storage_contract"],
             "same_base_pairs_excluded_before_fit": True,
             "lrt_contract": lrt_contract,
             "pair_fit_contract": pair_fit_contract,
@@ -6288,6 +6941,8 @@ def _metadata_task_receipt(
         "lrt_contract",
         "output_recomputation_atol",
         "mutsig_cbase_feature_fallback",
+        "mutsig_pmf_contract",
+        "mutsig_pmf_storage_contract",
         "native_support_only",
         "niceness",
         "observation_support_universe",
@@ -6357,6 +7012,9 @@ def _metadata_task_receipt(
         or manifest.get("exit_status") != 0
         or manifest.get("native_support_only") is not True
         or manifest.get("mutsig_cbase_feature_fallback") is not False
+        or manifest.get("mutsig_pmf_contract") != contract.get("mutsig_pmf_contract")
+        or manifest.get("mutsig_pmf_storage_contract")
+        != contract.get("mutsig_pmf_storage_contract")
         or manifest.get("same_base_pairs_excluded_before_fit") is not True
         or any(manifest.get(key) != value for key, value in expected_provenance.items())
         or manifest.get("contract_sha256") != _json_sha256(contract)

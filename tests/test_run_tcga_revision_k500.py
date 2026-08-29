@@ -2,6 +2,7 @@ import copy
 import csv
 import hashlib
 import json
+import math
 import os
 import subprocess
 import traceback
@@ -12,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from analysis import mutsig_lambda_co
 from analysis import run_tcga_revision_k500 as runner
 from analysis.mutsig_lambda_co import build_lambda_pmfs
 
@@ -355,8 +357,15 @@ def _write_completion_grid(
             start=1,
         )
     }
+    mutsig_pmf_contract = runner.build_poisson_support_contract(0.0, 0)
+    mutsig_pmf_storage_contract = runner.estimate_native_poisson_pmf_storage(
+        1,
+        1,
+        mutsig_pmf_contract["inclusive_support_k"],
+    )
     for cohort in cohorts:
         contract = {
+            "schema_version": runner.SCHEMA_VERSION,
             "cohort": cohort,
             "features": ["A_M"],
             "inputs": {
@@ -364,6 +373,9 @@ def _write_completion_grid(
                 "counts": {"sha256": hashes["counts"]},
                 "dig": {"sha256": hashes["dig"]},
                 "mutsig": {
+                    "tensor_encoding": runner._mutsig_tensor_encoding_record(  # noqa: SLF001
+                        read_only=True,
+                    ),
                     "files": {
                         name: {"sha256": hashes[name]}
                         for name in (
@@ -380,7 +392,10 @@ def _write_completion_grid(
                 "ordered_pair_sha256": runner._sequence_sha256([]),  # noqa: SLF001
                 "row_count": 0,
             },
+            "mutsig_pmf_contract": mutsig_pmf_contract,
+            "mutsig_pmf_storage_contract": mutsig_pmf_storage_contract,
             "provider_input_provenance": {"root_receipt": provider_receipt},
+            "samples": {"count": 1},
             "top_k": runner.TOP_K,
         }
         runner._write_json_atomic(  # noqa: SLF001
@@ -420,6 +435,8 @@ def _write_completion_grid(
                 "log_odds_ratio_contract": (runner.REQUIRED_LOG_ODDS_RATIO_CONTRACT),
                 "lrt_contract": runner.REQUIRED_LRT_CONTRACT,
                 "mutsig_cbase_feature_fallback": False,
+                "mutsig_pmf_contract": mutsig_pmf_contract,
+                "mutsig_pmf_storage_contract": mutsig_pmf_storage_contract,
                 "native_support_only": True,
                 "niceness": {
                     "requested_increment": runner.REQUIRED_NICE_INCREMENT,
@@ -597,6 +614,8 @@ def _embedded_record(root: Path, path: Path) -> dict[str, object]:
 def _write_local_authority_contract(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch | None = None,
+    *,
+    legacy_fit_v4: bool = False,
 ) -> tuple[runner.RunPaths, dict[str, object]]:
     canonical_root = tmp_path / "canonical"
     provider_root = tmp_path / "provider"
@@ -666,8 +685,9 @@ def _write_local_authority_contract(  # noqa: PLR0915
     runner._write_json_atomic(  # noqa: SLF001
         input_approval,
         {
+            "schema": runner.STAGE_SCOPED_APPROVAL_SCHEMA,
             "allowed_stages": [runner.MATERIALIZE_FINAL_INPUTS_STAGE],
-            "decisions": decisions,
+            "decisions": decisions[:2],
             "stage_bindings": {
                 runner.MATERIALIZE_FINAL_INPUTS_STAGE: {
                     "d1_canonical_artifact_sha256": artifact_records["D1"]["sha256"],
@@ -676,7 +696,6 @@ def _write_local_authority_contract(  # noqa: PLR0915
             },
         },
     )
-    runner._write_json_atomic(fit_approval, {"decisions": decisions})  # noqa: SLF001
     input_approval_sha256 = runner._sha256(input_approval)  # noqa: SLF001
     decision_digests = {
         decision["decision_id"]: runner._json_sha256(decision)  # noqa: SLF001
@@ -766,12 +785,16 @@ def _write_local_authority_contract(  # noqa: PLR0915
         "validated_cohort_count": 1,
         "association_outputs_opened": False,
     }
-    fit_approval.unlink()
     runner._write_json_atomic(  # noqa: SLF001
         fit_approval,
         {
+            "schema": (
+                runner.APPROVAL_SCHEMA
+                if legacy_fit_v4
+                else runner.STAGE_SCOPED_APPROVAL_SCHEMA
+            ),
             "allowed_stages": [runner.FIT_SEALED_TCGA_K500_STAGE],
-            "decisions": decisions,
+            "decisions": decisions if legacy_fit_v4 else decisions[:6],
             "stage_bindings": {
                 runner.FIT_SEALED_TCGA_K500_STAGE: {
                     "canonical_input_manifest_sha256": input_manifest_sha256,
@@ -871,7 +894,9 @@ def _write_local_authority_contract(  # noqa: PLR0915
         },
     }
     features = [f"G{index}_M" for index in range(runner.TOP_K)]
+    mutsig_pmf_contract = runner.build_poisson_support_contract(0.0, 0)
     contract = {
+        "schema_version": runner.SCHEMA_VERSION,
         "cohort": "CHOL",
         "feature_policy": {
             "feature_ranking": runner.TESTED_FAMILY_FEATURE_RANKING,
@@ -887,6 +912,9 @@ def _write_local_authority_contract(  # noqa: PLR0915
             "dig": provider_files["dig_pmfs"],
             "sample_axis": provider_files["sample_axis"],
             "mutsig": {
+                "tensor_encoding": runner._mutsig_tensor_encoding_record(  # noqa: SLF001
+                    read_only=True,
+                ),
                 "files": {
                     "lambda": provider_files["mutsig_lambda"],
                     "metadata": provider_files["mutsig_metadata"],
@@ -897,6 +925,12 @@ def _write_local_authority_contract(  # noqa: PLR0915
             },
         },
         "provider_input_provenance": provenance,
+        "mutsig_pmf_contract": mutsig_pmf_contract,
+        "mutsig_pmf_storage_contract": runner.estimate_native_poisson_pmf_storage(
+            len(features),
+            1,
+            mutsig_pmf_contract["inclusive_support_k"],
+        ),
         "pair_policy": {
             "epsilon_pretest_filter": runner.TESTED_FAMILY_NO_PRETEST_FILTER,
             "marginal_effect_pretest_filter": (runner.TESTED_FAMILY_NO_PRETEST_FILTER),
@@ -905,6 +939,7 @@ def _write_local_authority_contract(  # noqa: PLR0915
             **runner._pair_contract(features),  # noqa: SLF001
         },
         "revision_input_authority": authority,
+        "samples": {"count": 1},
         "tested_family": runner.asdict(runner.REQUIRED_TESTED_FAMILY),
         "top_k": runner.TOP_K,
     }
@@ -1103,6 +1138,17 @@ def test_strict_pmf_loader_preserves_noncontiguous_integer_count_keys(tmp_path):
     )
 
 
+def test_snapshot_count_parser_returns_read_only_numeric_storage() -> None:
+    counts = runner._parse_counts_csv(  # noqa: SLF001
+        b"sample,A_M,B_N\ns1,1,0\ns2,0,1\n",
+        label="synthetic counts",
+    )
+
+    assert not counts.to_numpy(copy=False).flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        counts.iloc[0, 0] = 2
+
+
 def test_support_audit_reports_pair_specific_effective_masks():
     counts = pd.DataFrame(
         {"A_M": [2, 0], "B_M": [0, 0], "C_M": [0, 0]},
@@ -1170,6 +1216,269 @@ def test_frozen_mutsig_builder_preserves_exact_zero_lambda(tmp_path):
     assert pmfs["A_M"][0] == {0: 1.0, 1: 0.0, 2: 0.0}
 
 
+def test_production_mutsig_support_extends_material_observed_tail(tmp_path):
+    paths = _write_inputs(tmp_path)
+    mutsig_dir = paths.mutsig_root / "CHOL"
+    native_rate = np.float32(12.0)
+    np.full((3, 4, 2), native_rate, dtype="<f4").ravel(order="F").tofile(
+        mutsig_dir / "persample_lambda.f32",
+    )
+    contract = runner.build_poisson_support_contract(float(native_rate), 1)
+
+    pmfs = build_lambda_pmfs(
+        ["A_M", "A_N"],
+        pd.Index(["s1", "s2", "s3", "s4"]),
+        mutsig_dir,
+        None,
+        1,
+        allow_cbase_fallback=False,
+        require_all_features=True,
+        require_all_samples=True,
+        lambda_floor=None,
+        production_contract=contract,
+    )
+
+    assert float(runner.poisson.sf(1, native_rate)) > 0.99
+    assert contract["inclusive_support_k"] > 1
+    assert contract["worst_discarded_tail_probability"] <= 1e-12
+    assert contract["predecessor_tail_probability"] > 1e-12
+    for feature_pmfs in pmfs.values():
+        for row in feature_pmfs:
+            assert not isinstance(row, dict)
+            assert max(row) == contract["inclusive_support_k"]
+            assert math.isclose(math.fsum(row.values()), 1.0, abs_tol=1e-15)
+
+
+def test_production_mutsig_support_is_exact_minimum_or_observed_maximum():
+    tail_bound = runner.build_poisson_support_contract(float(np.float32(5.5)), 0)
+    observed_bound = runner.build_poisson_support_contract(
+        float(np.float32(0.1)),
+        100,
+    )
+
+    assert tail_bound["tail_criterion_binds"] is True
+    assert tail_bound["worst_discarded_tail_probability"] <= 1e-12
+    assert tail_bound["predecessor_tail_probability"] > 1e-12
+    assert observed_bound["tail_criterion_binds"] is False
+    assert observed_bound["inclusive_support_k"] == 100
+    assert observed_bound["predecessor_tail_probability"] <= 1e-12
+
+
+def test_production_mutsig_zero_lambda_has_exact_minimal_support():
+    contract = runner.build_poisson_support_contract(0.0, 0)
+    pmfs = runner.build_native_poisson_pmfs(
+        {"A_M": np.zeros(2, dtype="<f4")},
+        contract,
+    )
+
+    assert contract["inclusive_support_k"] == 0
+    assert contract["worst_discarded_tail_probability"] == 0.0
+    assert contract["predecessor_tail_probability"] == 1.0
+    assert [dict(row) for row in pmfs["A_M"]] == [{0: 1.0}, {0: 1.0}]
+
+
+def test_production_mutsig_rejects_axis_dtype_and_policy_drift(tmp_path):
+    paths = _write_inputs(tmp_path)
+    mutsig_dir = paths.mutsig_root / "CHOL"
+    contract = runner.build_poisson_support_contract(float(np.float32(0.1)), 1)
+
+    with pytest.raises(ValueError, match="exactly binary32-representable"):
+        runner.build_poisson_support_contract(0.1, 1)
+    with pytest.raises(ValueError, match="equally sample-aligned"):
+        runner.build_native_poisson_pmfs(
+            {
+                "A_M": np.full(2, 0.1, dtype="<f4"),
+                "B_M": np.full(3, 0.1, dtype="<f4"),
+            },
+            contract,
+        )
+    for invalid in (
+        np.full(2, 0.1, dtype=np.float64),
+        np.full(2, 0.1, dtype=">f4"),
+    ):
+        with pytest.raises(TypeError, match="little-endian float32"):
+            runner.build_native_poisson_pmfs({"A_M": invalid}, contract)
+    with pytest.raises(ValueError, match="no lambda floor or fallback"):
+        build_lambda_pmfs(
+            ["A_M"],
+            pd.Index(["s1"]),
+            mutsig_dir,
+            None,
+            1,
+            production_contract=contract,
+        )
+    production_kwargs = {
+        "allow_cbase_fallback": False,
+        "require_all_features": True,
+        "require_all_samples": True,
+        "lambda_floor": None,
+        "production_contract": contract,
+    }
+    with pytest.raises(ValueError, match="observed support drifted"):
+        build_lambda_pmfs(
+            ["A_M"],
+            pd.Index(["s1"]),
+            mutsig_dir,
+            None,
+            0,
+            **production_kwargs,
+        )
+    with pytest.raises(ValueError, match="patient axis"):
+        build_lambda_pmfs(
+            ["A_M"],
+            pd.Index(["absent"]),
+            mutsig_dir,
+            None,
+            1,
+            **production_kwargs,
+        )
+    with pytest.raises(ValueError, match="natively cover"):
+        build_lambda_pmfs(
+            ["MISSING_M"],
+            pd.Index(["s1"]),
+            mutsig_dir,
+            None,
+            1,
+            **production_kwargs,
+        )
+
+
+def test_frozen_mutsig_replay_is_byte_contract_exact_and_rejects_drift(tmp_path):
+    paths = _write_inputs(tmp_path)
+    contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+    counts = runner._read_counts(  # noqa: SLF001
+        paths.source_root / "CHOL" / "count_matrix.csv",
+    )
+    features = contract["features"]
+    live = runner._task_pmfs(  # noqa: SLF001
+        paths,
+        runner.Task("CHOL", "mutsig"),
+        counts.loc[:, features],
+        features,
+        contract=contract,
+    )
+    frozen_counts, frozen = runner._load_frozen_scientific_inputs(  # noqa: SLF001
+        contract,
+        "mutsig",
+    )
+
+    assert frozen_counts.equals(counts)
+    assert {
+        feature: [list(row.items()) for row in rows] for feature, rows in frozen.items()
+    } == {
+        feature: [list(row.items()) for row in rows] for feature, rows in live.items()
+    }
+
+    drifted = copy.deepcopy(contract)
+    drifted["mutsig_pmf_contract"]["inclusive_support_k"] += 1
+    with pytest.raises(ValueError, match="support contract drifted"):
+        runner._load_frozen_scientific_inputs(drifted, "mutsig")  # noqa: SLF001
+
+    page_drifted = copy.deepcopy(contract)
+    page_drifted["mutsig_pmf_contract"]["effect_pages"] = {"M": 1, "N": 0}
+    with pytest.raises(ValueError, match="support contract drifted"):
+        runner._load_frozen_scientific_inputs(  # noqa: SLF001
+            page_drifted,
+            "mutsig",
+        )
+
+
+def test_v3_runner_rejects_v2_observed_max_mutsig_contract(tmp_path):
+    paths = _write_inputs(tmp_path)
+    contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+    contract["schema_version"] = "2.0.0"
+    contract["mutsig_pmf_contract"] = {
+        "lambda_floor": None,
+        "native_lambda_only": True,
+        "poisson_count_keys": [0, 1],
+        "selected_observed_count_max": 1,
+        "selected_observed_count_min": 0,
+        "truncated_pmf_renormalized": True,
+    }
+    contract.pop("mutsig_pmf_storage_contract")
+
+    with pytest.raises(ValueError, match="schema version"):
+        runner._require_tested_family_contract(  # noqa: SLF001
+            contract,
+            require_signed_k500=False,
+        )
+
+
+def test_v3_runner_rejects_v2_task_manifest_without_tail_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _paths, task_dir, contract = _execute_tiny_cbase_task(tmp_path, monkeypatch)
+    manifest_path = task_dir / "task_manifest.json"
+    current_manifest = runner._read_json(manifest_path)  # noqa: SLF001
+    manifest = copy.deepcopy(current_manifest)
+    manifest["schema_version"] = "2.0.0"
+    manifest["mutsig_pmf_contract"] = {
+        "lambda_floor": None,
+        "native_lambda_only": True,
+        "poisson_count_keys": [0, 0],
+        "selected_observed_count_max": 0,
+        "selected_observed_count_min": 0,
+        "truncated_pmf_renormalized": True,
+    }
+    manifest.pop("mutsig_pmf_storage_contract")
+    manifest_path.write_bytes(runner._canonical_json(manifest) + b"\n")  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="schema version"):
+        runner.validate_task_output(task_dir, contract, bmr="cbase")
+
+    storage_drift = copy.deepcopy(current_manifest)
+    storage_drift["mutsig_pmf_storage_contract"]["dense_probability_bytes"] += 8
+    manifest_path.write_bytes(
+        runner._canonical_json(storage_drift) + b"\n",  # noqa: SLF001
+    )
+    with pytest.raises(ValueError, match="PMF storage provenance"):
+        runner.validate_task_output(task_dir, contract, bmr="cbase")
+
+
+def test_production_mutsig_storage_receipt_rejects_axis_or_estimate_drift(tmp_path):
+    paths = _write_inputs(tmp_path)
+    contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+    contract["mutsig_pmf_storage_contract"]["dense_probability_bytes"] += 8
+
+    with pytest.raises(ValueError, match="storage estimate drifted"):
+        runner._require_tested_family_contract(  # noqa: SLF001
+            contract,
+            require_signed_k500=False,
+        )
+
+
+def test_production_mutsig_storage_estimate_is_safe_for_ucec_sized_axes():
+    storage = runner.estimate_native_poisson_pmf_storage(500, 515, 107)
+
+    assert storage["dense_probability_bytes"] == 222_480_000
+    assert (
+        storage["estimated_peak_numeric_array_bytes"] < runner.PRIOR_TASK_PEAK_RSS_BYTES
+    )
+    assert storage["legacy_per_probability_dict_entries_materialized"] is False
+    assert storage["container_overhead"].startswith("excluded-platform-dependent")
+    assert set(storage) == {
+        "container_overhead",
+        "contract",
+        "dense_probability_bytes",
+        "estimated_peak_numeric_array_bytes",
+        "estimated_persistent_numeric_array_bytes",
+        "feature_count",
+        "feature_list_count",
+        "inclusive_support_k",
+        "legacy_per_probability_dict_entries_materialized",
+        "normalizer_array_bytes",
+        "per_feature_matrix_bytes",
+        "probability_dtype",
+        "probability_value_count",
+        "row_mapping_view_count",
+        "sample_count",
+        "scope",
+        "selected_native_rate_bytes",
+        "support_vector_bytes",
+    }
+
+
 def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
     paths = _write_inputs(tmp_path)
 
@@ -1203,13 +1512,43 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
     assert contract["samples"]["contract"] == runner.SAMPLE_AXIS_CONTRACT
     assert contract["samples"]["cohort_mean_fallback_samples"] == 0
     assert contract["feature_policy"]["mutsig_cbase_feature_fallback"] is False
-    assert contract["mutsig_pmf_contract"]["selected_observed_count_max"] == 1
-    assert contract["mutsig_pmf_contract"]["lambda_floor"] is None
+    mutsig_pmf = contract["mutsig_pmf_contract"]
+    assert mutsig_pmf["observed_kmax"] == 1
+    assert mutsig_pmf["lambda_floor"] is None
+    assert mutsig_pmf["max_selected_native_lambda"] == float(np.float32(0.1))
+    assert mutsig_pmf["max_selected_native_lambda_float32_le_hex"] == "cdcccc3d"
+    assert mutsig_pmf["inclusive_support_k"] > mutsig_pmf["observed_kmax"]
+    assert mutsig_pmf["support_rule"] == runner.PRODUCTION_POISSON_SUPPORT_RULE
+    assert mutsig_pmf["tail_tolerance"] == 1e-12
+    assert mutsig_pmf["normalization"] == runner.PRODUCTION_POISSON_NORMALIZATION
+    assert mutsig_pmf["feature_fallback"] is False
+    assert mutsig_pmf["sample_fallback"] is False
+    assert mutsig_pmf["worst_discarded_tail_probability"] <= 1e-12
+    assert mutsig_pmf["predecessor_tail_probability"] > 1e-12
+    assert mutsig_pmf["tail_criterion_binds"] is True
+    assert mutsig_pmf["tensor_dtype"] == "little-endian-float32"
+    assert mutsig_pmf["tensor_order"] == "Fortran-(gene,patient,effect)"
+    assert mutsig_pmf["effect_pages"] == {"M": 0, "N": 1}
+    storage = contract["mutsig_pmf_storage_contract"]
+    assert storage["feature_count"] == 3
+    assert storage["sample_count"] == 4
+    assert storage["legacy_per_probability_dict_entries_materialized"] is False
     assert len(contract["inputs"]["mutsig"]["files"]["lambda"]["sha256"]) == 64
     assert contract["inputs"]["mutsig"]["receipt"]["upstream_commit"] == (
         runner.MUTSIG_UPSTREAM_COMMIT
     )
     assert "receipt" in contract["inputs"]["mutsig"]["files"]
+    assert contract["inputs"]["mutsig"]["tensor_encoding"] == {
+        "contract": runner.MUTSIG_NATIVE_FWRITE_ENDIAN_CONTRACT,
+        "dtype": "<f4",
+        "effect_pages": {"M": 0, "N": 1},
+        "layout_canary": runner.MUTSIG_TENSOR_LAYOUT_CANARY,
+        "observed_consumer_sys_byteorder": "little",
+        "order": "Fortran-(gene,patient,effect)",
+        "producer_fwrite_byte_order": "native",
+        "read_only": True,
+        "required_consumer_sys_byteorder": "little",
+    }
     assert (
         contract["inputs"]["sample_axis"]["sha256"]
         == (contract["inputs"]["mutsig"]["receipt"]["sample_axis_sha256"])
@@ -1222,6 +1561,256 @@ def test_cohort_contract_hashes_exact_native_universe_and_mapping(tmp_path):
         support = contract["observed_count_support_audit"][bmr]
         assert support["zero_support_feature_samples"] == 0
         assert support["pairs"]["full_sample_support"] == 2
+
+
+def _replacement_scientific_bytes(
+    snapshot: runner.CohortScientificSnapshot,
+    name: str,
+) -> bytes:
+    original = snapshot.files[name].content
+    if name == "mutsig_lambda":
+        values = np.frombuffer(original, dtype="<f4").copy()
+        assert len(values) > 1
+        assert float(values.max()) == float(np.float32(0.1))
+        values[0] = np.float32(0.05)
+        replacement = values.astype("<f4", copy=False).tobytes()
+        assert float(np.frombuffer(replacement, dtype="<f4").max()) == float(
+            np.float32(0.1),
+        )
+        return replacement
+    if name == "counts":
+        return original.replace(b",1,", b",0,", 1)
+    if name in {"cbase", "dig"}:
+        return original.replace(b"0.7", b"0.6", 1)
+    if name == "mutsig_patients":
+        return original.replace(b"s1\ns2\n", b"s2\ns1\n", 1)
+    if name == "mutsig_receipt":
+        marker = b"runtime_sha256\t"
+        start = original.index(marker) + len(marker)
+        replacement = bytearray(original)
+        replacement[start : start + 64] = b"f" * 64
+        return bytes(replacement)
+    raise AssertionError(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "counts",
+        "cbase",
+        "dig",
+        "mutsig_patients",
+        "mutsig_receipt",
+        "mutsig_lambda",
+    ],
+)
+def test_contract_rejects_parse_vs_record_scientific_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    """Every computation and record uses one snapshot; final paths must persist."""
+    paths = _write_inputs(tmp_path)
+    original_builder = runner._build_cohort_scientific_snapshot  # noqa: SLF001
+
+    def snapshot_then_replace(**kwargs):
+        snapshot = original_builder(**kwargs)
+        target = snapshot.files[name].path
+        replacement = _replacement_scientific_bytes(snapshot, name)
+        assert len(replacement) == len(snapshot.files[name].content)
+        candidate = target.with_name(f".{target.name}.replacement")
+        candidate.write_bytes(replacement)
+        candidate.replace(target)
+        return snapshot
+
+    monkeypatch.setattr(
+        runner,
+        "_build_cohort_scientific_snapshot",
+        snapshot_then_replace,
+    )
+
+    with pytest.raises(ValueError, match="immutable snapshot"):
+        runner._ensure_contract(paths, "CHOL", top_k=3)  # noqa: SLF001
+
+    assert not (paths.output_root / "contracts" / "CHOL.json").exists()
+
+
+def test_contract_rejects_same_bytes_persistent_inode_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    original_builder = runner._build_cohort_scientific_snapshot  # noqa: SLF001
+
+    def snapshot_then_replace(**kwargs):
+        snapshot = original_builder(**kwargs)
+        frozen = snapshot.files["counts"]
+        candidate = frozen.path.with_name(".count_matrix.same-bytes")
+        candidate.write_bytes(frozen.content)
+        candidate.replace(frozen.path)
+        return snapshot
+
+    monkeypatch.setattr(
+        runner,
+        "_build_cohort_scientific_snapshot",
+        snapshot_then_replace,
+    )
+
+    with pytest.raises(ValueError, match="changed or was replaced"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+
+def test_contract_publication_rechecks_snapshot_after_build_return(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    original_builder = runner.build_cohort_contract
+
+    def build_then_replace(*args, **kwargs):
+        contract = original_builder(*args, **kwargs)
+        count_path = Path(contract["inputs"]["counts"]["path"])
+        candidate = count_path.with_name(".count_matrix.prepublication")
+        candidate.write_bytes(count_path.read_bytes())
+        candidate.replace(count_path)
+        return contract
+
+    monkeypatch.setattr(runner, "build_cohort_contract", build_then_replace)
+
+    with pytest.raises(ValueError, match="path identity changed"):
+        runner._ensure_contract(paths, "CHOL", top_k=3)  # noqa: SLF001
+
+    assert not (paths.output_root / "contracts" / "CHOL.json").exists()
+
+
+def test_contract_computation_never_reopens_or_reparses_snapshot_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    scientific_paths = {
+        paths.source_root / "CHOL" / "count_matrix.csv",
+        paths.source_root / "CHOL" / "sample_axis.txt",
+        paths.source_root / "CHOL" / "bmr_pmfs.csv",
+        paths.source_root / "CHOL" / "bmr_pmfs.dig.csv",
+        paths.mutsig_root / "CHOL" / "persample_meta.txt",
+        paths.mutsig_root / "CHOL" / "persample_genes.txt",
+        paths.mutsig_root / "CHOL" / "persample_patients.txt",
+        paths.mutsig_root / "CHOL" / "persample_lambda.f32",
+        paths.mutsig_root / "CHOL" / "persample_receipt.tsv",
+    }
+    original_read = runner._read_secure_regular_with_stat  # noqa: SLF001
+    original_visible_read = runner._read_visible_regular_with_stat  # noqa: SLF001
+    read_counts = dict.fromkeys(scientific_paths, 0)
+
+    def counted_read(path, *, label):
+        if path in read_counts:
+            read_counts[path] += 1
+        return original_read(path, label=label)
+
+    def counted_visible_read(path, *, label):
+        if path in read_counts:
+            read_counts[path] += 1
+        return original_visible_read(path, label=label)
+
+    def forbidden_path_parser(*_args, **_kwargs):
+        msg = "path-based parser reopened a scientific snapshot"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(runner, "_read_secure_regular_with_stat", counted_read)
+    monkeypatch.setattr(runner, "_read_visible_regular_with_stat", counted_visible_read)
+    for name in (
+        "_file_record",
+        "_load_strict_pmfs",
+        "_read_authoritative_sample_axis",
+        "_read_axis",
+        "_read_counts",
+        "_read_mutsig_metadata",
+        "_read_mutsig_receipt",
+    ):
+        monkeypatch.setattr(runner, name, forbidden_path_parser)
+
+    contract = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    assert contract["features"] == ["A_M", "A_N", "B_M"]
+    assert set(read_counts.values()) == {2}
+
+
+def test_cohort_snapshot_contract_replays_deterministically(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path)
+
+    first = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+    second = runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+    assert runner._canonical_json(first) == runner._canonical_json(second)  # noqa: SLF001
+
+
+def test_mutsig_native_fwrite_requires_little_endian_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    monkeypatch.setattr(runner.sys, "byteorder", "big")
+
+    with pytest.raises(RuntimeError, match=r"sys\.byteorder == 'little'"):
+        runner.build_cohort_contract(paths, "CHOL", top_k=3)
+
+
+def test_nonuniform_tensor_canary_binds_fortran_order_and_effect_pages() -> None:
+    tensor = np.empty((2, 3, 2), dtype="<f4", order="F")
+    for gene_position in range(2):
+        for patient_position in range(3):
+            for effect_position in range(2):
+                tensor[gene_position, patient_position, effect_position] = (
+                    100 * gene_position + 10 * patient_position + effect_position + 0.25
+                )
+    parsed = runner._reshape_mutsig_lambda_bytes(  # noqa: SLF001
+        tensor.tobytes(order="F"),
+        {"ng": 2, "np": 3, "neff": 2},
+        path=Path("canary.f32"),
+    )
+    rates = runner._selected_mutsig_native_rates(  # noqa: SLF001
+        parsed,
+        ("G0", "G1"),
+        ("P0", "P1", "P2"),
+        ("P2", "P0"),
+        ("G1_M", "G0_N"),
+    )
+
+    assert parsed.flags.f_contiguous
+    assert not parsed.flags.writeable
+    assert rates["G1_M"].tolist() == [120.25, 100.25]
+    assert rates["G0_N"].tolist() == [21.25, 1.25]
+    assert not rates["G1_M"].flags.writeable
+    assert runner._require_mutsig_tensor_layout_canary() == (  # noqa: SLF001
+        runner.MUTSIG_TENSOR_LAYOUT_CANARY
+    )
+
+
+def test_nonuniform_tensor_canary_rejects_m_n_page_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "MUTSIG_EFFECT_INDEX", {"M": 1, "N": 0})
+
+    with pytest.raises(RuntimeError, match="layout canary failed"):
+        runner._require_mutsig_tensor_layout_canary()  # noqa: SLF001
+
+
+def test_standalone_mutsig_entrypoint_fails_before_legacy_output(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "output"
+
+    with pytest.raises(RuntimeError, match=r"deprecated.*production"):
+        mutsig_lambda_co.run(
+            "CHOL",
+            root,
+            tmp_path / "mutsig",
+            100,
+            "legacy",
+        )
+
+    assert not root.exists()
 
 
 def test_cohort_contract_rejects_extra_or_reordered_mutsig_samples(tmp_path):
@@ -1820,6 +2409,31 @@ def test_task_completion_is_atomic_validated_and_resumable(tmp_path, monkeypatch
         writer.writerow(["A_M", "B_M", *([0] * (len(runner.PAIRWISE_COLUMNS) - 2))])
     with pytest.raises(runner.SealedFitError, match="pair-output-invalid"):
         runner.validate_task_output(final_dir, contract)
+
+
+def test_production_mutsig_tail_contract_runs_end_to_end_on_tiny_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    paths.output_root.mkdir()
+    _enable_tiny_fit_contracts(monkeypatch)
+    task = runner.Task("CHOL", "mutsig")
+
+    assert runner.execute_task(paths, task, nice_increment=0, top_k=3) == "completed"
+    task_dir = paths.output_root / "tasks" / "CHOL" / "mutsig"
+    contract = runner._read_json(  # noqa: SLF001
+        paths.output_root / "contracts" / "CHOL.json",
+    )
+    manifest = runner._read_json(task_dir / "task_manifest.json")  # noqa: SLF001
+
+    assert runner.validate_task_output(task_dir, contract, bmr="mutsig")["pairs"] == 2
+    assert manifest["schema_version"] == "3.0.0"
+    assert manifest["mutsig_pmf_contract"] == contract["mutsig_pmf_contract"]
+    assert (
+        manifest["mutsig_pmf_storage_contract"]
+        == contract["mutsig_pmf_storage_contract"]
+    )
 
 
 def test_execute_task_detects_staged_directory_inode_swap(
@@ -2532,7 +3146,7 @@ def test_sealed_fit_failure_never_leaks_scientific_exception_values(
     }
 
 
-def test_frozen_input_read_hashes_and_consumes_one_descriptor_snapshot(
+def test_frozen_input_read_rejects_persistent_path_swap_after_open(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2556,12 +3170,12 @@ def test_frozen_input_read_hashes_and_consumes_one_descriptor_snapshot(
 
     monkeypatch.setattr(runner.os, "fstat", swap_after_open)
 
-    consumed = runner._read_frozen_record_bytes(  # noqa: SLF001
-        record,
-        label="synthetic scientific input",
-    )
+    with pytest.raises(ValueError, match=r"visible-entry readback|must remain"):
+        runner._read_frozen_record_bytes(  # noqa: SLF001
+            record,
+            label="synthetic scientific input",
+        )
 
-    assert consumed == original
     assert scientific_input.read_bytes() == replacement
 
 
@@ -3838,11 +4452,27 @@ def test_runner_rejects_parser_return_that_drifts_from_implemented_family(
         runner._signed_tested_family_record(paths)  # noqa: SLF001
 
 
-def test_frozen_cohort_authority_rehashes_only_local_receipts(
+def test_frozen_cohort_authority_accepts_stage_scoped_v5_input_and_fit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths, contract = _write_local_authority_contract(tmp_path, monkeypatch)
+    input_manifest = runner._read_json(paths.input_approval_manifest)  # noqa: SLF001
+    fit_manifest = runner._read_json(paths.fit_approval_manifest)  # noqa: SLF001
+    assert input_manifest["schema"] == runner.STAGE_SCOPED_APPROVAL_SCHEMA
+    assert [item["decision_id"] for item in input_manifest["decisions"]] == [
+        "D1",
+        "D2",
+    ]
+    assert fit_manifest["schema"] == runner.STAGE_SCOPED_APPROVAL_SCHEMA
+    assert [item["decision_id"] for item in fit_manifest["decisions"]] == [
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "D5",
+        "D6",
+    ]
     canonical_validator = runner.validate_materialized_input_cohort_binding
     provider_validator = runner.validate_materialized_provider_cohort_input
     narrow_calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
@@ -3878,6 +4508,121 @@ def test_frozen_cohort_authority_rehashes_only_local_receipts(
         provider_receipt["full_acceptance_receipt"],
         provider_receipt["full_acceptance_receipt_sha256"],
     )
+
+
+def test_production_frozen_cohort_authority_rejects_v4_fit_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, contract = _write_local_authority_contract(
+        tmp_path,
+        monkeypatch,
+        legacy_fit_v4=True,
+    )
+    input_manifest = runner._read_json(paths.input_approval_manifest)  # noqa: SLF001
+    fit_manifest = runner._read_json(paths.fit_approval_manifest)  # noqa: SLF001
+
+    assert input_manifest["schema"] == runner.STAGE_SCOPED_APPROVAL_SCHEMA
+    assert fit_manifest["schema"] == runner.APPROVAL_SCHEMA
+    assert [item["decision_id"] for item in fit_manifest["decisions"]] == list(
+        runner.DECISION_IDS,
+    )
+    with pytest.raises(ValueError, match="invalid schema"):
+        runner._verify_frozen_cohort_authority(paths, contract)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    (
+        "schema",
+        "manifest_stage",
+        "decision_ids",
+        "expected_stage",
+        "expected_decision_ids",
+        "allowed_schemas",
+        "error",
+    ),
+    [
+        (
+            runner.APPROVAL_SCHEMA,
+            runner.MATERIALIZE_FINAL_INPUTS_STAGE,
+            runner.DECISION_IDS,
+            runner.MATERIALIZE_FINAL_INPUTS_STAGE,
+            ("D1", "D2"),
+            (runner.STAGE_SCOPED_APPROVAL_SCHEMA,),
+            "invalid schema",
+        ),
+        (
+            runner.STAGE_SCOPED_APPROVAL_SCHEMA,
+            runner.FIT_SEALED_TCGA_K500_STAGE,
+            ("D1", "D2"),
+            runner.MATERIALIZE_FINAL_INPUTS_STAGE,
+            ("D1", "D2"),
+            (runner.STAGE_SCOPED_APPROVAL_SCHEMA,),
+            "stage envelope",
+        ),
+        (
+            runner.STAGE_SCOPED_APPROVAL_SCHEMA,
+            runner.MATERIALIZE_FINAL_INPUTS_STAGE,
+            ("D1", "D2", "D3"),
+            runner.MATERIALIZE_FINAL_INPUTS_STAGE,
+            ("D1", "D2"),
+            (runner.STAGE_SCOPED_APPROVAL_SCHEMA,),
+            "decision sequence",
+        ),
+        (
+            runner.APPROVAL_SCHEMA,
+            runner.FIT_SEALED_TCGA_K500_STAGE,
+            ("D1", "D2", "D3", "D4", "D5", "D6"),
+            runner.FIT_SEALED_TCGA_K500_STAGE,
+            ("D1", "D2", "D3", "D4", "D5", "D6"),
+            (runner.STAGE_SCOPED_APPROVAL_SCHEMA, runner.APPROVAL_SCHEMA),
+            "decision sequence",
+        ),
+    ],
+)
+def test_frozen_approval_receipt_rejects_schema_stage_and_decision_scope_cross_use(  # noqa: PLR0913
+    tmp_path: Path,
+    schema: str,
+    manifest_stage: str,
+    decision_ids: tuple[str, ...],
+    expected_stage: str,
+    expected_decision_ids: tuple[str, ...],
+    allowed_schemas: tuple[str, ...],
+    error: str,
+) -> None:
+    manifest_path = tmp_path / "approval.json"
+    decisions = [{"decision_id": decision_id} for decision_id in decision_ids]
+    runner._write_json_atomic(  # noqa: SLF001
+        manifest_path,
+        {
+            "allowed_stages": [manifest_stage],
+            "decisions": decisions,
+            "schema": schema,
+        },
+    )
+    manifest_sha256 = runner._sha256(manifest_path)  # noqa: SLF001
+    decision_by_id = {decision["decision_id"]: decision for decision in decisions}
+    authority = {
+        "authorized_stage": expected_stage,
+        "decision_digests": {
+            decision_id: runner._json_sha256(decision_by_id[decision_id])  # noqa: SLF001
+            for decision_id in expected_decision_ids
+            if decision_id in decision_by_id
+        },
+        "manifest": runner._file_record(manifest_path),  # noqa: SLF001
+        "manifest_sha256": manifest_sha256,
+    }
+
+    with pytest.raises(ValueError, match=error):
+        runner._approval_manifest_decisions(  # noqa: SLF001
+            authority,
+            expected_path=manifest_path,
+            expected_sha256=manifest_sha256,
+            expected_stage=expected_stage,
+            expected_decision_ids=expected_decision_ids,
+            allowed_schemas=allowed_schemas,
+            label="test",
+        )
 
 
 def test_production_family_contract_rejects_signed_record_drift(
@@ -4233,16 +4978,30 @@ def test_validated_fit_authority_requires_exact_singleton_envelope(
         ),
     }
     approval = runner.RevisionApproval(
-        schema="synthetic",
+        schema=runner.STAGE_SCOPED_APPROVAL_SCHEMA,
         source_notice=SimpleNamespace(),
         allowed_stages=(runner.FIT_SEALED_TCGA_K500_STAGE,),
         stage_bindings={runner.FIT_SEALED_TCGA_K500_STAGE: expected},
-        decisions={},
+        decisions={
+            decision_id: SimpleNamespace()
+            for decision_id in ("D1", "D2", "D3", "D4", "D5", "D6")
+        },
         manifest_sha256="f" * 64,
         decision_digests={},
     )
 
     assert runner._require_fit_stage_binding(approval, paths) == expected  # noqa: SLF001
+    historical = runner.RevisionApproval(
+        schema=runner.APPROVAL_SCHEMA,
+        source_notice=approval.source_notice,
+        allowed_stages=approval.allowed_stages,
+        stage_bindings=approval.stage_bindings,
+        decisions=approval.decisions,
+        manifest_sha256=approval.manifest_sha256,
+        decision_digests=approval.decision_digests,
+    )
+    with pytest.raises(ValueError, match=r"stage-scoped v5.*exactly D1-D6"):
+        runner._require_fit_stage_binding(historical, paths)  # noqa: SLF001
     expanded = runner.RevisionApproval(
         schema=approval.schema,
         source_notice=approval.source_notice,
@@ -4262,7 +5021,28 @@ def test_validated_fit_authority_requires_exact_singleton_envelope(
         runner._require_fit_stage_binding(expanded, paths)  # noqa: SLF001
 
 
-def test_two_stage_reauthorization_binds_claim_and_execution_semantics() -> None:
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("exact_resolution", "scientifically substituted resolution"),
+        ("execution_owner", "substituted executor"),
+        ("claim_owner", "attacker"),
+        ("rerun_or_reuse_consequence", "substituted consequence"),
+        ("permitted_claims", ("substituted claim",)),
+        (
+            "canonical_artifact",
+            SimpleNamespace(
+                sha256="b" * 64,
+                size_bytes=11,
+                content=b"substituted",
+            ),
+        ),
+    ],
+)
+def test_two_stage_reauthorization_allows_stage_scope_only_and_rejects_semantic_drift(
+    field: str,
+    replacement: object,
+) -> None:
     artifact = SimpleNamespace(
         sha256="a" * 64,
         size_bytes=10,
@@ -4278,14 +5058,27 @@ def test_two_stage_reauthorization_binds_claim_and_execution_semantics() -> None
         "rerun_or_reuse_consequence": "rerun",
         "permitted_claims": ("claim",),
         "forbidden_claims": ("overclaim",),
-        "allowed_stages": ("materialize-final-inputs", "fit-sealed-tcga-k500"),
+        "allowed_stages": (runner.MATERIALIZE_FINAL_INPUTS_STAGE,),
     }
     input_decision = SimpleNamespace(**base)
-    substituted = SimpleNamespace(**{**base, "claim_owner": "attacker"})
+    fit_decision = SimpleNamespace(
+        **{**base, "allowed_stages": (runner.FIT_SEALED_TCGA_K500_STAGE,)},
+    )
+    substituted = SimpleNamespace(
+        **{
+            **base,
+            "allowed_stages": (runner.FIT_SEALED_TCGA_K500_STAGE,),
+            field: replacement,
+        },
+    )
 
-    assert runner._decision_reauthorization_record(  # noqa: SLF001
-        input_decision,
-    ) != runner._decision_reauthorization_record(substituted)  # noqa: SLF001
+    input_record = runner._decision_reauthorization_record(input_decision)  # noqa: SLF001
+    assert input_record == runner._decision_reauthorization_record(  # noqa: SLF001
+        fit_decision,
+    )
+    assert input_record != runner._decision_reauthorization_record(  # noqa: SLF001
+        substituted,
+    )
 
 
 def test_production_task_requires_child_gate_before_any_inference(
@@ -4336,6 +5129,7 @@ def test_production_task_revalidates_provider_after_fit_before_publication(
     paths.output_root.mkdir()
     task = runner.Task("CHOL", "cbase")
     provider_receipt = {"expected_manifest_sha256": "c" * 64}
+    mutsig_pmf_contract = runner.build_poisson_support_contract(0.0, 0)
     contract = {
         "features": ["A_M"],
         "inputs": {
@@ -4344,7 +5138,12 @@ def test_production_task_revalidates_provider_after_fit_before_publication(
                 "receipt": {"canonical_maf_binding": {"status": "verified"}},
             },
         },
-        "mutsig_pmf_contract": {"selected_observed_count_max": 0},
+        "mutsig_pmf_contract": mutsig_pmf_contract,
+        "mutsig_pmf_storage_contract": runner.estimate_native_poisson_pmf_storage(
+            1,
+            1,
+            mutsig_pmf_contract["inclusive_support_k"],
+        ),
         "pair_policy": {"row_count": 0},
         "provider_input_provenance": {"root_receipt": provider_receipt},
     }

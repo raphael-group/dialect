@@ -21,6 +21,8 @@ from dialect.data.revision_approval import (
     APPROVAL_SCHEMA,
     FIT_SEALED_TCGA_K500_STAGE,
     GO_DISPOSITION,
+    STAGE_MINIMUM_DECISIONS,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
     RevisionApproval,
 )
 
@@ -351,14 +353,16 @@ def validate_revision_fit_policy(
 ) -> RevisionFitPolicy:
     """Parse the exact signed D3--D6 policies from validated approval bytes.
 
-    This is a fit-only policy gate.  It requires explicit v4 fit-stage authority and
-    ``go`` dispositions for D3--D6; it never upgrades another disposition or stage.
-    The expected implementation and tested-family contracts are supplied by the
-    caller so an artifact cannot authorize a different execution path by naming it
-    itself.
+    This is a fit-only policy gate.  It retains historical v4 compatibility and
+    accepts v5 only when it is the exact singleton fit-stage D1--D6 authority.
+    Both schemas require explicit fit-stage authority and ``go`` dispositions for
+    D3--D6; neither upgrades another disposition or stage.  The expected
+    implementation and tested-family contracts are supplied by the caller so an
+    artifact cannot authorize a different execution path by naming it itself.
 
     Args:
-        approval: Live immutable v4 approval returned by its validator.
+        approval: Live immutable v4 or exact fit-scoped v5 approval returned by
+            its validator.
         expected_d4_implementation: Frozen exact LRT, optimizer, tolerance,
             identifiability, effect-reporting, rho, and LOR contract required by the
             caller that will execute the fit.
@@ -376,9 +380,14 @@ def validate_revision_fit_policy(
     if not isinstance(approval, RevisionApproval):
         msg = "approval must be a validated RevisionApproval authority."
         raise RevisionFitPolicyError(msg)
-    if approval.schema != APPROVAL_SCHEMA:
-        msg = f"Fit policy requires approval schema {APPROVAL_SCHEMA!r}."
+    if approval.schema not in {APPROVAL_SCHEMA, STAGE_SCOPED_APPROVAL_SCHEMA}:
+        msg = (
+            "Fit policy requires historical v4 or stage-scoped v5 approval; "
+            f"observed {approval.schema!r}."
+        )
         raise RevisionFitPolicyError(msg)
+    if approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+        _require_exact_v5_fit_scope(approval)
     if FIT_SEALED_TCGA_K500_STAGE not in approval.allowed_stages:
         msg = "Approval does not explicitly authorize the sealed TCGA K=500 fit stage."
         raise RevisionFitPolicyError(msg)
@@ -414,6 +423,50 @@ def validate_revision_fit_policy(
         d6=d6,
         receipts=MappingProxyType(receipts),
     )
+
+
+def _require_exact_v5_fit_scope(approval: RevisionApproval) -> None:
+    """Recheck the complete singleton-stage v5 envelope before policy parsing."""
+    expected_decisions = STAGE_MINIMUM_DECISIONS[FIT_SEALED_TCGA_K500_STAGE]
+    if (
+        approval.allowed_stages != (FIT_SEALED_TCGA_K500_STAGE,)
+        or tuple(approval.stage_bindings) != (FIT_SEALED_TCGA_K500_STAGE,)
+        or tuple(approval.decisions) != expected_decisions
+        or tuple(approval.decision_digests) != expected_decisions
+    ):
+        msg = (
+            "Stage-scoped v5 fit policy requires only fit-sealed-tcga-k500 "
+            "with exact ordered D1-D6 authority and bindings."
+        )
+        raise RevisionFitPolicyError(msg)
+    binding = approval.stage_bindings[FIT_SEALED_TCGA_K500_STAGE]
+    expected_binding_keys = {
+        "canonical_input_manifest_sha256",
+        "provider_input_manifest_sha256",
+    }
+    if set(binding) != expected_binding_keys:
+        msg = "Stage-scoped v5 fit policy has an inexact fit binding shape."
+        raise RevisionFitPolicyError(msg)
+    for key in sorted(expected_binding_keys):
+        _require_sha256(binding[key], f"approval.stage_bindings fit {key}")
+    for decision_id in expected_decisions:
+        decision = approval.decisions[decision_id]
+        if (
+            decision.decision_id != decision_id
+            or decision.disposition != GO_DISPOSITION
+            or decision.allowed_stages != (FIT_SEALED_TCGA_K500_STAGE,)
+            or decision.manifest_allowed_stages != (FIT_SEALED_TCGA_K500_STAGE,)
+            or decision.manifest_stage_bindings != approval.stage_bindings
+        ):
+            msg = (
+                f"Stage-scoped v5 {decision_id} does not bind the exact singleton "
+                "fit envelope."
+            )
+            raise RevisionFitPolicyError(msg)
+        _require_sha256(
+            approval.decision_digests[decision_id],
+            f"approval.decision_digests[{decision_id!r}]",
+        )
 
 
 def _parse_signed_decision(

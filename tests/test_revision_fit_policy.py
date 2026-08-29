@@ -2,6 +2,8 @@ import copy
 import hashlib
 import json
 from dataclasses import FrozenInstanceError, replace
+from datetime import datetime, timezone
+from pathlib import Path
 from types import MappingProxyType
 
 import numpy as np
@@ -9,11 +11,16 @@ import pytest
 
 from dialect.data.revision_approval import (
     APPROVAL_SCHEMA,
+    APPROVERS,
     FIT_SEALED_TCGA_K500_STAGE,
+    STAGE_SCOPED_APPROVAL_SCHEMA,
     ArtifactReceipt,
     DecisionApproval,
     RevisionApproval,
     SourceNotice,
+    canonical_decision_evidence_line,
+    compute_decision_authority_sha256,
+    validate_revision_approval,
 )
 from dialect.data.revision_fit_policy import (
     COMPONENT_FAILURE_SEMANTICS,
@@ -425,6 +432,122 @@ def _approval(  # noqa: PLR0913
     )
 
 
+def _validated_v5_fit_approval(tmp_path: Path) -> RevisionApproval:
+    stage_bindings = {
+        FIT_SEALED_TCGA_K500_STAGE: {
+            "canonical_input_manifest_sha256": "c" * 64,
+            "provider_input_manifest_sha256": "d" * 64,
+        },
+    }
+    artifact_root = tmp_path / "authority"
+    artifact_root.mkdir()
+    payloads = _payloads()
+    authorities: list[dict[str, object]] = []
+    authority_digests: dict[str, str] = {}
+    for decision_id in ("D1", "D2", "D3", "D4", "D5", "D6"):
+        if decision_id in CONTRACTS:
+            content = _canonical(_envelope(decision_id, payloads[decision_id]))
+        else:
+            content = _canonical(
+                {"decision_id": decision_id, "scope": "sealed-fit-input"},
+            )
+        relative_path = f"authority/{decision_id}.json"
+        (tmp_path / relative_path).write_bytes(content)
+        authority = {
+            "allowed_stages": [FIT_SEALED_TCGA_K500_STAGE],
+            "canonical_artifact": {
+                "path": relative_path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            },
+            "claim_owner": "Benjamin J. Raphael",
+            "decision_id": decision_id,
+            "disposition": "go",
+            "exact_resolution": f"signed {decision_id} resolution",
+            "execution_owner": "Ahmed Shuaibi",
+            "forbidden_claims": ["unbounded claim"],
+            "manifest_allowed_stages": [FIT_SEALED_TCGA_K500_STAGE],
+            "manifest_stage_bindings": stage_bindings,
+            "permitted_claims": ["bounded claim"],
+            "rerun_or_reuse_consequence": "fail closed",
+        }
+        authorities.append(authority)
+        authority_digests[decision_id] = compute_decision_authority_sha256(
+            authority,
+            tmp_path,
+            approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+        )
+
+    timestamps = {
+        APPROVERS[0]: "2026-08-28T12:00:00Z",
+        APPROVERS[1]: "2026-08-28T12:00:01Z",
+    }
+    evidence_records: dict[str, dict[str, object]] = {}
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    for approver in APPROVERS:
+        lines = [
+            canonical_decision_evidence_line(
+                authority,
+                tmp_path,
+                approver,
+                timestamps[approver],
+                approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+            )
+            for authority in authorities
+        ]
+        content = ("\n".join(lines) + "\n").encode("ascii")
+        filename = f"{approver.split()[0].lower()}.txt"
+        relative_path = f"evidence/{filename}"
+        (tmp_path / relative_path).write_bytes(content)
+        evidence_records[approver] = {
+            "file": {
+                "path": relative_path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            },
+            "kind": "coauthor-authored-machine-record",
+            "locator": f"Message-ID <{filename}@example.org>",
+        }
+
+    decisions = []
+    for authority in authorities:
+        decision_id = str(authority["decision_id"])
+        artifact = authority["canonical_artifact"]
+        assert isinstance(artifact, dict)
+        decisions.append(
+            {
+                **authority,
+                "attestations": [
+                    {
+                        "approver": approver,
+                        "attested_at_utc": timestamps[approver],
+                        "attested_disposition": "go",
+                        "canonical_artifact_sha256": artifact["sha256"],
+                        "decision_authority_sha256": authority_digests[decision_id],
+                        "evidence": evidence_records[approver],
+                    }
+                    for approver in APPROVERS
+                ],
+                "recorded_by": "Ahmed Shuaibi",
+            },
+        )
+    manifest = {
+        "allowed_stages": [FIT_SEALED_TCGA_K500_STAGE],
+        "decisions": decisions,
+        "schema": STAGE_SCOPED_APPROVAL_SCHEMA,
+        "source_notice": evidence_records[APPROVERS[0]],
+        "stage_bindings": stage_bindings,
+    }
+    manifest_bytes = _canonical(manifest)
+    manifest_path = tmp_path / "approval.json"
+    manifest_path.write_bytes(manifest_bytes)
+    return validate_revision_approval(
+        manifest_path,
+        hashlib.sha256(manifest_bytes).hexdigest(),
+        FIT_SEALED_TCGA_K500_STAGE,
+        now=datetime(2026, 8, 29, tzinfo=timezone.utc),
+    )
+
+
 def _validate(approval):
     return validate_revision_fit_policy(
         approval,
@@ -494,6 +617,102 @@ def test_valid_policy_returns_frozen_typed_payloads_and_exact_receipts():
         d3_receipt.payload["primary_provider"] = "dig"
     with pytest.raises(FrozenInstanceError):
         policy.d3.primary_provider = "dig"
+
+
+def test_validated_v5_fit_authority_flows_into_fit_policy(tmp_path: Path):
+    approval = _validated_v5_fit_approval(tmp_path)
+
+    policy = _validate(approval)
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA
+    assert tuple(approval.decisions) == ("D1", "D2", "D3", "D4", "D5", "D6")
+    assert tuple(policy.receipts) == ("D3", "D4", "D5", "D6")
+    assert policy.d3.primary_provider == "cbase"
+    assert policy.d5.tested_family == EXPECTED_TESTED_FAMILY
+
+
+def test_fit_policy_retains_historical_v4_compatibility():
+    approval = _approval(schema=APPROVAL_SCHEMA)
+
+    policy = _validate(approval)
+
+    assert policy.d4.lrt_contract == LRT_CONTRACT
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "stage",
+        "binding",
+        "binding-shape",
+        "decision",
+        "decision-stage",
+        "decision-binding",
+        "digest",
+    ],
+)
+def test_fit_policy_rejects_forged_nonexact_v5_scope(tmp_path: Path, attack: str):
+    approval = _validated_v5_fit_approval(tmp_path)
+    if attack == "stage":
+        approval = replace(
+            approval,
+            allowed_stages=(FIT_SEALED_TCGA_K500_STAGE, "release"),
+        )
+    elif attack == "binding":
+        approval = replace(approval, stage_bindings=MappingProxyType({}))
+    elif attack == "binding-shape":
+        approval = replace(
+            approval,
+            stage_bindings=MappingProxyType(
+                {
+                    FIT_SEALED_TCGA_K500_STAGE: MappingProxyType(
+                        {"canonical_input_manifest_sha256": "c" * 64},
+                    ),
+                },
+            ),
+        )
+    elif attack == "decision":
+        approval = replace(
+            approval,
+            decisions=MappingProxyType(
+                {
+                    decision_id: decision
+                    for decision_id, decision in approval.decisions.items()
+                    if decision_id != "D1"
+                },
+            ),
+        )
+    elif attack in {"decision-stage", "decision-binding"}:
+        decisions = dict(approval.decisions)
+        d1 = decisions["D1"]
+        if attack == "decision-stage":
+            decisions["D1"] = replace(
+                d1,
+                allowed_stages=(FIT_SEALED_TCGA_K500_STAGE, "release"),
+            )
+        else:
+            decisions["D1"] = replace(
+                d1,
+                manifest_stage_bindings=MappingProxyType({}),
+            )
+        approval = replace(approval, decisions=MappingProxyType(decisions))
+    else:
+        approval = replace(
+            approval,
+            decision_digests=MappingProxyType(
+                {
+                    decision_id: digest
+                    for decision_id, digest in approval.decision_digests.items()
+                    if decision_id != "D1"
+                },
+            ),
+        )
+
+    with pytest.raises(
+        RevisionFitPolicyError,
+        match=r"exact ordered D1-D6|inexact fit binding|exact singleton fit envelope",
+    ):
+        _validate(approval)
 
 
 @pytest.mark.parametrize("primary", ["dig", "mutsig"])
