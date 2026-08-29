@@ -116,6 +116,22 @@ STAGE_BINDING_KEYS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
                 "provider_input_manifest_sha256",
             },
         ),
+        COMPARATORS_STAGE: frozenset(
+            {
+                "canonical_input_manifest_sha256",
+                "comparator_launch_scope_manifest_sha256",
+                "provider_input_manifest_sha256",
+                "upstream_result_manifest_sha256",
+            },
+        ),
+        MSK_STAGE: frozenset(
+            {
+                "canonical_input_manifest_sha256",
+                "msk_phase_scope_manifest_sha256",
+                "provider_input_manifest_sha256",
+                "upstream_result_manifest_sha256",
+            },
+        ),
         **{
             stage: frozenset(
                 {
@@ -126,7 +142,12 @@ STAGE_BINDING_KEYS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
             )
             for stage in REVISION_STAGES
             if stage
-            not in {MATERIALIZE_FINAL_INPUTS_STAGE, FIT_SEALED_TCGA_K500_STAGE}
+            not in {
+                MATERIALIZE_FINAL_INPUTS_STAGE,
+                FIT_SEALED_TCGA_K500_STAGE,
+                COMPARATORS_STAGE,
+                MSK_STAGE,
+            }
         },
     },
 )
