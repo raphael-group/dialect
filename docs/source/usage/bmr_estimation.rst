@@ -17,4 +17,8 @@ renormalized only after this support is selected.
 There is no fixed count cap and no probability floor. ``tail_eps`` controls only
 finite-support truncation; it is not an epsilon added to unsupported observations.
 When a count matrix is present, the DIG provider also requires its row count to
-equal the ``n_samples`` used to convert cohort-level DIG parameters.
+equal the ``n_samples`` used to convert cohort-level DIG parameters. Gene and
+sample axes must be unique, counts must be finite nonnegative integers, ``ALPHA``
+and ``THETA`` must be finite and positive, and each consequence fraction must be
+finite and lie in ``[0, 1]``. Any invalid row or effect fails the conversion; it
+is never silently omitted.

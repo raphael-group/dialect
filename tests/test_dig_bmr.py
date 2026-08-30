@@ -146,16 +146,39 @@ def test_converter_rejects_duplicate_gene_identifiers(tmp_path) -> None:
         dig_results_to_bmr_pmfs(f, n_samples=10, out=str(tmp_path / "o.csv"))
 
 
-def test_converter_rejects_when_no_native_effect_distribution_is_valid(
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("ALPHA", -1.0),
+        ("ALPHA", float("nan")),
+        ("ALPHA", "not-a-number"),
+        ("THETA", 0.0),
+        ("THETA", float("inf")),
+        ("Pi_MIS", -0.1),
+        ("Pi_MIS", 1.1),
+        ("Pi_NONS", float("nan")),
+    ],
+)
+def test_converter_rejects_mixed_valid_and_invalid_native_parameters(
     tmp_path,
+    column,
+    value,
 ) -> None:
+    columns = {
+        "GENE": ["GOOD", "BAD"],
+        "ALPHA": [100.0, 100.0],
+        "THETA": [0.3, 0.3],
+        "Pi_MIS": [0.04, 0.04],
+        "Pi_NONS": [0.002, 0.002],
+    }
+    columns[column][1] = value
     f = _write_dig(
         tmp_path,
-        GENE=["G"],
-        ALPHA=[100.0],
-        THETA=[0.3],
-        Pi_MIS=[float("nan")],
-        Pi_NONS=[-0.1],
+        **columns,
     )
-    with pytest.raises(ValueError, match="no valid gene-effect"):
-        dig_results_to_bmr_pmfs(f, n_samples=10, out=str(tmp_path / "o.csv"))
+    out = tmp_path / "o.csv"
+
+    with pytest.raises(ValueError, match=column):
+        dig_results_to_bmr_pmfs(f, n_samples=10, out=str(out))
+
+    assert not out.exists()

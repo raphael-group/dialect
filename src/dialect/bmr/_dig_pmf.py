@@ -127,6 +127,22 @@ def _validate_gene_axis(df: pd.DataFrame) -> None:
         raise ValueError(msg)
 
 
+def _native_parameter(value: object, *, column: str, gene: str) -> float:
+    """Return one finite native DIG parameter or fail closed."""
+    if isinstance(value, (bool, np.bool_)):
+        msg = f"DIG {column} must be numeric for gene {gene}"
+        raise TypeError(msg)
+    try:
+        parameter = float(value)
+    except (TypeError, ValueError) as error:
+        msg = f"DIG {column} must be numeric for gene {gene}"
+        raise ValueError(msg) from error
+    if not math.isfinite(parameter):
+        msg = f"DIG {column} must be finite for gene {gene}"
+        raise ValueError(msg)
+    return parameter
+
+
 def _collect_parameters(
     df: pd.DataFrame,
     n_samples: int,
@@ -138,13 +154,19 @@ def _collect_parameters(
     endpoint = max(1, max_count)
     for _, row in df.iterrows():
         gene = str(row["GENE"])
-        alpha, theta = float(row["ALPHA"]), float(row["THETA"])
-        if not (np.isfinite(alpha) and np.isfinite(theta) and alpha > 0 and theta > 0):
-            continue
+        alpha = _native_parameter(row["ALPHA"], column="ALPHA", gene=gene)
+        theta = _native_parameter(row["THETA"], column="THETA", gene=gene)
+        if alpha <= 0:
+            msg = f"DIG ALPHA must be positive for gene {gene}"
+            raise ValueError(msg)
+        if theta <= 0:
+            msg = f"DIG THETA must be positive for gene {gene}"
+            raise ValueError(msg)
         for suffix, pi_col in _EFFECTS.items():
-            pi = float(row[pi_col])
-            if not np.isfinite(pi) or not 0.0 <= pi <= 1.0:
-                continue
+            pi = _native_parameter(row[pi_col], column=pi_col, gene=gene)
+            if not 0.0 <= pi <= 1.0:
+                msg = f"DIG {pi_col} must be between zero and one for gene {gene}"
+                raise ValueError(msg)
             key = f"{gene}{suffix}"
             params[key] = (alpha, theta, pi)
             if pi > 0:
