@@ -2,6 +2,7 @@
 
 import pandas as pd
 import pytest
+from scipy.stats import nbinom
 
 from dialect.bmr import dig_results_to_bmr_pmfs
 
@@ -48,6 +49,43 @@ def test_higher_background_gene_has_more_passenger_mass(tmp_path) -> None:
     assert b.loc["LONG_M", "1"] > b.loc["SHORT_M", "1"]
     # Nonsense (rarer than missense) keeps more mass at zero.
     assert b.loc["SHORT_N", "0"] > b.loc["SHORT_M", "0"]
+
+
+def test_tail_bound_can_require_support_beyond_fifty(tmp_path) -> None:
+    """The emitted native NB tail, not a fixed cap, determines shared support."""
+    alpha = 1000.0
+    theta = 0.5
+    pi_mis = 1.0
+    n_samples = 10
+    tail_eps = 1e-7
+    f = _write_dig(
+        tmp_path,
+        GENE=["HIGH"],
+        ALPHA=[alpha],
+        THETA=[theta],
+        Pi_MIS=[pi_mis],
+        Pi_NONS=[0.0],
+    )
+    out = str(tmp_path / "bmr_pmfs.csv")
+
+    dig_results_to_bmr_pmfs(
+        f,
+        n_samples=n_samples,
+        out=out,
+        tail_eps=tail_eps,
+    )
+
+    b = pd.read_csv(out, index_col=0)
+    distribution = nbinom(
+        alpha / n_samples,
+        1.0 / (1.0 + theta * pi_mis),
+    )
+    expected_kmax = int(distribution.isf(tail_eps))
+    observed_kmax = int(b.columns[-1])
+    assert expected_kmax > 50
+    assert observed_kmax == expected_kmax
+    assert distribution.sf(observed_kmax) <= tail_eps
+    assert distribution.sf(observed_kmax - 1) > tail_eps
 
 
 def test_missing_columns_raise(tmp_path) -> None:

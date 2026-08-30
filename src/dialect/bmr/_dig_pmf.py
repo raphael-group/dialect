@@ -36,7 +36,6 @@ from scipy.stats import nbinom
 # DIALECT effect suffix -> DIG per-effect fraction column.
 _EFFECTS = {"_M": "Pi_MIS", "_N": "Pi_NONS"}
 _REQUIRED = {"GENE", "ALPHA", "THETA", *(_EFFECTS.values())}
-_KMAX_CAP = 50  # per-sample passenger counts never realistically exceed this
 
 
 def _nb_params(
@@ -64,7 +63,11 @@ def dig_results_to_bmr_pmfs(
     :param out: output path for the DIALECT-format ``bmr_pmfs.csv``.
     :param max_count: if given, ensure the PMF support covers at least this count
         (e.g. the max observed count in the cohort's count matrix).
-    :param tail_eps: truncate each PMF where the survival drops below this.
+    :param tail_eps: maximum omitted upper-tail mass before normalization.
+
+    All effects share the inclusive support ``0..K``, where ``K`` covers
+    ``max_count`` and every effect-specific negative-binomial ``tail_eps``
+    quantile. No fixed count ceiling or probability floor is applied.
     """
     df = pd.read_csv(dig_results, sep="\t")
     missing = _REQUIRED - set(df.columns)
@@ -88,7 +91,7 @@ def dig_results_to_bmr_pmfs(
             params[key] = (alpha, theta, pi)
             if pi > 0:
                 nb = nbinom(*_nb_params(alpha, theta, pi, n_samples))
-                kmax = max(kmax, min(int(nb.ppf(1 - tail_eps)), _KMAX_CAP))
+                kmax = max(kmax, int(nb.isf(tail_eps)))
 
     # Pass 2: build each PMF over the shared support 0..kmax and renormalize.
     counts = np.arange(kmax + 1)

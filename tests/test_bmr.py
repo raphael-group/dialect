@@ -2,6 +2,7 @@
 
 import pandas as pd
 import pytest
+from scipy.stats import nbinom
 
 from dialect.bmr import (
     BMRProvider,
@@ -92,8 +93,9 @@ def test_dig_provider_covers_existing_count_matrix_observations(tmp_path) -> Non
         str(tmp_path),
     )
 
-    assert max(result.pmfs["G_M"]) >= 25
-    assert result.pmfs["G_M"][24] + result.pmfs["G_M"][25] > 0
+    assert max(result.pmfs["G_M"]) == 25
+    native = nbinom(100.0 / 2, 1.0 / (1.0 + 0.3 * 0.04)).pmf(range(26))
+    assert result.pmfs["G_M"][25] == pytest.approx(native[-1] / native.sum())
 
 
 def test_dig_provider_rejects_count_matrix_sample_mismatch(tmp_path) -> None:
