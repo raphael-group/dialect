@@ -118,3 +118,23 @@ def test_dig_provider_rejects_count_matrix_sample_mismatch(tmp_path) -> None:
     provider = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=3)
     with pytest.raises(ValueError, match="n_samples does not match"):
         provider.estimate(str(tmp_path / "cohort.maf"), str(tmp_path))
+
+
+def test_dig_provider_rejects_duplicate_sample_axis(tmp_path) -> None:
+    (tmp_path / "cohort.maf").write_text("dummy\n")
+    pd.DataFrame(
+        {
+            "GENE": ["G"],
+            "ALPHA": [100.0],
+            "THETA": [0.3],
+            "Pi_MIS": [0.04],
+            "Pi_NONS": [0.002],
+        },
+    ).to_csv(tmp_path / "dig.results.txt", sep="\t", index=False)
+    pd.DataFrame({"G_M": [0, 1]}, index=["s1", "s1"]).rename_axis("sample").to_csv(
+        tmp_path / "count_matrix.csv",
+    )
+
+    provider = DIGProvider(str(tmp_path / "dig.results.txt"), n_samples=2)
+    with pytest.raises(ValueError, match="unique sample"):
+        provider.estimate(str(tmp_path / "cohort.maf"), str(tmp_path))

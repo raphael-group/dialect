@@ -64,6 +64,12 @@ class DIGProvider:
                     f"expected {self.n_samples}, observed {len(counts)}"
                 )
                 raise ValueError(msg)
+            if not counts.index.is_unique or not counts.columns.is_unique:
+                msg = "count_matrix.csv must have unique sample and feature axes"
+                raise ValueError(msg)
+            if any(pd.api.types.is_bool_dtype(dtype) for dtype in counts.dtypes):
+                msg = "count_matrix.csv must contain integer counts, not booleans"
+                raise ValueError(msg)
             values = counts.to_numpy(dtype=np.float64)
             if values.size:
                 if (

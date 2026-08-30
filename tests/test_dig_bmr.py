@@ -92,3 +92,70 @@ def test_missing_columns_raise(tmp_path) -> None:
     f = _write_dig(tmp_path, GENE=["X"], ALPHA=[1.0])
     with pytest.raises(ValueError, match="missing required columns"):
         dig_results_to_bmr_pmfs(f, n_samples=10, out=str(tmp_path / "o.csv"))
+
+
+@pytest.mark.parametrize(
+    ("argument", "value", "message"),
+    [
+        ("n_samples", True, "positive integer"),
+        ("n_samples", 10.0, "positive integer"),
+        ("max_count", -1, "nonnegative integer"),
+        ("max_count", True, "nonnegative integer"),
+        ("tail_eps", 0.0, "strictly between"),
+        ("tail_eps", 1.0, "strictly between"),
+        ("tail_eps", float("nan"), "strictly between"),
+    ],
+)
+def test_converter_rejects_invalid_support_contract(
+    tmp_path,
+    argument,
+    value,
+    message,
+) -> None:
+    f = _write_dig(
+        tmp_path,
+        GENE=["G"],
+        ALPHA=[100.0],
+        THETA=[0.3],
+        Pi_MIS=[0.04],
+        Pi_NONS=[0.002],
+    )
+    arguments = {
+        "dig_results": f,
+        "n_samples": 10,
+        "out": str(tmp_path / "o.csv"),
+        "max_count": None,
+        "tail_eps": 1e-7,
+    }
+    arguments[argument] = value
+
+    with pytest.raises(ValueError, match=message):
+        dig_results_to_bmr_pmfs(**arguments)
+
+
+def test_converter_rejects_duplicate_gene_identifiers(tmp_path) -> None:
+    f = _write_dig(
+        tmp_path,
+        GENE=["G", "G"],
+        ALPHA=[100.0, 100.0],
+        THETA=[0.3, 0.3],
+        Pi_MIS=[0.04, 0.04],
+        Pi_NONS=[0.002, 0.002],
+    )
+    with pytest.raises(ValueError, match="duplicate gene"):
+        dig_results_to_bmr_pmfs(f, n_samples=10, out=str(tmp_path / "o.csv"))
+
+
+def test_converter_rejects_when_no_native_effect_distribution_is_valid(
+    tmp_path,
+) -> None:
+    f = _write_dig(
+        tmp_path,
+        GENE=["G"],
+        ALPHA=[100.0],
+        THETA=[0.3],
+        Pi_MIS=[float("nan")],
+        Pi_NONS=[-0.1],
+    )
+    with pytest.raises(ValueError, match="no valid gene-effect"):
+        dig_results_to_bmr_pmfs(f, n_samples=10, out=str(tmp_path / "o.csv"))
