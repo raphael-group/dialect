@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -24,9 +26,9 @@ import selectors
 import signal
 import stat
 import subprocess
+import sys
 import tarfile
 import time
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
@@ -150,6 +152,7 @@ PUBLIC_CLOSURE_MEMBER: Final = "evidence/release_evidence.json"
 PUBLIC_PROJECTION_MEMBER: Final = "evidence/k500_authority_projection.json"
 ARCHIVE_FORMAT: Final = "posix-ustar-uncompressed-v1"
 ARCHIVE_FILE_MODE: Final = 0o444
+PRIVATE_STAGE_MARKER: Final = ".private-"
 MAX_METADATA_BYTES: Final = 16 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS: Final = 4096
 MAX_ARCHIVE_METADATA_MEMBER_BYTES: Final = 32 * 1024 * 1024
@@ -157,6 +160,9 @@ READ_CHUNK_BYTES: Final = 1024 * 1024
 MAX_GIT_EXECUTABLE_BYTES: Final = 256 * 1024 * 1024
 MAX_GIT_BLOB_BYTES: Final = 16 * 1024 * 1024
 MAX_PUBLIC_CODE_BYTES: Final = 128 * 1024 * 1024
+EXACT_ROOT_SCAN_CAP: Final = 64
+MAX_PUBLICATION_DIRECTORY_ENTRIES: Final = 1024
+PUBLICATION_DIRECTORY_SCAN_CAP: Final = MAX_PUBLICATION_DIRECTORY_ENTRIES + 1
 MAX_GIT_CONTROL_STDOUT_BYTES: Final = 4096
 MAX_GIT_STDOUT_BYTES: Final = MAX_GIT_BLOB_BYTES
 MAX_GIT_STDERR_BYTES: Final = 1024 * 1024
@@ -215,6 +221,10 @@ _DOI_RE: Final = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 
 class PublicReleaseError(ValueError):
     """Raised when a public release boundary cannot be proven."""
+
+
+class _RenameNotPerformedError(PublicReleaseError):
+    """Report a no-replace rename that definitely did not rename its source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1741,15 +1751,43 @@ def _require_exact_root_inventory(
     *,
     context: str,
 ) -> None:
+    if len(expected) >= EXACT_ROOT_SCAN_CAP:
+        raise PublicReleaseError(
+            f"{context} expected inventory exceeds its scan policy",
+        )
+    _revalidate_root(root, context=f"{context} root before inventory scan")
     try:
-        names = set(os.listdir(root.descriptor))  # noqa: PTH208
+        entries = os.scandir(root.descriptor)
     except OSError as error:
         raise PublicReleaseError(f"cannot list {context}") from error
-    if names != expected:
+    seen: set[str] = set()
+    scanned = 0
+    try:
+        with entries:
+            for entry in entries:
+                scanned += 1
+                if scanned >= EXACT_ROOT_SCAN_CAP:
+                    raise PublicReleaseError(
+                        f"{context} reached its bounded scan cap",
+                    )
+                name = entry.name
+                if name not in expected:
+                    raise PublicReleaseError(
+                        f"{context} has unexpected inventory member {name!r}",
+                    )
+                if name in seen:
+                    raise PublicReleaseError(
+                        f"{context} has duplicate inventory member {name!r}",
+                    )
+                seen.add(name)
+    except OSError as error:
+        raise PublicReleaseError(f"cannot scan {context}") from error
+    missing = expected - seen
+    if missing:
         raise PublicReleaseError(
-            f"{context} inventory differs: expected={sorted(expected)!r}, "
-            f"actual={sorted(names)!r}",
+            f"{context} is missing inventory members {sorted(missing)!r}",
         )
+    _revalidate_root(root, context=f"{context} root after inventory scan")
 
 
 def _validate_dependency_ledger(  # noqa: PLR0913
@@ -4115,7 +4153,7 @@ def _create_staging(
     parent: _PinnedRoot,
     basename: str,
 ) -> tuple[str, int, tuple[int, int]]:
-    staging = f".{basename}.staging-{uuid.uuid4().hex}"
+    staging = f"{_private_stage_prefix(basename)}candidate"
     flags = (
         os.O_RDWR
         | os.O_CREAT
@@ -4126,11 +4164,30 @@ def _create_staging(
     )
     try:
         descriptor = os.open(staging, flags, 0o400, dir_fd=parent.descriptor)
+    except FileExistsError as error:
+        raise PublicReleaseError(
+            "retained private stage requires explicit review before retry: "
+            f"{parent.path / staging}; candidate_label=unclassified,"
+            f"candidate_paths={parent.path / staging},"
+            "candidate_state=private-stage-name-may-be-owned-or-replaced-"
+            "do-not-auto-delete,expected_sha256=unknown,expected_bytes=unknown",
+        ) from error
     except OSError as error:
         raise PublicReleaseError(
             "cannot create exclusive publication staging file",
         ) from error
-    observed = os.fstat(descriptor)
+    try:
+        observed = os.fstat(descriptor)
+    except OSError as error:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
+        raise PublicReleaseError(
+            f"cannot inspect exclusive publication staging file; "
+            f"candidate_label=unclassified,candidate_paths={parent.path / staging},"
+            "candidate_state=private-stage-name-may-be-owned-or-replaced-"
+            "do-not-auto-delete,expected_sha256=unknown,expected_bytes=unknown; "
+            "inspect its identity and bytes before any explicit review/removal",
+        ) from error
     return staging, descriptor, (observed.st_dev, observed.st_ino)
 
 
@@ -4143,61 +4200,208 @@ def _write_all(descriptor: int, raw: bytes) -> None:
         position += written
 
 
-def _unlink_owned(parent: _PinnedRoot, name: str, identity: tuple[int, int]) -> None:
-    try:
-        entry = os.stat(
-            name,
-            dir_fd=parent.descriptor,
-            follow_symlinks=False,
+def _private_stage_prefix(basename: str) -> str:
+    return f".{basename}{PRIVATE_STAGE_MARKER}"
+
+
+def _require_destination_names_absent(
+    parent: _PinnedRoot,
+    destinations: Sequence[Path],
+    *,
+    context: str,
+) -> None:
+    _revalidate_root(parent, context=f"{context} parent before name preflight")
+    for destination in destinations:
+        try:
+            os.stat(
+                destination.name,
+                dir_fd=parent.descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise PublicReleaseError(
+                f"cannot preflight {context} destination: {destination}",
+            ) from error
+        raise PublicReleaseError(
+            f"refusing to replace {context} destination: {destination}",
         )
-    except FileNotFoundError:
-        return
-    except OSError:
-        return
-    if (entry.st_dev, entry.st_ino) != identity:
-        return
-    with contextlib.suppress(OSError):
-        os.unlink(name, dir_fd=parent.descriptor)
+    _revalidate_root(parent, context=f"{context} parent after name preflight")
+
+
+def _require_no_retained_stages(
+    parent: _PinnedRoot,
+    basenames: Sequence[str],
+    *,
+    context: str,
+    reserved_entries: int,
+) -> None:
+    """Block publication until every prior private candidate is reconciled."""
+    if (
+        isinstance(reserved_entries, bool)
+        or not isinstance(reserved_entries, int)
+        or not 0 <= reserved_entries <= MAX_PUBLICATION_DIRECTORY_ENTRIES
+    ):
+        raise PublicReleaseError(
+            "publication directory reserved_entries is outside policy",
+        )
+    maximum_existing = MAX_PUBLICATION_DIRECTORY_ENTRIES - reserved_entries
+    prefixes = tuple(_private_stage_prefix(basename) for basename in basenames)
+    _revalidate_root(parent, context=f"{context} parent before stage preflight")
+    try:
+        entries = os.scandir(parent.descriptor)
+    except OSError as error:
+        raise PublicReleaseError(
+            f"cannot inspect {context} parent for retained private stages",
+        ) from error
+    retained: str | None = None
+    scanned = 0
+    try:
+        with entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > maximum_existing:
+                    raise PublicReleaseError(
+                        f"{context} parent exceeds the bounded directory policy of "
+                        f"{MAX_PUBLICATION_DIRECTORY_ENTRIES} final entries after "
+                        f"reserving {reserved_entries} publication slots",
+                    )
+                if any(entry.name.startswith(prefix) for prefix in prefixes):
+                    retained = entry.name
+                    break
+    except OSError as error:
+        raise PublicReleaseError(
+            f"cannot scan {context} parent for retained private stages",
+        ) from error
+    _revalidate_root(parent, context=f"{context} parent after stage preflight")
+    if retained is not None:
+        raise PublicReleaseError(
+            "retained private stage requires explicit review before retry: "
+            f"{parent.path / retained}",
+        )
 
 
 def _pin_staged(parent: _PinnedRoot, member: str, *, context: str) -> _PinnedFile:
     return _pin_member(parent, member, context=context)
 
 
-def _link_staged_no_replace(
+def _rename_staged_no_replace(
     parent: _PinnedRoot,
     staging_name: str,
     destination_name: str,
     *,
-    staging_identity: tuple[int, int],
     context: str,
-) -> tuple[int, int]:
-    _revalidate_root(parent, context=f"{context} destination parent before link")
+) -> None:
+    """Atomically rename one sibling stage without replacing any destination."""
     try:
-        os.link(
-            staging_name,
-            destination_name,
-            src_dir_fd=parent.descriptor,
-            dst_dir_fd=parent.descriptor,
-            follow_symlinks=False,
+        _revalidate_root(
+            parent,
+            context=f"{context} destination parent before rename",
         )
-    except FileExistsError as error:
+        library = ctypes.CDLL(None, use_errno=True)
+    except (OSError, PublicReleaseError) as error:
+        raise _RenameNotPerformedError(str(error)) from error
+    if sys.platform == "darwin":
+        try:
+            rename = library.renameatx_np
+        except AttributeError as error:
+            raise _RenameNotPerformedError(
+                "platform atomic no-replace rename symbol renameatx_np is unavailable",
+            ) from error
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        result = rename(
+            parent.descriptor,
+            os.fsencode(staging_name),
+            parent.descriptor,
+            os.fsencode(destination_name),
+            0x00000004,  # RENAME_EXCL
+        )
+    elif sys.platform.startswith("linux"):
+        try:
+            rename = library.renameat2
+        except AttributeError as error:
+            raise _RenameNotPerformedError(
+                "platform atomic no-replace rename symbol renameat2 is unavailable",
+            ) from error
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        result = rename(
+            parent.descriptor,
+            os.fsencode(staging_name),
+            parent.descriptor,
+            os.fsencode(destination_name),
+            1,  # RENAME_NOREPLACE
+        )
+    else:
+        raise _RenameNotPerformedError(
+            "platform lacks a supported atomic no-replace rename",
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
         raise PublicReleaseError(
-            f"refusing to replace {context} destination",
-        ) from error
-    except OSError as error:
-        raise PublicReleaseError(f"cannot publish {context} destination") from error
-    entry = os.stat(
-        destination_name,
-        dir_fd=parent.descriptor,
-        follow_symlinks=False,
+            f"refusing to replace {context} destination; the issued atomic rename "
+            "syscall outcome is treated as ambiguous",
+        )
+    unsupported_errors = {
+        number
+        for number in (
+            getattr(errno, "EINVAL", None),
+            getattr(errno, "ENOSYS", None),
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EOPNOTSUPP", None),
+        )
+        if number is not None
+    }
+    if error_number in unsupported_errors:
+        raise PublicReleaseError(
+            "filesystem/platform does not support atomic no-replace rename: "
+            f"{os.strerror(error_number)} (errno {error_number}); the issued syscall "
+            "outcome is treated as ambiguous",
+        )
+    raise PublicReleaseError(
+        f"cannot publish {context} destination with atomic no-replace rename: "
+        f"{os.strerror(error_number)} (errno {error_number}); the issued syscall "
+        "outcome is treated as ambiguous",
     )
-    observed_identity = (entry.st_dev, entry.st_ino)
-    if observed_identity != staging_identity:
-        raise PublicReleaseError(
-            f"{context} destination changed immediately after link",
-        )
-    return observed_identity
+
+
+def _verify_staged_file(  # noqa: PLR0913
+    parent: _PinnedRoot,
+    staging_name: str,
+    *,
+    identity: tuple[int, int],
+    expected_sha256: str,
+    expected_bytes: int,
+    context: str,
+) -> None:
+    staged = _pin_staged(parent, staging_name, context=context)
+    try:
+        if (
+            (staged.device, staged.inode) != identity
+            or staged.sha256 != expected_sha256
+            or staged.size_bytes != expected_bytes
+            or staged.mode != 0o400
+        ):
+            raise PublicReleaseError(f"{context} differs from its intended bytes")
+        _revalidate_file(staged, context=context)
+    finally:
+        staged.close()
 
 
 def _require_published_file(  # noqa: PLR0913
@@ -4232,7 +4436,28 @@ def _require_published_file(  # noqa: PLR0913
 
 def _directory_snapshot(parent: _PinnedRoot) -> _DirectorySnapshot:
     before = os.fstat(parent.descriptor)
-    members = tuple(sorted(os.listdir(parent.descriptor)))  # noqa: PTH208
+    try:
+        entries = os.scandir(parent.descriptor)
+    except OSError as error:
+        raise PublicReleaseError("cannot inspect publication directory") from error
+    observed: set[str] = set()
+    scanned = 0
+    try:
+        with entries:
+            for entry in entries:
+                scanned += 1
+                if scanned >= PUBLICATION_DIRECTORY_SCAN_CAP:
+                    raise PublicReleaseError(
+                        "publication directory exceeds the bounded policy of "
+                        f"{MAX_PUBLICATION_DIRECTORY_ENTRIES} entries",
+                    )
+                if entry.name in observed:
+                    raise PublicReleaseError(
+                        f"publication directory returned duplicate name {entry.name!r}",
+                    )
+                observed.add(entry.name)
+    except OSError as error:
+        raise PublicReleaseError("cannot scan publication directory") from error
     after = os.fstat(parent.descriptor)
 
     def signature(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
@@ -4248,7 +4473,7 @@ def _directory_snapshot(parent: _PinnedRoot) -> _DirectorySnapshot:
     if signature(before) != signature(after):
         raise PublicReleaseError("destination parent changed during snapshot")
     return _DirectorySnapshot(
-        members=members,
+        members=tuple(sorted(observed)),
         stat_signature=signature(after),
     )
 
@@ -4264,6 +4489,58 @@ def _require_directory_snapshot(
         raise PublicReleaseError(f"{context} membership or metadata changed")
 
 
+def _publication_candidate_record(  # noqa: PLR0913
+    *,
+    label: str,
+    parent: _PinnedRoot,
+    destination: Path,
+    staging_name: str,
+    stage_created: bool,
+    stage_verified: bool,
+    rename_attempted: bool,
+    rename_confirmed: bool,
+    rename_definitely_not_performed: bool,
+    expected_sha256: str,
+    expected_bytes: int,
+) -> str | None:
+    if rename_confirmed:
+        paths = str(destination)
+        state = "destination-name-may-be-owned-or-replaced-do-not-auto-delete"
+    elif rename_attempted and not rename_definitely_not_performed:
+        paths = f"{destination}|{parent.path / staging_name}"
+        state = (
+            "destination-or-private-stage-name-may-be-owned-or-replaced-"
+            "do-not-auto-delete"
+        )
+    elif stage_created:
+        paths = str(parent.path / staging_name)
+        state = "private-stage-name-may-be-owned-or-replaced-do-not-auto-delete"
+    else:
+        return None
+    digest = expected_sha256 if stage_verified else "unknown"
+    size: int | str = expected_bytes if stage_verified else "unknown"
+    return (
+        f"candidate_label={label},candidate_paths={paths},candidate_state={state},"
+        f"intended_destination={destination},"
+        f"candidate_parent_identity={parent.device}:{parent.inode},"
+        f"expected_sha256={digest},expected_bytes={size}"
+    )
+
+
+def _publication_failure(
+    error: Exception,
+    records: Sequence[str | None],
+) -> PublicReleaseError | None:
+    candidates = [record for record in records if record is not None]
+    if not candidates:
+        return None
+    return PublicReleaseError(
+        f"{error}; {'; '.join(candidates)}; inspect every reported name, identity, "
+        "and byte sequence before any explicit review/removal; candidate paths are "
+        "lexical and their parent may have moved or been replaced",
+    )
+
+
 def _publication_receipt(
     prepared: _PreparedRelease,
     archive: _VerifiedArchive,
@@ -4271,7 +4548,7 @@ def _publication_receipt(
     release = _expect_mapping(prepared.plan["release"], context="plan.release")
     payload = {
         "schema": RECEIPT_SCHEMA,
-        "contract": "atomic-no-replace-public-release-v1",
+        "contract": "sequential-per-member-atomic-no-replace-public-release-v1",
         "release_id": release["release_id"],
         "version": release["version"],
         "archive": {
@@ -4287,8 +4564,11 @@ def _publication_receipt(
         "release_commit_b": release["release_commit_b"],
         "source_tag": release["source_tag"],
         "publication": {
-            "archive_no_replace": True,
-            "receipt_no_replace": True,
+            "pair_atomic": False,
+            "publication_order": ["archive", "receipt"],
+            "archive_atomic_no_replace": True,
+            "receipt_atomic_no_replace": True,
+            "partial_publication_retained_for_explicit_reconciliation": True,
             "input_revalidated_after_archive_write": True,
             "submission_package_created": False,
         },
@@ -4300,21 +4580,50 @@ def _publish_release(
     prepared: _PreparedRelease,
     parent: _PinnedRoot,
 ) -> PublicReleaseReceipt:
+    _require_no_retained_stages(
+        parent,
+        (
+            prepared.config.destination_archive.name,
+            prepared.config.destination_receipt.name,
+        ),
+        context="public release destination",
+        reserved_entries=2,
+    )
+    _require_destination_names_absent(
+        parent,
+        (
+            prepared.config.destination_archive,
+            prepared.config.destination_receipt,
+        ),
+        context="public release",
+    )
     archive_staging = ""
     receipt_staging = ""
     archive_fd: int | None = None
     receipt_fd: int | None = None
-    archive_identity: tuple[int, int] | None = None
-    receipt_identity: tuple[int, int] | None = None
     archive_staging_identity: tuple[int, int] | None = None
     receipt_staging_identity: tuple[int, int] | None = None
-    archive = None
+    archive_stage_created = False
+    receipt_stage_created = False
+    archive_stage_verified = False
+    receipt_stage_verified = False
+    archive_rename_attempted = False
+    receipt_rename_attempted = False
+    archive_rename_confirmed = False
+    receipt_rename_confirmed = False
+    archive_rename_definitely_not_performed = False
+    receipt_rename_definitely_not_performed = False
+    archive: _VerifiedArchive | None = None
+    archive_sha256 = ""
+    archive_bytes = 0
     receipt_raw = b""
+    receipt_sha256 = ""
     try:
         archive_staging, archive_fd, archive_staging_identity = _create_staging(
             parent,
             prepared.config.destination_archive.name,
         )
+        archive_stage_created = True
         _write_archive(archive_fd, prepared)
         staged_archive = _pin_staged(
             parent,
@@ -4327,60 +4636,104 @@ def _publish_release(
                 expected_archive_sha256=staged_archive.sha256,
                 expected_manifest_sha256=_sha256(prepared.manifest_raw),
             )
+            if (
+                staged_archive.device,
+                staged_archive.inode,
+            ) != archive_staging_identity or staged_archive.mode != 0o400:
+                raise PublicReleaseError("staged public archive identity is invalid")
         finally:
             staged_archive.close()
+        archive_sha256 = archive.archive_sha256
+        archive_bytes = archive.archive_bytes
+        _verify_staged_file(
+            parent,
+            archive_staging,
+            identity=archive_staging_identity,
+            expected_sha256=archive_sha256,
+            expected_bytes=archive_bytes,
+            context="fully staged public archive",
+        )
+        archive_stage_verified = True
+        archive_descriptor = archive_fd
+        archive_fd = None
+        os.close(archive_descriptor)
         _revalidate_prepared(prepared)
         receipt_raw = _publication_receipt(prepared, archive)
+        receipt_sha256 = _sha256(receipt_raw)
         receipt_staging, receipt_fd, receipt_staging_identity = _create_staging(
             parent,
             prepared.config.destination_receipt.name,
         )
+        receipt_stage_created = True
         _write_all(receipt_fd, receipt_raw)
         os.fchmod(receipt_fd, 0o400)
         os.fsync(receipt_fd)
+        _verify_staged_file(
+            parent,
+            receipt_staging,
+            identity=receipt_staging_identity,
+            expected_sha256=receipt_sha256,
+            expected_bytes=len(receipt_raw),
+            context="fully staged public release receipt",
+        )
+        receipt_stage_verified = True
+        receipt_descriptor = receipt_fd
+        receipt_fd = None
+        os.close(receipt_descriptor)
+        _revalidate_prepared(prepared)
         _revalidate_root(
             parent,
             context="release destination parent before publication",
         )
-        archive_identity = _link_staged_no_replace(
-            parent,
-            archive_staging,
-            prepared.config.destination_archive.name,
-            staging_identity=archive_staging_identity,
-            context="public archive",
-        )
-        receipt_identity = _link_staged_no_replace(
-            parent,
-            receipt_staging,
-            prepared.config.destination_receipt.name,
-            staging_identity=receipt_staging_identity,
-            context="public release receipt",
-        )
-        _revalidate_root(parent, context="release destination parent after links")
-        _revalidate_prepared(prepared)
-        os.unlink(archive_staging, dir_fd=parent.descriptor)
-        archive_staging = ""
-        os.unlink(receipt_staging, dir_fd=parent.descriptor)
-        receipt_staging = ""
+        archive_rename_attempted = True
+        try:
+            _rename_staged_no_replace(
+                parent,
+                archive_staging,
+                prepared.config.destination_archive.name,
+                context="public archive",
+            )
+        except _RenameNotPerformedError:
+            archive_rename_definitely_not_performed = True
+            raise
+        archive_rename_confirmed = True
         os.fsync(parent.descriptor)
         _revalidate_root(
             parent,
-            context="release destination parent after staging unlink",
+            context="release destination parent after archive publication",
         )
+        _revalidate_prepared(prepared)
+        receipt_rename_attempted = True
+        try:
+            _rename_staged_no_replace(
+                parent,
+                receipt_staging,
+                prepared.config.destination_receipt.name,
+                context="public release receipt",
+            )
+        except _RenameNotPerformedError:
+            receipt_rename_definitely_not_performed = True
+            raise
+        receipt_rename_confirmed = True
+        os.fsync(parent.descriptor)
+        _revalidate_root(
+            parent,
+            context="release destination parent after receipt publication",
+        )
+        _revalidate_prepared(prepared)
         published_parent_snapshot = _directory_snapshot(parent)
         _require_published_file(
             parent,
             prepared.config.destination_archive,
-            identity=archive_identity,
-            expected_sha256=archive.archive_sha256,
-            expected_bytes=archive.archive_bytes,
+            identity=archive_staging_identity,
+            expected_sha256=archive_sha256,
+            expected_bytes=archive_bytes,
             context="published public archive",
         )
-        receipt_sha256 = _sha256(receipt_raw)
         _require_published_file(
             parent,
             prepared.config.destination_receipt,
-            identity=receipt_identity,
+            identity=receipt_staging_identity,
             expected_sha256=receipt_sha256,
             expected_bytes=len(receipt_raw),
             context="published public release receipt",
@@ -4389,18 +4742,27 @@ def _publish_release(
         _require_published_file(
             parent,
             prepared.config.destination_archive,
-            identity=archive_identity,
-            expected_sha256=archive.archive_sha256,
-            expected_bytes=archive.archive_bytes,
+            identity=archive_staging_identity,
+            expected_sha256=archive_sha256,
+            expected_bytes=archive_bytes,
             context="final published public archive",
         )
         _require_published_file(
             parent,
             prepared.config.destination_receipt,
-            identity=receipt_identity,
+            identity=receipt_staging_identity,
             expected_sha256=receipt_sha256,
             expected_bytes=len(receipt_raw),
             context="final published public release receipt",
+        )
+        _require_no_retained_stages(
+            parent,
+            (
+                prepared.config.destination_archive.name,
+                prepared.config.destination_receipt.name,
+            ),
+            context="final public release destination",
+            reserved_entries=0,
         )
         _require_directory_snapshot(
             parent,
@@ -4409,38 +4771,57 @@ def _publish_release(
         )
         return PublicReleaseReceipt(
             archive_path=str(prepared.config.destination_archive),
-            archive_sha256=archive.archive_sha256,
-            archive_bytes=archive.archive_bytes,
+            archive_sha256=archive_sha256,
+            archive_bytes=archive_bytes,
             manifest_sha256=archive.manifest_sha256,
             receipt_path=str(prepared.config.destination_receipt),
             receipt_sha256=receipt_sha256,
             member_count=archive.member_count,
         )
-    except Exception:
-        owned_archive_identity = archive_identity or archive_staging_identity
-        owned_receipt_identity = receipt_identity or receipt_staging_identity
-        if owned_archive_identity is not None:
-            _unlink_owned(
-                parent,
-                prepared.config.destination_archive.name,
-                owned_archive_identity,
-            )
-        if owned_receipt_identity is not None:
-            _unlink_owned(
-                parent,
-                prepared.config.destination_receipt.name,
-                owned_receipt_identity,
-            )
-        raise
+    except Exception as error:
+        failure = _publication_failure(
+            error,
+            (
+                _publication_candidate_record(
+                    label="archive",
+                    parent=parent,
+                    destination=prepared.config.destination_archive,
+                    staging_name=archive_staging,
+                    stage_created=archive_stage_created,
+                    stage_verified=archive_stage_verified,
+                    rename_attempted=archive_rename_attempted,
+                    rename_confirmed=archive_rename_confirmed,
+                    rename_definitely_not_performed=(
+                        archive_rename_definitely_not_performed
+                    ),
+                    expected_sha256=archive_sha256,
+                    expected_bytes=archive_bytes,
+                ),
+                _publication_candidate_record(
+                    label="receipt",
+                    parent=parent,
+                    destination=prepared.config.destination_receipt,
+                    staging_name=receipt_staging,
+                    stage_created=receipt_stage_created,
+                    stage_verified=receipt_stage_verified,
+                    rename_attempted=receipt_rename_attempted,
+                    rename_confirmed=receipt_rename_confirmed,
+                    rename_definitely_not_performed=(
+                        receipt_rename_definitely_not_performed
+                    ),
+                    expected_sha256=receipt_sha256,
+                    expected_bytes=len(receipt_raw),
+                ),
+            ),
+        )
+        if failure is None:
+            raise
+        raise failure from error
     finally:
         if archive_fd is not None:
             os.close(archive_fd)
         if receipt_fd is not None:
             os.close(receipt_fd)
-        if archive_staging and archive_staging_identity is not None:
-            _unlink_owned(parent, archive_staging, archive_staging_identity)
-        if receipt_staging and receipt_staging_identity is not None:
-            _unlink_owned(parent, receipt_staging, receipt_staging_identity)
 
 
 def _input_root_paths(config: PublicReleaseBuildConfig) -> tuple[Path, ...]:
@@ -4457,7 +4838,12 @@ def _input_root_paths(config: PublicReleaseBuildConfig) -> tuple[Path, ...]:
 
 
 def build_public_release(config: PublicReleaseBuildConfig) -> PublicReleaseReceipt:
-    """Build and atomically publish one final result-blind public archive."""
+    """Build a release, then publish archive and receipt with atomic members.
+
+    Each destination uses an atomic no-replace rename.  The two-name release is
+    intentionally sequential rather than pair-atomic: an archive retained after a
+    receipt publication failure requires explicit reconciliation before retry.
+    """
     plan_file, plan, pending = _pin_and_parse_plan(
         config.plan_path,
         config.expected_plan_sha256,
@@ -4523,38 +4909,68 @@ def _publish_portal_readback(
     *,
     revalidate_input: Callable[[], None],
 ) -> str:
+    _require_no_retained_stages(
+        parent,
+        (destination.name,),
+        context="portal readback destination",
+        reserved_entries=1,
+    )
+    _require_destination_names_absent(
+        parent,
+        (destination,),
+        context="portal readback",
+    )
     staging = ""
     descriptor: int | None = None
-    identity: tuple[int, int] | None = None
     staging_identity: tuple[int, int] | None = None
+    stage_created = False
+    stage_verified = False
+    rename_attempted = False
+    rename_confirmed = False
+    rename_definitely_not_performed = False
+    digest = _sha256(raw)
     try:
         staging, descriptor, staging_identity = _create_staging(
             parent,
             destination.name,
         )
+        stage_created = True
         _write_all(descriptor, raw)
         os.fchmod(descriptor, 0o400)
         os.fsync(descriptor)
-        revalidate_input()
-        identity = _link_staged_no_replace(
+        _verify_staged_file(
             parent,
             staging,
-            destination.name,
-            staging_identity=staging_identity,
-            context="portal readback receipt",
+            identity=staging_identity,
+            expected_sha256=digest,
+            expected_bytes=len(raw),
+            context="fully staged portal readback receipt",
         )
-        _revalidate_root(parent, context="portal readback parent after link")
+        stage_verified = True
+        staged_descriptor = descriptor
+        descriptor = None
+        os.close(staged_descriptor)
         revalidate_input()
-        os.unlink(staging, dir_fd=parent.descriptor)
-        staging = ""
+        rename_attempted = True
+        try:
+            _rename_staged_no_replace(
+                parent,
+                staging,
+                destination.name,
+                context="portal readback receipt",
+            )
+        except _RenameNotPerformedError:
+            rename_definitely_not_performed = True
+            raise
+        rename_confirmed = True
         os.fsync(parent.descriptor)
-        _revalidate_root(parent, context="portal readback parent after staging unlink")
+        _revalidate_root(parent, context="portal readback parent after rename")
+        revalidate_input()
         published_parent_snapshot = _directory_snapshot(parent)
-        digest = _sha256(raw)
         _require_published_file(
             parent,
             destination,
-            identity=identity,
+            identity=staging_identity,
             expected_sha256=digest,
             expected_bytes=len(raw),
             context="published portal readback receipt",
@@ -4563,10 +4979,16 @@ def _publish_portal_readback(
         _require_published_file(
             parent,
             destination,
-            identity=identity,
+            identity=staging_identity,
             expected_sha256=digest,
             expected_bytes=len(raw),
             context="final published portal readback receipt",
+        )
+        _require_no_retained_stages(
+            parent,
+            (destination.name,),
+            context="final portal readback destination",
+            reserved_entries=0,
         )
         _require_directory_snapshot(
             parent,
@@ -4574,16 +4996,31 @@ def _publish_portal_readback(
             context="portal readback parent at final return",
         )
         return digest  # noqa: TRY300
-    except Exception:
-        owned_identity = identity or staging_identity
-        if owned_identity is not None:
-            _unlink_owned(parent, destination.name, owned_identity)
-        raise
+    except Exception as error:
+        failure = _publication_failure(
+            error,
+            (
+                _publication_candidate_record(
+                    label="portal-readback-receipt",
+                    parent=parent,
+                    destination=destination,
+                    staging_name=staging,
+                    stage_created=stage_created,
+                    stage_verified=stage_verified,
+                    rename_attempted=rename_attempted,
+                    rename_confirmed=rename_confirmed,
+                    rename_definitely_not_performed=(rename_definitely_not_performed),
+                    expected_sha256=digest,
+                    expected_bytes=len(raw),
+                ),
+            ),
+        )
+        if failure is None:
+            raise
+        raise failure from error
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if staging and staging_identity is not None:
-            _unlink_owned(parent, staging, staging_identity)
 
 
 def verify_download(  # noqa: PLR0913

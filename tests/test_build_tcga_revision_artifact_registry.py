@@ -132,9 +132,7 @@ def _write_ready_files(
             sources.append(
                 {
                     "source_id": f"{spec.semantic_id}-{role}",
-                    "release_member": (
-                        f"source-data/{spec.semantic_id}.{role}.csv"
-                    ),
+                    "release_member": (f"source-data/{spec.semantic_id}.{role}.csv"),
                     "role": role,
                     "sha256": _sha256(
                         f"source:{spec.semantic_id}:{role}".encode(),
@@ -376,11 +374,7 @@ def test_every_artifact_ready_branch_accepts_its_required_source_roles(
 
 @pytest.mark.parametrize(
     "spec",
-    [
-        spec
-        for spec in registry.ARTIFACT_SPECS
-        if spec.source_requirement == "required"
-    ],
+    [spec for spec in registry.ARTIFACT_SPECS if spec.source_requirement == "required"],
     ids=lambda spec: spec.semantic_id,
 )
 def test_every_data_artifact_rejects_a_missing_required_source_role(
@@ -401,9 +395,7 @@ def test_every_data_artifact_rejects_a_missing_required_source_role(
         if role not in spec.required_source_roles
     )
     source = next(  # type: ignore[arg-type]
-        source
-        for source in artifact["source_data"]
-        if source["role"] == missing_role
+        source for source in artifact["source_data"] if source["role"] == missing_role
     )
     source["role"] = replacement_role
     reconciliation = tmp_path / "input.json"
@@ -492,8 +484,7 @@ def test_all_artifacts_may_remain_explicitly_omitted_pending_gates(
     manifest = json.loads(destination.read_bytes())
     assert all(record["status"] == "omitted" for record in manifest["artifacts"])
     assert all(
-        record["omission"]["unsatisfied_gates"]
-        for record in manifest["artifacts"]
+        record["omission"]["unsatisfied_gates"] for record in manifest["artifacts"]
     )
 
 
@@ -639,9 +630,7 @@ def test_registry_is_deterministic_across_input_orderings(
     value_reordered["artifacts"].reverse()  # type: ignore[union-attr]
     value_reordered["gate_ledger"].reverse()  # type: ignore[union-attr]
     ready = next(  # type: ignore[arg-type]
-        record
-        for record in value_reordered["artifacts"]
-        if record["status"] == "ready"
+        record for record in value_reordered["artifacts"] if record["status"] == "ready"
     )
     ready["gate_receipts"].reverse()
     ready["source_data"].reverse()
@@ -766,9 +755,7 @@ def test_figure_cannot_be_ready_with_only_data_sidecars(
     output = value["artifacts"][0]["outputs"][0]  # type: ignore[index]
     original_path = roots[1] / output["release_member"]  # type: ignore[arg-type]
     raw = original_path.read_bytes()
-    replacement_member = (
-        "rendered/cross_cancer_bmr_co_sensitivity/data-only.json"
-    )
+    replacement_member = "rendered/cross_cancer_bmr_co_sensitivity/data-only.json"
     (roots[1] / replacement_member).write_bytes(raw)
     output["release_member"] = replacement_member  # type: ignore[index]
     output["media_type"] = "application/json"  # type: ignore[index]
@@ -1355,40 +1342,648 @@ def test_staged_registry_hash_readback_prevents_corrupt_publication(
         return original_write(descriptor, corrupt)
 
     monkeypatch.setattr(registry.os, "write", corrupt_write)
-    with pytest.raises(registry.ArtifactRegistryError, match="readback accounting"):
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="readback accounting",
+    ) as captured:
         registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
     assert not destination.exists()
+    assert "candidate_path=" in str(captured.value)
+    assert "expected_sha256=unknown" in str(captured.value)
+    assert "expected_bytes=unknown" in str(captured.value)
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
+    assert len(list(tmp_path.glob(".registry.json.private-*"))) == 1
 
 
-@pytest.mark.parametrize("replacement_fsync_call", [3, 4])
-def test_publication_detects_destination_replacement_at_each_directory_sync(
+def test_staged_registry_no_progress_is_reported_and_retained(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    replacement_fsync_call: int,
+) -> None:
+    destination = tmp_path / "registry.json"
+    monkeypatch.setattr(registry.os, "write", lambda *_args, **_kwargs: 0)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="write made no progress",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    message = str(captured.value)
+    assert "candidate_path=" in message
+    assert "expected_sha256=unknown" in message
+    assert "expected_bytes=unknown" in message
+    assert "private-stage-name-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".registry.json.private-*"))) == 1
+
+
+def test_pre_rename_failure_retains_one_stage_and_blocks_retry(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "registry.json"
+    raw = b'{"valid":true}\n'
+
+    def fail_before_rename() -> None:
+        message = "synthetic pre-rename failure"
+        raise registry.ArtifactRegistryError(message)
+
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="synthetic pre-rename failure",
+    ) as captured:
+        registry._publish_no_replace(  # noqa: SLF001
+            destination,
+            raw,
+            boundary_check=fail_before_rename,
+        )
+    message = str(captured.value)
+    assert f"expected_sha256={_sha256(raw)}" in message
+    assert f"expected_bytes={len(raw)}" in message
+    assert "private-stage-name-may-be-owned-or-replaced" in message
+    stages = list(tmp_path.glob(".registry.json.private-*"))
+    assert len(stages) == 1
+    assert stages[0].stat().st_mode & 0o777 == 0o400
+
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="retained private registry stage requires explicit review",
+    ):
+        registry._publish_no_replace(destination, raw)  # noqa: SLF001
+    assert list(tmp_path.glob(".registry.json.private-*")) == stages
+
+
+def test_post_scan_stage_reservation_race_preserves_unowned_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    candidate = tmp_path / ".registry.json.private-candidate"
+    competitor = b"competitor-stage\n"
+    native_open = registry.os.open
+    injected = False
+
+    def racing_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal injected
+        if path == candidate.name and not injected:
+            injected = True
+            descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+            try:
+                registry.os.write(descriptor, competitor)
+            finally:
+                registry.os.close(descriptor)
+            raise FileExistsError(
+                registry.errno.EEXIST,
+                registry.os.strerror(registry.errno.EEXIST),
+                path,
+            )
+        return native_open(path, flags, mode, dir_fd=dir_fd)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(registry.os, "open", racing_open)
+    monkeypatch.setattr(registry.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="appeared after the retained-stage preflight",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    message = str(captured.value)
+    assert f"candidate_path={candidate}" in message
+    assert "expected_sha256=unknown" in message
+    assert "expected_bytes=unknown" in message
+    assert "private-stage-name-not-proven-owned" in message
+    assert candidate.read_bytes() == competitor
+    assert list(tmp_path.glob(".registry.json.private-*")) == [candidate]
+
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="retained private registry stage requires explicit review",
+    ):
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    assert candidate.read_bytes() == competitor
+    assert list(tmp_path.glob(".registry.json.private-*")) == [candidate]
+
+
+def test_competitor_at_atomic_rename_survives_and_stage_is_retained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     destination = tmp_path / "registry.json"
     attacker = b'{"attacker":true}\n'
-    fsync_calls = 0
-    original_fsync = registry.os.fsync
+    original_rename = registry._rename_no_replace  # noqa: SLF001
 
-    def replacing_fsync(descriptor: int) -> None:
-        nonlocal fsync_calls
-        original_fsync(descriptor)
-        fsync_calls += 1
-        if fsync_calls == replacement_fsync_call:
-            destination.unlink()
-            destination.write_bytes(attacker)
+    def race(source: str, target: str, parent_descriptor: int) -> None:
+        descriptor = registry.os.open(
+            target,
+            registry.os.O_WRONLY | registry.os.O_CREAT | registry.os.O_EXCL,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            registry.os.write(descriptor, attacker)
+        finally:
+            registry.os.close(descriptor)
+        original_rename(source, target, parent_descriptor)
 
-    monkeypatch.setattr(registry.os, "fsync", replacing_fsync)
+    monkeypatch.setattr(registry, "_rename_no_replace", race)
     with pytest.raises(
         registry.ArtifactRegistryError,
-        match="does not match the staged file",
-    ):
+        match="destination may already exist",
+    ) as captured:
         registry._publish_no_replace(  # noqa: SLF001
             destination,
             b'{"valid":true}\n',
         )
     assert destination.read_bytes() == attacker
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".registry.json.private-*"))) == 1
+
+
+def test_rename_then_raise_reports_both_candidates_without_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    original_rename = registry._rename_no_replace  # noqa: SLF001
+
+    def rename_then_raise(source: str, target: str, parent_descriptor: int) -> None:
+        original_rename(source, target, parent_descriptor)
+        message = "synthetic ambiguous rename return"
+        raise OSError(message)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(registry, "_rename_no_replace", rename_then_raise)
+    monkeypatch.setattr(registry.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="synthetic ambiguous rename return",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert ".registry.json.private-" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert destination.exists()
+    assert not list(tmp_path.glob(".registry.json.private-*"))
+
+
+def test_missing_atomic_rename_symbol_retains_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+
+    class MissingRenameLibrary:
+        pass
+
+    monkeypatch.setattr(
+        registry.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: MissingRenameLibrary(),
+    )
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="rename symbol",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    assert "candidate_path=" in str(captured.value)
+    assert len(list(tmp_path.glob(".registry.json.private-*"))) == 1
+
+
+def test_unsupported_atomic_rename_error_is_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+
+    class UnsupportedRename:
+        def __call__(self, *_args: object) -> int:
+            registry.ctypes.set_errno(registry.errno.ENOTSUP)
+            return -1
+
+    class UnsupportedRenameLibrary:
+        renameatx_np = UnsupportedRename()
+        renameat2 = UnsupportedRename()
+
+    monkeypatch.setattr(
+        registry.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: UnsupportedRenameLibrary(),
+    )
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="does not support atomic no-replace rename",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".registry.json.private-*"))) == 1
+
+
+def test_post_syscall_eio_reports_both_names_without_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    candidate = tmp_path / ".registry.json.private-candidate"
+
+    class FailingRename:
+        def __call__(self, *_args: object) -> int:
+            registry.ctypes.set_errno(registry.errno.EIO)
+            return -1
+
+    class FailingRenameLibrary:
+        renameatx_np = FailingRename()
+        renameat2 = FailingRename()
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(
+        registry.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: FailingRenameLibrary(),
+    )
+    monkeypatch.setattr(registry.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="publication failed",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert f"alternate_candidate_path={candidate}" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert candidate.read_bytes() == b'{"valid":true}\n'
+    assert not destination.exists()
+
+
+def test_pin_metadata_rejects_fifo_without_opening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = tmp_path / "metadata.json"
+    registry.os.mkfifo(fifo)
+    native_open = registry.os.open
+
+    def guarded_open(path: str | Path, *args: object, **kwargs: object) -> int:
+        if Path(path) == fifo:
+            message = "FIFO must be rejected by metadata preflight"
+            raise AssertionError(message)
+        return native_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry.os, "open", guarded_open)
+    with pytest.raises(registry.ArtifactRegistryError, match="regular file"):
+        registry._pin_metadata(fifo, context="synthetic metadata")  # noqa: SLF001
+
+
+def test_pin_metadata_fifo_swap_is_nonblocking_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    moved = tmp_path / "metadata-before-swap.json"
+    metadata.write_bytes(b"{}\n")
+    native_open = registry.os.open
+    native_fstat = registry.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if Path(path) == metadata and not swapped:
+            swapped = True
+            metadata.rename(moved)
+            registry.os.mkfifo(metadata)
+            if getattr(registry.os, "O_NONBLOCK", 0):
+                assert flags & registry.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if Path(path) == metadata:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(registry.os, "open", swapping_open)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="changed while it was pinned",
+    ):
+        registry._pin_metadata(metadata, context="synthetic metadata")  # noqa: SLF001
+    assert opened
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_pin_metadata_rejects_hardlink_injected_between_lstat_and_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    injected_link = tmp_path / "metadata-hardlink.json"
+    metadata.write_bytes(b"{}\n")
+    native_open = registry.os.open
+    native_fstat = registry.os.fstat
+    opened: list[int] = []
+    injected = False
+
+    def linking_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal injected
+        if Path(path) == metadata and not injected:
+            injected = True
+            registry.os.link(metadata, injected_link)
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if Path(path) == metadata:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(registry.os, "open", linking_open)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="changed while it was pinned",
+    ):
+        registry._pin_metadata(metadata, context="synthetic metadata")  # noqa: SLF001
+    assert metadata.stat().st_nlink == 2
+    assert injected_link.stat().st_ino == metadata.stat().st_ino
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_pin_metadata_growth_reads_only_initial_size_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    metadata.write_bytes(b"abcd")
+    native_open = registry.os.open
+    native_read = registry.os.read
+    native_fstat = registry.os.fstat
+    target_descriptor: int | None = None
+    requested: list[int] = []
+    grown = False
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        nonlocal target_descriptor
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        if Path(args[0]) == metadata:
+            target_descriptor = descriptor
+        return descriptor
+
+    def growing_read(descriptor: int, size: int) -> bytes:
+        nonlocal grown
+        if descriptor == target_descriptor:
+            requested.append(size)
+            if not grown:
+                grown = True
+                with metadata.open("ab") as stream:
+                    stream.write(b"e")
+        return native_read(descriptor, size)
+
+    monkeypatch.setattr(registry.os, "open", tracking_open)
+    monkeypatch.setattr(registry.os, "read", growing_read)
+    with pytest.raises(registry.ArtifactRegistryError, match="grew while it was read"):
+        registry._pin_metadata(metadata, context="synthetic metadata")  # noqa: SLF001
+    assert requested == [5]
+    assert target_descriptor is not None
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(target_descriptor)
+
+
+def test_member_inventory_to_open_fifo_swap_is_nonblocking_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "root"
+    member_path = root_path / "nested/member.bin"
+    moved = root_path / "nested/member-before-swap.bin"
+    member_path.parent.mkdir(parents=True)
+    raw = b"member bytes\n"
+    member_path.write_bytes(raw)
+    root = registry._pin_root(root_path, context="synthetic root")  # noqa: SLF001
+    native_open = registry.os.open
+    native_fstat = registry.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if path == member_path.name and not swapped:
+            swapped = True
+            member_path.rename(moved)
+            registry.os.mkfifo(member_path)
+            if getattr(registry.os, "O_NONBLOCK", 0):
+                assert flags & registry.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == member_path.name:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(registry.os, "open", swapping_open)
+    try:
+        with pytest.raises(registry.ArtifactRegistryError, match="regular file"):
+            registry._pin_member(  # noqa: SLF001
+                root,
+                "nested/member.bin",
+                context="synthetic member",
+                expected_size=len(raw),
+            )
+    finally:
+        root.close()
+    assert opened
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+@pytest.mark.parametrize("growth", [False, True], ids=["oversized", "growing"])
+def test_digest_descriptor_reads_at_most_expected_size_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    growth: bool,
+) -> None:
+    path = tmp_path / "member.bin"
+    path.write_bytes(b"abcd" if growth else b"abcde")
+    descriptor = registry.os.open(path, registry.os.O_RDONLY)
+    native_read = registry.os.read
+    requested: list[int] = []
+    appended = False
+
+    def growing_read(fd: int, size: int) -> bytes:
+        nonlocal appended
+        requested.append(size)
+        if growth and not appended:
+            appended = True
+            with path.open("ab") as stream:
+                stream.write(b"e")
+        return native_read(fd, size)
+
+    monkeypatch.setattr(registry.os, "read", growing_read)
+    try:
+        with pytest.raises(registry.ArtifactRegistryError, match="read bound"):
+            registry._digest_descriptor(  # noqa: SLF001
+                descriptor,
+                maximum=4,
+                context="synthetic member",
+            )
+    finally:
+        registry.os.close(descriptor)
+    assert requested == [5]
+
+
+def test_published_destination_fifo_swap_is_nonblocking_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    owned = tmp_path / "published-owned.json"
+    native_open = registry.os.open
+    native_fstat = registry.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if path == destination.name and not swapped:
+            swapped = True
+            destination.rename(owned)
+            registry.os.mkfifo(destination)
+            if getattr(registry.os, "O_NONBLOCK", 0):
+                assert flags & registry.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == destination.name:
+            opened.append(descriptor)
+        return descriptor
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(registry.os, "open", swapping_open)
+    monkeypatch.setattr(registry.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="does not match",
+    ) as captured:
+        registry._publish_no_replace(destination, b'{"valid":true}\n')  # noqa: SLF001
+    assert stat.S_ISFIFO(destination.stat().st_mode)
+    assert owned.read_bytes() == b'{"valid":true}\n'
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_published_destination_oversized_swap_is_rejected_before_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    owned = tmp_path / "published-owned.json"
+    raw = b'{"valid":true}\n'
+    competitor = raw + b"oversized"
+    native_open = registry.os.open
+    native_digest = registry._digest_descriptor  # noqa: SLF001
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if path == destination.name and not swapped:
+            swapped = True
+            destination.rename(owned)
+            destination.write_bytes(competitor)
+        return native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    def guarded_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ) -> tuple[str, int, stat.stat_result]:
+        assert context != "published registry destination"
+        return native_digest(descriptor, maximum=maximum, context=context)
+
+    monkeypatch.setattr(registry.os, "open", swapping_open)
+    monkeypatch.setattr(registry, "_digest_descriptor", guarded_digest)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="does not match",
+    ) as captured:
+        registry._publish_no_replace(destination, raw)  # noqa: SLF001
+    assert destination.read_bytes() == competitor
+    assert owned.read_bytes() == raw
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+
+
+def test_published_destination_growth_uses_expected_size_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "registry.json"
+    raw = b'{"valid":true}\n'
+    native_digest = registry._digest_descriptor  # noqa: SLF001
+    published_maxima: list[int] = []
+    grown = False
+
+    def growing_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ) -> tuple[str, int, stat.stat_result]:
+        nonlocal grown
+        if context == "published registry destination":
+            published_maxima.append(maximum)
+            if not grown:
+                grown = True
+                destination.chmod(0o600)
+                with destination.open("ab") as stream:
+                    stream.write(b"x")
+        return native_digest(descriptor, maximum=maximum, context=context)
+
+    monkeypatch.setattr(registry, "_digest_descriptor", growing_digest)
+    with pytest.raises(registry.ArtifactRegistryError, match="read bound") as captured:
+        registry._publish_no_replace(destination, raw)  # noqa: SLF001
+    assert published_maxima == [len(raw)]
+    assert destination.read_bytes() == raw + b"x"
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
 
 
 def test_publication_final_check_detects_callback_destination_replacement(
@@ -1412,7 +2007,7 @@ def test_publication_final_check_detects_callback_destination_replacement(
         registry._publish_no_replace(  # noqa: SLF001
             destination,
             b'{"valid":true}\n',
-            link_boundary_check=replace_during_final_callback,
+            boundary_check=replace_during_final_callback,
         )
     assert callback_calls == 3
     assert destination.read_bytes() == attacker
@@ -1428,9 +2023,18 @@ def test_publication_detects_directory_entry_swap_during_final_digest(
     digest_calls = 0
     original_digest = registry._digest_descriptor  # noqa: SLF001
 
-    def swapping_digest(descriptor: int):
+    def swapping_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ):
         nonlocal digest_calls
-        result = original_digest(descriptor)
+        result = original_digest(
+            descriptor,
+            maximum=maximum,
+            context=context,
+        )
         digest_calls += 1
         if digest_calls == 4:
             destination.rename(moved)
@@ -1462,9 +2066,18 @@ def test_publication_detects_parent_swap_during_final_digest(
     digest_calls = 0
     original_digest = registry._digest_descriptor  # noqa: SLF001
 
-    def swapping_digest(descriptor: int):
+    def swapping_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ):
         nonlocal digest_calls
-        result = original_digest(descriptor)
+        result = original_digest(
+            descriptor,
+            maximum=maximum,
+            context=context,
+        )
         digest_calls += 1
         if digest_calls == 4:
             parent.rename(moved_parent)
@@ -1479,72 +2092,56 @@ def test_publication_detects_parent_swap_during_final_digest(
             b'{"valid":true}\n',
         )
     assert destination.read_bytes() == attacker
-    assert not (moved_parent / "registry.json").exists()
+    assert (moved_parent / "registry.json").read_bytes() == b'{"valid":true}\n'
 
 
-@pytest.mark.parametrize("failure", ["unlink", "fsync"])
-def test_publication_cleanup_attempts_all_steps_and_closes_parent_descriptor(
+def test_post_rename_failure_never_unlinks_and_closes_all_descriptors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    failure: str,
 ) -> None:
     parent = tmp_path / "publication"
     parent.mkdir()
     destination = parent / "registry.json"
-    captured_parent_descriptors: list[int] = []
-    unlink_attempts: list[str] = []
+    opened_descriptors: list[int] = []
     boundary_calls = 0
-    fsync_calls = 0
-    original_ensure = registry._ensure_destination_parent  # noqa: SLF001
+    original_open = registry.os.open
     original_fstat = registry.os.fstat
-    original_fsync = registry.os.fsync
-    original_unlink = registry.os.unlink
 
-    def tracking_ensure(path: Path) -> tuple[Path, int]:
-        result = original_ensure(path)
-        captured_parent_descriptors.append(result[1])
-        return result
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = original_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened_descriptors.append(descriptor)
+        return descriptor
 
-    def injected_unlink(member: str, **kwargs: object) -> None:
-        unlink_attempts.append(member)
-        if failure == "unlink" and member == destination.name:
-            message = "injected cleanup unlink failure"
-            raise OSError(message)
-        original_unlink(member, **kwargs)
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
 
-    def injected_fsync(descriptor: int) -> None:
-        nonlocal fsync_calls
-        fsync_calls += 1
-        if failure == "fsync" and fsync_calls == 4:
-            message = "injected cleanup fsync failure"
-            raise OSError(message)
-        original_fsync(descriptor)
-
-    def fail_after_link() -> None:
+    def fail_after_rename() -> None:
         nonlocal boundary_calls
         boundary_calls += 1
         if boundary_calls == 2:
-            message = "injected boundary failure"
+            message = "injected post-rename failure"
             raise registry.ArtifactRegistryError(message)
 
-    monkeypatch.setattr(registry, "_ensure_destination_parent", tracking_ensure)
-    monkeypatch.setattr(registry.os, "unlink", injected_unlink)
-    monkeypatch.setattr(registry.os, "fsync", injected_fsync)
-    with pytest.raises(OSError, match="injected cleanup"):
+    monkeypatch.setattr(registry.os, "open", tracking_open)
+    monkeypatch.setattr(registry.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="injected post-rename failure",
+    ) as captured:
         registry._publish_no_replace(  # noqa: SLF001
             destination,
             b'{"valid":true}\n',
-            link_boundary_check=fail_after_link,
+            boundary_check=fail_after_rename,
         )
 
-    assert captured_parent_descriptors
-    assert destination.name in unlink_attempts
-    assert any(
-        member.startswith(".registry.json.staging-")
-        for member in unlink_attempts
-    )
-    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
-        original_fstat(captured_parent_descriptors[0])
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert destination.read_bytes() == b'{"valid":true}\n'
+    assert not list(parent.glob(".registry.json.private-*"))
+    assert opened_descriptors
+    for descriptor in opened_descriptors:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            original_fstat(descriptor)
 
 
 def test_publication_rejects_symlinked_destination_ancestors(tmp_path: Path) -> None:
@@ -1576,17 +2173,22 @@ def test_publication_rejects_destination_parent_rename_after_pin(
             parent.rename(moved_parent)
             parent.mkdir()
 
-    with pytest.raises(registry.ArtifactRegistryError, match="parent changed"):
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="parent changed",
+    ) as captured:
         registry._publish_no_replace(  # noqa: SLF001
             parent / "registry.json",
             b'{"valid":true}\n',
-            link_boundary_check=rename_parent,
+            boundary_check=rename_parent,
         )
     assert not (parent / "registry.json").exists()
     assert not (moved_parent / "registry.json").exists()
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
+    assert len(list(moved_parent.glob(".registry.json.private-*"))) == 1
 
 
-def test_member_mutation_at_link_boundary_rolls_back_registry(
+def test_member_mutation_after_atomic_rename_retains_registry(
     tmp_path: Path,
     roots: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -1597,22 +2199,23 @@ def test_member_mutation_at_link_boundary_rolls_back_registry(
     source = tmp_path / "input.json"
     destination = tmp_path / "registry.json"
     _write_json(source, value)
-    original_link = registry.os.link
+    original_rename = registry._rename_no_replace  # noqa: SLF001
 
-    def mutating_link(*args: object, **kwargs: object) -> None:
+    def mutating_rename(source_name: str, target_name: str, parent_fd: int) -> None:
+        original_rename(source_name, target_name, parent_fd)
         output.write_bytes(b"%PDF-1.7 mutated at link boundary\n")
-        original_link(*args, **kwargs)
 
-    monkeypatch.setattr(registry.os, "link", mutating_link)
+    monkeypatch.setattr(registry, "_rename_no_replace", mutating_rename)
     with pytest.raises(
         registry.ArtifactRegistryError,
         match="changed during validation",
-    ):
+    ) as captured:
         _invoke_build(source, roots, destination)
-    assert not destination.exists()
+    assert destination.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
 
 
-def test_builder_mutation_at_link_boundary_rolls_back_registry(
+def test_builder_mutation_after_atomic_rename_retains_registry(
     tmp_path: Path,
     roots: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -1622,16 +2225,20 @@ def test_builder_mutation_at_link_boundary_rolls_back_registry(
     destination = tmp_path / "registry.json"
     _write_json(source, value)
     builder = roots[0] / "analysis/build_tcga_revision_artifact_registry.py"
-    original_link = registry.os.link
+    original_rename = registry._rename_no_replace  # noqa: SLF001
 
-    def mutating_link(*args: object, **kwargs: object) -> None:
+    def mutating_rename(source_name: str, target_name: str, parent_fd: int) -> None:
+        original_rename(source_name, target_name, parent_fd)
         builder.write_bytes(b'"""Mutated at publication boundary."""\n')
-        original_link(*args, **kwargs)
 
-    monkeypatch.setattr(registry.os, "link", mutating_link)
-    with pytest.raises(registry.ArtifactRegistryError, match="changed during"):
+    monkeypatch.setattr(registry, "_rename_no_replace", mutating_rename)
+    with pytest.raises(
+        registry.ArtifactRegistryError,
+        match="changed during",
+    ) as captured:
         _invoke_build(source, roots, destination)
-    assert not destination.exists()
+    assert destination.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
 
 
 @pytest.mark.parametrize("target", ["root", "destination"])
@@ -1643,12 +2250,14 @@ def test_immediate_fstat_failure_closes_new_descriptor(
     directory = tmp_path / "directory"
     directory.mkdir()
     opened: list[int] = []
+    open_flags: list[int] = []
     original_open = registry.os.open
     original_fstat = registry.os.fstat
 
     def tracking_open(*args: object, **kwargs: object) -> int:
         descriptor = original_open(*args, **kwargs)
         opened.append(descriptor)
+        open_flags.append(args[1])  # type: ignore[arg-type]
         return descriptor
 
     def failing_fstat(_descriptor: int) -> stat.stat_result:
@@ -1673,6 +2282,8 @@ def test_immediate_fstat_failure_closes_new_descriptor(
     with pytest.raises(registry.ArtifactRegistryError, match="cannot inspect pinned"):
         invoke()
     assert len(opened) == 1
+    if getattr(registry.os, "O_CLOEXEC", 0):
+        assert open_flags[0] & registry.os.O_CLOEXEC
     with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
         original_fstat(opened[0])
 
@@ -1732,8 +2343,64 @@ def test_expected_registry_digest_is_an_independent_validation_anchor(
             *roots,
             expected_manifest_sha256="f" * 64,
         )
-    assert registry.validate_artifact_registry(
-        destination,
-        *roots,
-        expected_manifest_sha256=receipt.manifest_sha256,
-    ).manifest_sha256 == receipt.manifest_sha256
+    assert (
+        registry.validate_artifact_registry(
+            destination,
+            *roots,
+            expected_manifest_sha256=receipt.manifest_sha256,
+        ).manifest_sha256
+        == receipt.manifest_sha256
+    )
+
+
+@pytest.mark.parametrize("interrupt_target", ["destination", "stage"])
+def test_publication_preflight_base_exception_closes_parent_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupt_target: str,
+) -> None:
+    destination = tmp_path / "registry.json"
+    stage_name = f".{destination.name}.private-candidate"
+    native_open = registry.os.open
+    native_stat = registry.os.stat
+    native_fstat = registry.os.fstat
+    opened: list[int] = []
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened.append(descriptor)
+        return descriptor
+
+    def interrupting_stat(
+        path: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> stat.stat_result:
+        if kwargs.get("dir_fd") is not None and (
+            (interrupt_target == "destination" and path == destination.name)
+            or (interrupt_target == "stage" and path == stage_name)
+        ):
+            raise KeyboardInterrupt
+        return native_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry.os, "open", tracking_open)
+    monkeypatch.setattr(registry.os, "stat", interrupting_stat)
+    if interrupt_target == "destination":
+
+        def invoke() -> object:
+            return registry._ensure_destination_parent(destination)  # noqa: SLF001
+
+    else:
+
+        def invoke() -> object:
+            return registry._publish_no_replace(  # noqa: SLF001
+                destination,
+                b"{}\n",
+            )
+
+    with pytest.raises(KeyboardInterrupt):
+        invoke()
+    assert opened
+    for descriptor in opened:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            native_fstat(descriptor)

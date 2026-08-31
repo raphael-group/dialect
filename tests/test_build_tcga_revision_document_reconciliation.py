@@ -568,18 +568,124 @@ def test_symlinked_destination_parent_is_rejected(tmp_path: Path) -> None:
         _build(case, destination=alias / "reconciliation.json")
 
 
+def test_pre_rename_failure_retains_one_stage_and_blocks_retry(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+    raw = b'{"valid":true}\n'
+
+    def fail_before_rename() -> None:
+        message = "synthetic pre-rename failure"
+        raise reconciliation.DocumentReconciliationError(message)
+
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="synthetic pre-rename failure",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            raw,
+            revalidate=fail_before_rename,
+        )
+    message = str(captured.value)
+    assert f"expected_sha256={_sha256(raw)}" in message
+    assert f"expected_bytes={len(raw)}" in message
+    assert "private-stage-name-may-be-owned-or-replaced" in message
+    stages = list(tmp_path.glob(".reconciliation.json.private-*"))
+    assert len(stages) == 1
+    assert stages[0].stat().st_mode & 0o777 == 0o400
+
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="retained private reconciliation stage requires explicit review",
+    ):
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            raw,
+            revalidate=lambda: None,
+        )
+    assert list(tmp_path.glob(".reconciliation.json.private-*")) == stages
+
+
+def test_post_scan_stage_reservation_race_preserves_unowned_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+    candidate = tmp_path / ".reconciliation.json.private-candidate"
+    competitor = b"competitor-stage\n"
+    native_open = reconciliation.os.open
+    injected = False
+
+    def racing_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal injected
+        if path == candidate.name and not injected:
+            injected = True
+            descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+            try:
+                reconciliation.os.write(descriptor, competitor)
+            finally:
+                reconciliation.os.close(descriptor)
+            raise FileExistsError(
+                reconciliation.errno.EEXIST,
+                reconciliation.os.strerror(reconciliation.errno.EEXIST),
+                path,
+            )
+        return native_open(path, flags, mode, dir_fd=dir_fd)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(reconciliation.os, "open", racing_open)
+    monkeypatch.setattr(reconciliation.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="appeared after the retained-stage preflight",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=lambda: None,
+        )
+    message = str(captured.value)
+    assert f"candidate_path={candidate}" in message
+    assert "expected_sha256=unknown" in message
+    assert "expected_bytes=unknown" in message
+    assert "private-stage-name-not-proven-owned" in message
+    assert candidate.read_bytes() == competitor
+    assert list(tmp_path.glob(".reconciliation.json.private-*")) == [candidate]
+
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="retained private reconciliation stage requires explicit review",
+    ):
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=lambda: None,
+        )
+    assert candidate.read_bytes() == competitor
+    assert list(tmp_path.glob(".reconciliation.json.private-*")) == [candidate]
+
+
 def test_publish_race_preserves_competing_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     case = _make_case(tmp_path)
     competitor = b"competing destination\n"
-    real_link = reconciliation.os.link
+    real_rename = reconciliation._rename_no_replace  # noqa: SLF001
 
-    def racing_link(source: object, destination: object, **kwargs: object) -> None:
-        destination_parent = cast("int", kwargs["dst_dir_fd"])
+    def racing_rename(source: str, destination: str, destination_parent: int) -> None:
         descriptor = os.open(
-            destination,  # type: ignore[arg-type]
+            destination,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
             dir_fd=destination_parent,
@@ -588,17 +694,133 @@ def test_publish_race_preserves_competing_destination(
             os.write(descriptor, competitor)
         finally:
             os.close(descriptor)
-        real_link(source, destination, **kwargs)  # type: ignore[arg-type]
+        real_rename(source, destination, destination_parent)
 
-    monkeypatch.setattr(reconciliation.os, "link", racing_link)
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", racing_rename)
     with pytest.raises(
         reconciliation.DocumentReconciliationError,
-        match="destination already exists",
-    ):
+        match="destination may already exist",
+    ) as captured:
         _build(case)
 
     assert case.output_path.read_bytes() == competitor
+    message = str(captured.value)
+    assert f"candidate_path={case.output_path}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".document_reconciliation.json.private-*"))) == 1
+
+
+def test_rename_then_raise_reports_both_candidates_and_leaks_no_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _make_case(tmp_path)
+    native_rename = reconciliation._rename_no_replace  # noqa: SLF001
+    native_open = reconciliation.os.open
+    native_fstat = reconciliation.os.fstat
+    opened_descriptors: list[int] = []
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened_descriptors.append(descriptor)
+        return descriptor
+
+    def rename_then_raise(source: str, target: str, parent_fd: int) -> None:
+        native_rename(source, target, parent_fd)
+        message = "synthetic ambiguous rename return"
+        raise OSError(message)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(reconciliation.os, "open", tracking_open)
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", rename_then_raise)
+    monkeypatch.setattr(reconciliation.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="synthetic ambiguous rename return",
+    ) as captured:
+        _build(case)
+    message = str(captured.value)
+    assert f"candidate_path={case.output_path}" in message
+    assert "alternate_candidate_path=" in message
+    assert ".document_reconciliation.json.private-" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert case.output_path.exists()
     assert not list(tmp_path.glob(".document_reconciliation.json.private-*"))
+    assert opened_descriptors
+    for descriptor in opened_descriptors:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            native_fstat(descriptor)
+
+
+def test_missing_atomic_rename_symbol_retains_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+
+    class MissingRenameLibrary:
+        pass
+
+    monkeypatch.setattr(
+        reconciliation.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: MissingRenameLibrary(),
+    )
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="rename symbol",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=lambda: None,
+        )
+    message = str(captured.value)
+    candidate = tmp_path / ".reconciliation.json.private-candidate"
+    assert f"candidate_path={candidate}" in message
+    assert "alternate_candidate_path=" not in message
+    assert "private-stage-name-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".reconciliation.json.private-*"))) == 1
+
+
+def test_unsupported_atomic_rename_error_is_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+
+    class UnsupportedRename:
+        def __call__(self, *_args: object) -> int:
+            reconciliation.ctypes.set_errno(reconciliation.errno.ENOTSUP)
+            return -1
+
+    class UnsupportedRenameLibrary:
+        renameatx_np = UnsupportedRename()
+        renameat2 = UnsupportedRename()
+
+    monkeypatch.setattr(
+        reconciliation.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: UnsupportedRenameLibrary(),
+    )
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="does not support atomic no-replace rename",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=lambda: None,
+        )
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".reconciliation.json.private-*"))) == 1
 
 
 def test_publish_swap_is_detected_without_deleting_competitor(
@@ -607,14 +829,23 @@ def test_publish_swap_is_detected_without_deleting_competitor(
 ) -> None:
     case = _make_case(tmp_path)
     competitor = b"swapped destination\n"
-    real_link = reconciliation.os.link
+    owned_name = "owned-before-swap.json"
+    real_rename = reconciliation._rename_no_replace  # noqa: SLF001
 
-    def swapping_link(source: object, destination: object, **kwargs: object) -> None:
-        real_link(source, destination, **kwargs)  # type: ignore[arg-type]
-        destination_parent = cast("int", kwargs["dst_dir_fd"])
-        os.unlink(destination, dir_fd=destination_parent)  # type: ignore[arg-type]
+    def swapping_rename(
+        source: str,
+        destination: str,
+        destination_parent: int,
+    ) -> None:
+        real_rename(source, destination, destination_parent)
+        os.rename(
+            destination,
+            owned_name,
+            src_dir_fd=destination_parent,
+            dst_dir_fd=destination_parent,
+        )
         descriptor = os.open(
-            destination,  # type: ignore[arg-type]
+            destination,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
             dir_fd=destination_parent,
@@ -624,47 +855,83 @@ def test_publish_swap_is_detected_without_deleting_competitor(
         finally:
             os.close(descriptor)
 
-    monkeypatch.setattr(reconciliation.os, "link", swapping_link)
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", swapping_rename)
+    monkeypatch.setattr(reconciliation.os, "unlink", forbidden_unlink)
     with pytest.raises(
         reconciliation.DocumentReconciliationError,
         match="identity does not match staging",
-    ):
+    ) as captured:
         _build(case)
 
     assert case.output_path.read_bytes() == competitor
+    assert (tmp_path / owned_name).exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
     assert not list(tmp_path.glob(".document_reconciliation.json.private-*"))
 
 
-def test_document_swap_at_publish_boundary_rolls_back_own_output(
+def test_document_swap_after_rename_retains_own_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     case = _make_case(tmp_path)
-    real_link = reconciliation.os.link
+    real_rename = reconciliation._rename_no_replace  # noqa: SLF001
 
     def swapping_document(
-        source: object,
-        destination: object,
-        **kwargs: object,
+        source: str,
+        destination: str,
+        parent_fd: int,
     ) -> None:
-        real_link(source, destination, **kwargs)  # type: ignore[arg-type]
+        real_rename(source, destination, parent_fd)
         main = case.root / "main.tex"
         original = main.read_bytes()
         main.rename(case.root / "main.before-swap.tex")
         main.write_bytes(original)
 
-    monkeypatch.setattr(reconciliation.os, "link", swapping_document)
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", swapping_document)
     with pytest.raises(
         reconciliation.DocumentReconciliationError,
         match=r"document (root identity|member 0 path) changed after validation",
-    ):
+    ) as captured:
         _build(case)
 
-    assert not case.output_path.exists()
+    assert case.output_path.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
     assert not list(tmp_path.glob(".document_reconciliation.json.private-*"))
 
 
-def test_destination_parent_replacement_is_detected_and_cleaned(
+def test_destination_parent_replacement_before_rename_retains_stage(
+    tmp_path: Path,
+) -> None:
+    publish_parent = tmp_path / "publish"
+    publish_parent.mkdir()
+    destination = publish_parent / "reconciliation.json"
+    moved_parent = tmp_path / "publish-moved"
+
+    def replacing_parent() -> None:
+        publish_parent.rename(moved_parent)
+        publish_parent.mkdir()
+
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="destination parent changed during publication",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=replacing_parent,
+        )
+
+    assert not destination.exists()
+    assert not (moved_parent / destination.name).exists()
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
+    assert len(list(moved_parent.glob(".reconciliation.json.private-*"))) == 1
+
+
+def test_destination_parent_replacement_after_rename_retains_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -673,58 +940,27 @@ def test_destination_parent_replacement_is_detected_and_cleaned(
     publish_parent.mkdir()
     destination = publish_parent / "reconciliation.json"
     moved_parent = tmp_path / "publish-moved"
-    real_link = reconciliation.os.link
+    real_rename = reconciliation._rename_no_replace  # noqa: SLF001
 
     def replacing_parent(
-        source: object,
-        target: object,
-        **kwargs: object,
+        source: str,
+        target: str,
+        parent_fd: int,
     ) -> None:
-        publish_parent.rename(moved_parent)
-        publish_parent.mkdir()
-        real_link(source, target, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(reconciliation.os, "link", replacing_parent)
-    with pytest.raises(
-        reconciliation.DocumentReconciliationError,
-        match="destination parent changed during publication",
-    ):
-        _build(case, destination=destination)
-
-    assert not destination.exists()
-    assert not (moved_parent / destination.name).exists()
-    assert not list(moved_parent.glob(".reconciliation.json.private-*"))
-
-
-def test_destination_parent_replacement_after_link_is_cleaned(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    case = _make_case(tmp_path)
-    publish_parent = tmp_path / "publish"
-    publish_parent.mkdir()
-    destination = publish_parent / "reconciliation.json"
-    moved_parent = tmp_path / "publish-moved"
-    real_link = reconciliation.os.link
-
-    def replacing_parent(
-        source: object,
-        target: object,
-        **kwargs: object,
-    ) -> None:
-        real_link(source, target, **kwargs)  # type: ignore[arg-type]
+        real_rename(source, target, parent_fd)
         publish_parent.rename(moved_parent)
         publish_parent.mkdir()
 
-    monkeypatch.setattr(reconciliation.os, "link", replacing_parent)
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", replacing_parent)
     with pytest.raises(
         reconciliation.DocumentReconciliationError,
         match="destination parent changed during publication",
-    ):
+    ) as captured:
         _build(case, destination=destination)
 
     assert not destination.exists()
-    assert not (moved_parent / destination.name).exists()
+    assert (moved_parent / destination.name).exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
     assert not list(moved_parent.glob(".reconciliation.json.private-*"))
 
 
@@ -732,7 +968,7 @@ def test_destination_parent_replacement_after_link_is_cleaned(
     "root_attribute",
     ["root", "renderer_root", "rendered_output_root"],
 )
-def test_input_root_replacement_after_link_rolls_back_own_output(
+def test_input_root_replacement_after_rename_retains_own_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     root_attribute: str,
@@ -740,29 +976,30 @@ def test_input_root_replacement_after_link_rolls_back_own_output(
     case = _make_case(tmp_path)
     root = cast("Path", getattr(case, root_attribute))
     moved_root = tmp_path / f"{root.name}-moved"
-    real_link = reconciliation.os.link
+    real_rename = reconciliation._rename_no_replace  # noqa: SLF001
 
     def replacing_root(
-        source: object,
-        target: object,
-        **kwargs: object,
+        source: str,
+        target: str,
+        parent_fd: int,
     ) -> None:
-        real_link(source, target, **kwargs)  # type: ignore[arg-type]
+        real_rename(source, target, parent_fd)
         root.rename(moved_root)
         root.mkdir()
 
-    monkeypatch.setattr(reconciliation.os, "link", replacing_root)
+    monkeypatch.setattr(reconciliation, "_rename_no_replace", replacing_root)
     with pytest.raises(
         reconciliation.DocumentReconciliationError,
         match=r"(document|renderer|rendered-output) root identity changed",
-    ):
+    ) as captured:
         _build(case)
 
-    assert not case.output_path.exists()
+    assert case.output_path.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
     assert not list(tmp_path.glob(".document_reconciliation.json.private-*"))
 
 
-def test_input_root_replacement_after_final_digest_is_detected_and_cleaned(
+def test_input_root_replacement_after_final_digest_retains_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -791,11 +1028,11 @@ def test_input_root_replacement_after_final_digest_is_detected_and_cleaned(
         _build(case)
 
     assert call_count == 3
-    assert not case.output_path.exists()
+    assert case.output_path.exists()
     assert not list(tmp_path.glob(".document_reconciliation.json.private-*"))
 
 
-def test_destination_parent_replacement_after_final_digest_is_cleaned(
+def test_destination_parent_replacement_after_final_digest_retains_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -828,7 +1065,7 @@ def test_destination_parent_replacement_after_final_digest_is_cleaned(
 
     assert call_count == 3
     assert not destination.exists()
-    assert not (moved_parent / destination.name).exists()
+    assert (moved_parent / destination.name).exists()
     assert not list(moved_parent.glob(".reconciliation.json.private-*"))
 
 
@@ -1010,9 +1247,19 @@ def test_row_bearing_registry_members_are_never_opened(
     def guarded_open_member(
         root: artifact_registry._PinnedRoot,
         member: str,
-    ) -> int:
+        *,
+        context: str,
+        expected_size: int | None,
+        maximum: int,
+    ) -> tuple[int, os.stat_result]:
         assert not member.startswith("source-data/")
-        return real_open_member(root, member)
+        return real_open_member(
+            root,
+            member,
+            context=context,
+            expected_size=expected_size,
+            maximum=maximum,
+        )
 
     monkeypatch.setattr(
         artifact_registry,
@@ -1592,3 +1839,302 @@ def test_manifest_validation_detects_output_root_swap_after_final_native_check(
         _validate(case, case.output_path)
 
     assert call_count == 2
+
+
+def test_post_syscall_eio_reports_both_names_without_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+    candidate = tmp_path / ".reconciliation.json.private-candidate"
+
+    class FailingRename:
+        def __call__(self, *_args: object) -> int:
+            reconciliation.ctypes.set_errno(reconciliation.errno.EIO)
+            return -1
+
+    class FailingRenameLibrary:
+        renameatx_np = FailingRename()
+        renameat2 = FailingRename()
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(
+        reconciliation.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: FailingRenameLibrary(),
+    )
+    monkeypatch.setattr(reconciliation.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="publication failed",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b'{"valid":true}\n',
+            revalidate=lambda: None,
+        )
+
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert f"alternate_candidate_path={candidate}" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert candidate.read_bytes() == b'{"valid":true}\n'
+    assert not destination.exists()
+
+
+def test_pin_file_rejects_fifo_without_opening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = tmp_path / "metadata.json"
+    os.mkfifo(fifo)
+    native_open = reconciliation.os.open
+
+    def guarded_open(path: str | Path, *args: object, **kwargs: object) -> int:
+        if Path(path) == fifo:
+            message = "FIFO must be rejected by metadata preflight"
+            raise AssertionError(message)
+        return native_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reconciliation.os, "open", guarded_open)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="regular file",
+    ):
+        reconciliation._pin_file(  # noqa: SLF001
+            fifo,
+            maximum=16,
+            context="synthetic metadata",
+        )
+
+
+def test_pin_file_fifo_swap_is_nonblocking_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    moved = tmp_path / "metadata-before-swap.json"
+    metadata.write_bytes(b"{}\n")
+    native_open = reconciliation.os.open
+    native_fstat = reconciliation.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if Path(path) == metadata and not swapped:
+            swapped = True
+            metadata.rename(moved)
+            os.mkfifo(metadata)
+            if getattr(reconciliation.os, "O_NONBLOCK", 0):
+                assert flags & reconciliation.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if Path(path) == metadata:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(reconciliation.os, "open", swapping_open)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="regular file",
+    ):
+        reconciliation._pin_file(  # noqa: SLF001
+            metadata,
+            maximum=16,
+            context="synthetic metadata",
+        )
+    assert opened
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_root_member_fifo_swap_is_nonblocking_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "root"
+    member_path = root_path / "nested/member.txt"
+    moved = root_path / "nested/member-before-swap.txt"
+    member_path.parent.mkdir(parents=True)
+    raw = b"member bytes\n"
+    member_path.write_bytes(raw)
+    root = reconciliation._pin_root(root_path, context="synthetic root")  # noqa: SLF001
+    native_open = reconciliation.os.open
+    native_fstat = reconciliation.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if path == member_path.name and not swapped:
+            swapped = True
+            member_path.rename(moved)
+            os.mkfifo(member_path)
+            if getattr(reconciliation.os, "O_NONBLOCK", 0):
+                assert flags & reconciliation.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == member_path.name:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(reconciliation.os, "open", swapping_open)
+    try:
+        with pytest.raises(
+            reconciliation.DocumentReconciliationError,
+            match="regular file",
+        ):
+            reconciliation._open_root_member(  # noqa: SLF001
+                root,
+                "nested/member.txt",
+                maximum=32,
+                expected_size=len(raw),
+                context="synthetic member",
+            )
+    finally:
+        root.close()
+    assert opened
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+@pytest.mark.parametrize("growth", [False, True], ids=["oversized", "growing"])
+def test_read_descriptor_stops_at_limit_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    growth: bool,
+) -> None:
+    path = tmp_path / "member.bin"
+    path.write_bytes(b"abcd" if growth else b"abcde")
+    descriptor = os.open(path, os.O_RDONLY)
+    native_read = reconciliation.os.read
+    requested: list[int] = []
+    appended = False
+
+    def growing_read(fd: int, size: int) -> bytes:
+        nonlocal appended
+        requested.append(size)
+        if growth and not appended:
+            appended = True
+            with path.open("ab") as stream:
+                stream.write(b"e")
+        return native_read(fd, size)
+
+    monkeypatch.setattr(reconciliation.os, "read", growing_read)
+    try:
+        with pytest.raises(
+            reconciliation.DocumentReconciliationError,
+            match="4-byte limit",
+        ):
+            reconciliation._read_descriptor(  # noqa: SLF001
+                descriptor,
+                maximum=4,
+                context="synthetic member",
+            )
+    finally:
+        os.close(descriptor)
+    assert requested == [5]
+
+
+def test_published_destination_fifo_swap_is_nonblocking_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+    owned = tmp_path / "published-owned.json"
+    raw = b'{"valid":true}\n'
+    native_open = reconciliation.os.open
+    native_fstat = reconciliation.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal swapped
+        if path == destination.name and not swapped:
+            swapped = True
+            destination.rename(owned)
+            os.mkfifo(destination)
+            if getattr(reconciliation.os, "O_NONBLOCK", 0):
+                assert flags & reconciliation.os.O_NONBLOCK
+        descriptor = native_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == destination.name:
+            opened.append(descriptor)
+        return descriptor
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(reconciliation.os, "open", swapping_open)
+    monkeypatch.setattr(reconciliation.os, "unlink", forbidden_unlink)
+    with pytest.raises(
+        reconciliation.DocumentReconciliationError,
+        match="identity does not match staging",
+    ) as captured:
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            raw,
+            revalidate=lambda: None,
+        )
+    assert stat.S_ISFIFO(destination.stat().st_mode)
+    assert owned.read_bytes() == raw
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_stage_preflight_base_exception_closes_parent_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "reconciliation.json"
+    stage_name = f".{destination.name}.private-candidate"
+    native_open = reconciliation.os.open
+    native_stat = reconciliation.os.stat
+    native_fstat = reconciliation.os.fstat
+    opened: list[int] = []
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened.append(descriptor)
+        return descriptor
+
+    def interrupting_stat(
+        path: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> stat.stat_result:
+        if kwargs.get("dir_fd") is not None and path == stage_name:
+            raise KeyboardInterrupt
+        return native_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reconciliation.os, "open", tracking_open)
+    monkeypatch.setattr(reconciliation.os, "stat", interrupting_stat)
+    with pytest.raises(KeyboardInterrupt):
+        reconciliation._publish_no_replace(  # noqa: SLF001
+            destination,
+            b"{}\n",
+            revalidate=lambda: None,
+        )
+    assert opened
+    for descriptor in opened:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            native_fstat(descriptor)

@@ -9,9 +9,11 @@ import os
 import subprocess
 import sys
 import tarfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn, Self
 
 import pytest
 
@@ -27,6 +29,31 @@ def _sha256(raw: bytes) -> str:
 
 def _canonical(value: object) -> bytes:
     return public_release._canonical_json(value) + b"\n"  # noqa: SLF001
+
+
+class _AdversarialScandir:
+    """Yield synthetic names and fail if a scanner reads past its claimed cap."""
+
+    def __init__(self, name_at: Callable[[int], str], *, maximum_reads: int) -> None:
+        self._name_at = name_at
+        self._maximum_reads = maximum_reads
+        self.reads = 0
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> SimpleNamespace:
+        self.reads += 1
+        if self.reads > self._maximum_reads:
+            message = "bounded directory scanner read past its explicit cap"
+            raise AssertionError(message)
+        return SimpleNamespace(name=self._name_at(self.reads))
 
 
 def _minimal_plan(anchors: Mapping[str, str] | None = None) -> dict[str, object]:
@@ -166,6 +193,28 @@ def _prepared_release(
         manifest_raw=manifest_raw,
         checksums_raw=checksums_raw,
     )
+
+
+def _publication_case(
+    tmp_path: Path,
+) -> tuple[SimpleNamespace, Path, Path, Path]:
+    prepared = _prepared_release()
+    destination = (tmp_path / "destination").resolve()
+    destination.mkdir()
+    archive_path = destination / "synthetic-release.tar"
+    receipt_path = destination / "synthetic-release.tar.receipt.json"
+    prepared.config = SimpleNamespace(
+        destination_archive=archive_path,
+        destination_receipt=receipt_path,
+    )
+    prepared.plan = _minimal_plan()
+    prepared.plan_file = SimpleNamespace(sha256="c" * 64)
+    return prepared, destination, archive_path, receipt_path
+
+
+def _populate_unrelated_entries(root: Path, count: int) -> None:
+    for index in range(count):
+        (root / f"unrelated-{index:04d}").write_bytes(b"")
 
 
 def _write_release_archive(path: Path, prepared: SimpleNamespace | None = None) -> None:
@@ -986,23 +1035,21 @@ def test_destination_preflight_refuses_existing_file_without_mutation(
     assert destination.read_bytes() == b"do not replace"
 
 
-def test_no_replace_link_loses_race_without_overwriting(tmp_path: Path) -> None:
+def test_no_replace_rename_loses_race_without_overwriting(tmp_path: Path) -> None:
     parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
     staging = "staging"
     destination = "destination"
     (tmp_path / staging).write_bytes(b"ours")
     (tmp_path / destination).write_bytes(b"competitor")
-    staged = (tmp_path / staging).stat()
     try:
         with pytest.raises(
             public_release.PublicReleaseError,
             match="refusing to replace",
         ):
-            public_release._link_staged_no_replace(  # noqa: SLF001
+            public_release._rename_staged_no_replace(  # noqa: SLF001
                 parent,
                 staging,
                 destination,
-                staging_identity=(staged.st_dev, staged.st_ino),
                 context="synthetic publication",
             )
     finally:
@@ -1011,37 +1058,35 @@ def test_no_replace_link_loses_race_without_overwriting(tmp_path: Path) -> None:
     assert (tmp_path / staging).read_bytes() == b"ours"
 
 
-def test_portal_publication_loses_race_and_cleans_owned_staging(
+def test_portal_publication_loses_race_and_retains_private_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     destination = (tmp_path / "receipt.json").resolve()
     parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
-    original_link = public_release._link_staged_no_replace  # noqa: SLF001
+    original_rename = public_release._rename_staged_no_replace  # noqa: SLF001
 
-    def racing_link(
+    def racing_rename(
         pinned_parent: public_release._PinnedRoot,
         staging_name: str,
         destination_name: str,
         *,
-        staging_identity: tuple[int, int],
         context: str,
-    ) -> tuple[int, int]:
+    ) -> None:
         destination.write_bytes(b"competitor")
-        return original_link(
+        original_rename(
             pinned_parent,
             staging_name,
             destination_name,
-            staging_identity=staging_identity,
             context=context,
         )
 
-    monkeypatch.setattr(public_release, "_link_staged_no_replace", racing_link)
+    monkeypatch.setattr(public_release, "_rename_staged_no_replace", racing_rename)
     try:
         with pytest.raises(
             public_release.PublicReleaseError,
             match="refusing to replace",
-        ):
+        ) as captured:
             public_release._publish_portal_readback(  # noqa: SLF001
                 parent,
                 destination,
@@ -1051,10 +1096,13 @@ def test_portal_publication_loses_race_and_cleans_owned_staging(
     finally:
         parent.close()
     assert destination.read_bytes() == b"competitor"
-    assert not any(".staging-" in path.name for path in tmp_path.iterdir())
+    stages = list(tmp_path.glob(".receipt.json.private-*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b"ours\n"
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
 
 
-def test_portal_publication_cleans_owned_staging_after_parent_replacement(
+def test_portal_publication_retains_private_stage_after_parent_replacement(
     tmp_path: Path,
 ) -> None:
     destination_root = (tmp_path / "destination").resolve()
@@ -1072,7 +1120,10 @@ def test_portal_publication_cleans_owned_staging_after_parent_replacement(
         replaced = True
 
     try:
-        with pytest.raises(public_release.PublicReleaseError, match=r"parent.*changed"):
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match=r"parent.*changed",
+        ) as captured:
             public_release._publish_portal_readback(  # noqa: SLF001
                 parent,
                 destination_root / "receipt.json",
@@ -1082,7 +1133,10 @@ def test_portal_publication_cleans_owned_staging_after_parent_replacement(
     finally:
         parent.close()
     assert list(destination_root.iterdir()) == []
-    assert list(moved_root.iterdir()) == []
+    stages = list(moved_root.glob(".receipt.json.private-*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b"synthetic receipt\n"
+    assert "candidate_parent_identity=" in str(captured.value)
 
 
 def test_fifo_and_directory_are_rejected_without_blocking(tmp_path: Path) -> None:
@@ -1924,18 +1978,14 @@ def test_dual_publication_is_no_replace_and_final_readback_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prepared = _prepared_release()
-    destination = (tmp_path / "destination").resolve()
-    destination.mkdir()
-    archive_path = destination / "synthetic-release.tar"
-    receipt_path = destination / "synthetic-release.tar.receipt.json"
-    prepared.config = SimpleNamespace(
-        destination_archive=archive_path,
-        destination_receipt=receipt_path,
-    )
-    prepared.plan = _minimal_plan()
-    prepared.plan_file = SimpleNamespace(sha256="c" * 64)
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
     monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
     parent = public_release._destination_parent(  # noqa: SLF001
         (archive_path, receipt_path),
         forbidden_roots=(),
@@ -1949,93 +1999,944 @@ def test_dual_publication_is_no_replace_and_final_readback_closed(
     assert receipt.receipt_sha256 == _sha256(receipt_path.read_bytes())
     assert archive_path.stat().st_mode & 0o777 == 0o400
     assert receipt_path.stat().st_mode & 0o777 == 0o400
-    assert not any(".staging-" in path.name for path in destination.iterdir())
+    assert sorted(path.name for path in destination.iterdir()) == sorted(
+        (archive_path.name, receipt_path.name),
+    )
+    payload = json.loads(receipt_path.read_bytes())
+    assert payload["contract"] == (
+        "sequential-per-member-atomic-no-replace-public-release-v1"
+    )
+    assert payload["publication"] == {
+        "pair_atomic": False,
+        "publication_order": ["archive", "receipt"],
+        "archive_atomic_no_replace": True,
+        "receipt_atomic_no_replace": True,
+        "partial_publication_retained_for_explicit_reconciliation": True,
+        "input_revalidated_after_archive_write": True,
+        "submission_package_created": False,
+    }
 
 
-def test_link_rejects_same_byte_decoy_swapped_immediately_after_link(
+def test_portal_rename_then_raise_reports_ambiguous_names_without_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+    original_rename = public_release._rename_staged_no_replace  # noqa: SLF001
+
+    def rename_then_raise(
+        pinned_parent: public_release._PinnedRoot,
+        staging_name: str,
+        destination_name: str,
+        *,
+        context: str,
+    ) -> None:
+        original_rename(
+            pinned_parent,
+            staging_name,
+            destination_name,
+            context=context,
+        )
+        message = "synthetic exception after successful rename"
+        raise OSError(message)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "failure cleanup must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release, "_rename_staged_no_replace", rename_then_raise)
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="destination-or-private-stage-name",
+        ) as captured:
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+    finally:
+        parent.close()
+    message = str(captured.value)
+    assert str(destination) in message
+    assert ".readback.json.private-" in message
+    assert "expected_sha256=" in message
+    assert "expected_bytes=18" in message
+    assert destination.read_bytes() == b"synthetic receipt\n"
+    assert not list(tmp_path.glob(".readback.json.private-*"))
+
+
+def test_portal_partial_write_retains_unknown_candidate_and_blocks_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+    original_write_all = public_release._write_all  # noqa: SLF001
+
+    def partial_write(descriptor: int, raw: bytes) -> None:
+        assert os.write(descriptor, raw[:3]) == 3
+        message = "synthetic partial write"
+        raise OSError(message)
+
+    monkeypatch.setattr(public_release, "_write_all", partial_write)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="synthetic partial write",
+        ) as captured:
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+        message = str(captured.value)
+        assert "expected_sha256=unknown" in message
+        assert "expected_bytes=unknown" in message
+        stages = list(tmp_path.glob(".readback.json.private-*"))
+        assert len(stages) == 1
+        assert stages[0].read_bytes() == b"syn"
+        monkeypatch.setattr(public_release, "_write_all", original_write_all)
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="retained private stage requires explicit review",
+        ):
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+        assert list(tmp_path.glob(".readback.json.private-*")) == stages
+    finally:
+        parent.close()
+
+
+def test_exact_root_inventory_stops_on_first_unexpected_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = public_release._pin_root(tmp_path.resolve(), context="synthetic root")  # noqa: SLF001
+    entries = _AdversarialScandir(
+        lambda _read: "unexpected",
+        maximum_reads=1,
+    )
+    monkeypatch.setattr(public_release.os, "scandir", lambda _fd: entries)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="unexpected inventory member",
+        ):
+            public_release._require_exact_root_inventory(  # noqa: SLF001
+                root,
+                {"expected"},
+                context="synthetic exact root",
+            )
+    finally:
+        root.close()
+    assert entries.reads == 1
+
+
+def test_exact_root_inventory_stops_on_first_duplicate_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = public_release._pin_root(tmp_path.resolve(), context="synthetic root")  # noqa: SLF001
+    entries = _AdversarialScandir(lambda _read: "a", maximum_reads=2)
+    monkeypatch.setattr(public_release.os, "scandir", lambda _fd: entries)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="duplicate inventory member",
+        ):
+            public_release._require_exact_root_inventory(  # noqa: SLF001
+                root,
+                {"a", "b"},
+                context="synthetic exact root",
+            )
+    finally:
+        root.close()
+    assert entries.reads == 2
+
+
+def test_exact_root_inventory_reports_missing_member_after_stream_end(
+    tmp_path: Path,
+) -> None:
+    root = public_release._pin_root(tmp_path.resolve(), context="synthetic root")  # noqa: SLF001
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="missing inventory members",
+        ):
+            public_release._require_exact_root_inventory(  # noqa: SLF001
+                root,
+                {"expected"},
+                context="synthetic exact root",
+            )
+    finally:
+        root.close()
+
+
+def test_publication_stage_preflight_stops_at_bounded_directory_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
-    staging = tmp_path / "staging"
-    staging.write_bytes(b"same bytes")
-    staging.chmod(0o400)
-    observed = staging.stat()
-    original_link = public_release.os.link
-
-    def swap_after_link(*args: object, **kwargs: object) -> None:
-        original_link(*args, **kwargs)
-        destination = tmp_path / "destination"
-        destination.unlink()
-        destination.write_bytes(b"same bytes")
-        destination.chmod(0o400)
-
-    monkeypatch.setattr(public_release.os, "link", swap_after_link)
+    entries = _AdversarialScandir(
+        lambda read: f"unrelated-{read}",
+        maximum_reads=public_release.PUBLICATION_DIRECTORY_SCAN_CAP,
+    )
+    monkeypatch.setattr(public_release.os, "scandir", lambda _fd: entries)
     try:
         with pytest.raises(
             public_release.PublicReleaseError,
-            match="changed immediately",
+            match="exceeds the bounded directory policy",
         ):
-            public_release._link_staged_no_replace(  # noqa: SLF001
+            public_release._require_no_retained_stages(  # noqa: SLF001
                 parent,
-                staging.name,
-                "destination",
-                staging_identity=(observed.st_dev, observed.st_ino),
-                context="synthetic publication",
+                ("readback.json",),
+                context="portal readback",
+                reserved_entries=0,
+            )
+    finally:
+        parent.close()
+    assert entries.reads == public_release.PUBLICATION_DIRECTORY_SCAN_CAP
+
+
+@pytest.mark.parametrize(
+    "reserved_entries",
+    [True, -1, public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES + 1, 1.5],
+)
+def test_publication_stage_preflight_rejects_invalid_reserved_capacity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reserved_entries: object,
+) -> None:
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+
+    def forbidden_scan(_descriptor: int) -> NoReturn:
+        message = "invalid capacity must fail before directory scanning"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.os, "scandir", forbidden_scan)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="reserved_entries is outside policy",
+        ):
+            public_release._require_no_retained_stages(  # noqa: SLF001
+                parent,
+                ("readback.json",),
+                context="portal readback",
+                reserved_entries=reserved_entries,  # type: ignore[arg-type]
             )
     finally:
         parent.close()
 
 
-def test_dual_publication_fails_closed_on_final_archive_swap(
+def test_portal_capacity_boundary_succeeds_with_one_reserved_slot(
+    tmp_path: Path,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    _populate_unrelated_entries(
+        tmp_path,
+        public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES - 1,
+    )
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+    try:
+        digest = public_release._publish_portal_readback(  # noqa: SLF001
+            parent,
+            destination,
+            b"synthetic receipt\n",
+            revalidate_input=lambda: None,
+        )
+    finally:
+        parent.close()
+    assert digest == _sha256(b"synthetic receipt\n")
+    assert destination.read_bytes() == b"synthetic receipt\n"
+    assert (
+        sum(1 for _entry in tmp_path.iterdir())
+        == public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES
+    )
+
+
+def test_portal_capacity_one_over_fails_before_stage_creation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prepared = _prepared_release()
-    destination = (tmp_path / "destination").resolve()
-    destination.mkdir()
-    archive_path = destination / "synthetic-release.tar"
-    receipt_path = destination / "synthetic-release.tar.receipt.json"
-    prepared.config = SimpleNamespace(
-        destination_archive=archive_path,
-        destination_receipt=receipt_path,
+    destination = (tmp_path / "readback.json").resolve()
+    _populate_unrelated_entries(
+        tmp_path,
+        public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES,
     )
-    prepared.plan = _minimal_plan()
-    prepared.plan_file = SimpleNamespace(sha256="c" * 64)
-    calls = 0
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
 
-    def swap_during_final_input_validation(_value: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls != 3:
-            return
-        raw = archive_path.read_bytes()
-        archive_path.unlink()
-        archive_path.write_bytes(raw)
-        archive_path.chmod(0o400)
+    def forbidden_create(*_args: object, **_kwargs: object) -> NoReturn:
+        message = "over-capacity portal publication must not create a stage"
+        raise AssertionError(message)
 
-    monkeypatch.setattr(
-        public_release,
-        "_revalidate_prepared",
-        swap_during_final_input_validation,
+    monkeypatch.setattr(public_release, "_create_staging", forbidden_create)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="reserving 1 publication slots",
+        ):
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+    finally:
+        parent.close()
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".readback.json.private-*"))
+
+
+def test_dual_capacity_boundary_succeeds_with_two_reserved_slots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    _populate_unrelated_entries(
+        destination,
+        public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES - 2,
     )
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
     parent = public_release._destination_parent(  # noqa: SLF001
         (archive_path, receipt_path),
         forbidden_roots=(),
         context="public release",
     )
     try:
-        with pytest.raises(public_release.PublicReleaseError, match="final readback"):
+        receipt = public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+    assert receipt.archive_sha256 == _sha256(archive_path.read_bytes())
+    assert receipt.receipt_sha256 == _sha256(receipt_path.read_bytes())
+    assert (
+        sum(1 for _entry in destination.iterdir())
+        == public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES
+    )
+
+
+def test_dual_capacity_one_over_fails_before_stage_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    _populate_unrelated_entries(
+        destination,
+        public_release.MAX_PUBLICATION_DIRECTORY_ENTRIES - 1,
+    )
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+
+    def forbidden_create(*_args: object, **_kwargs: object) -> NoReturn:
+        message = "over-capacity dual publication must not create a stage"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release, "_create_staging", forbidden_create)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="reserving 2 publication slots",
+        ):
             public_release._publish_release(prepared, parent)  # noqa: SLF001
     finally:
         parent.close()
+    assert not archive_path.exists()
     assert not receipt_path.exists()
+    assert not list(destination.glob(".*.private-candidate"))
+
+
+def test_retained_stage_preflight_stops_after_first_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+
+    class BoundedEntries:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def __iter__(self) -> BoundedEntries:
+            return self
+
+        def __next__(self) -> SimpleNamespace:
+            if hasattr(self, "returned"):
+                message = "scan continued after the first retained stage"
+                raise AssertionError(message)
+            self.returned = True
+            return SimpleNamespace(name=".readback.json.private-retained")
+
+    monkeypatch.setattr(public_release.os, "scandir", lambda _fd: BoundedEntries())
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="retained private stage requires explicit review",
+        ):
+            public_release._require_no_retained_stages(  # noqa: SLF001
+                parent,
+                ("readback.json",),
+                context="portal readback",
+                reserved_entries=0,
+            )
+    finally:
+        parent.close()
+
+
+def test_deterministic_private_stage_allows_one_concurrent_reservation(
+    tmp_path: Path,
+) -> None:
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+    barrier = threading.Barrier(2)
+
+    def reserve() -> tuple[str, str]:
+        barrier.wait()
+        try:
+            stage, descriptor, _identity = public_release._create_staging(  # noqa: SLF001
+                parent,
+                "readback.json",
+            )
+        except public_release.PublicReleaseError as error:
+            return "blocked", str(error)
+        os.close(descriptor)
+        return "reserved", stage
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = tuple(executor.map(lambda _index: reserve(), range(2)))
+    finally:
+        parent.close()
+    reserved = [outcome for outcome in outcomes if outcome[0] == "reserved"]
+    blocked = [outcome for outcome in outcomes if outcome[0] == "blocked"]
+    assert len(reserved) == 1
+    assert len(blocked) == 1
+    assert reserved[0][1] == ".readback.json.private-candidate"
+    assert "retained private stage requires explicit review" in blocked[0][1]
+    assert "private-stage-name-may-be-owned-or-replaced" in blocked[0][1]
+    assert "expected_sha256=unknown" in blocked[0][1]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [reserved[0][1]]
+
+
+def test_missing_atomic_rename_symbol_retains_verified_portal_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+
+    class MissingRenameLibrary:
+        pass
+
+    monkeypatch.setattr(public_release.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: MissingRenameLibrary(),
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="rename symbol renameatx_np is unavailable",
+        ) as captured:
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+    finally:
+        parent.close()
+    assert "expected_sha256=unknown" not in str(captured.value)
+    stages = list(tmp_path.glob(".readback.json.private-*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b"synthetic receipt\n"
+
+
+def test_unsupported_atomic_rename_filesystem_retains_verified_portal_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+
+    class UnsupportedRename:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            return -1
+
+    library = SimpleNamespace(renameatx_np=UnsupportedRename())
+    monkeypatch.setattr(public_release.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: library,
+    )
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "get_errno",
+        lambda: public_release.errno.ENOTSUP,
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="does not support atomic no-replace rename",
+        ):
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+    finally:
+        parent.close()
+    assert not destination.exists()
+    assert len(list(tmp_path.glob(".readback.json.private-*"))) == 1
+
+
+def test_portal_eio_after_issued_rename_is_ambiguous_and_never_deletes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = (tmp_path / "readback.json").resolve()
+    parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
+
+    class EioRename:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            destination.write_bytes(b"competitor")
+            return -1
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "EIO cleanup must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(renameatx_np=EioRename()),
+    )
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "get_errno",
+        lambda: public_release.errno.EIO,
+    )
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="issued syscall outcome is treated as ambiguous",
+        ) as captured:
+            public_release._publish_portal_readback(  # noqa: SLF001
+                parent,
+                destination,
+                b"synthetic receipt\n",
+                revalidate_input=lambda: None,
+            )
+    finally:
+        parent.close()
+    stage = tmp_path / ".readback.json.private-candidate"
+    assert destination.read_bytes() == b"competitor"
+    assert stage.read_bytes() == b"synthetic receipt\n"
+    message = str(captured.value)
+    assert f"candidate_paths={destination}|{stage}" in message
+    assert "destination-or-private-stage-name-may-be-owned-or-replaced" in message
+
+
+def test_dual_publication_retains_archive_and_receipt_stage_on_receipt_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+    original_rename = public_release._rename_staged_no_replace  # noqa: SLF001
+    calls = 0
+
+    def receipt_race(
+        parent: public_release._PinnedRoot,
+        staging_name: str,
+        destination_name: str,
+        *,
+        context: str,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            receipt_path.write_bytes(b"competitor receipt")
+        original_rename(
+            parent,
+            staging_name,
+            destination_name,
+            context=context,
+        )
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "partial publication must never roll back by name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release, "_rename_staged_no_replace", receipt_race)
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="refusing to replace public release receipt",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+        assert archive_path.exists()
+        assert receipt_path.read_bytes() == b"competitor receipt"
+        archive_stages = list(destination.glob(".synthetic-release.tar.private-*"))
+        receipt_stages = list(
+            destination.glob(".synthetic-release.tar.receipt.json.private-*"),
+        )
+        assert archive_stages == []
+        assert len(receipt_stages) == 1
+        message = str(captured.value)
+        assert "candidate_label=archive" in message
+        assert "destination-name-may-be-owned-or-replaced" in message
+        assert "candidate_label=receipt" in message
+        assert "private-stage-name-may-be-owned-or-replaced" in message
+        assert f"intended_destination={receipt_path}" in message
+        monkeypatch.setattr(
+            public_release,
+            "_rename_staged_no_replace",
+            original_rename,
+        )
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="retained private stage requires explicit review",
+        ):
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+
+
+def test_dual_receipt_eio_is_ambiguous_and_preserves_archive_competitor_and_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+
+    class EioOnReceiptRename:
+        argtypes: object = None
+        restype: object = None
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(
+            self,
+            source_fd: int,
+            source_name: bytes,
+            destination_fd: int,
+            destination_name: bytes,
+            _flags: int,
+        ) -> int:
+            self.calls += 1
+            if self.calls == 1:
+                os.rename(
+                    os.fsdecode(source_name),
+                    os.fsdecode(destination_name),
+                    src_dir_fd=source_fd,
+                    dst_dir_fd=destination_fd,
+                )
+                return 0
+            receipt_path.write_bytes(b"competitor receipt")
+            return -1
+
+    rename = EioOnReceiptRename()
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "dual EIO cleanup must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(renameatx_np=rename),
+    )
+    monkeypatch.setattr(
+        public_release.ctypes,
+        "get_errno",
+        lambda: public_release.errno.EIO,
+    )
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="issued syscall outcome is treated as ambiguous",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+    receipt_stage = destination / (
+        ".synthetic-release.tar.receipt.json.private-candidate"
+    )
+    assert archive_path.exists()
+    assert receipt_path.read_bytes() == b"competitor receipt"
+    assert receipt_stage.exists()
+    assert not (destination / ".synthetic-release.tar.private-candidate").exists()
+    message = str(captured.value)
+    assert "candidate_label=archive" in message
+    assert (
+        f"candidate_label=receipt,candidate_paths={receipt_path}|{receipt_stage}"
+        in message
+    )
+    assert "destination-or-private-stage-name-may-be-owned-or-replaced" in message
+
+
+def test_dual_receipt_rename_then_raise_retains_both_destinations_as_ambiguous(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+    original_rename = public_release._rename_staged_no_replace  # noqa: SLF001
+    calls = 0
+
+    def receipt_rename_then_raise(
+        parent: public_release._PinnedRoot,
+        staging_name: str,
+        destination_name: str,
+        *,
+        context: str,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        original_rename(
+            parent,
+            staging_name,
+            destination_name,
+            context=context,
+        )
+        if calls == 2:
+            message = "synthetic exception after successful receipt rename"
+            raise OSError(message)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "ambiguous pair publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(
+        public_release,
+        "_rename_staged_no_replace",
+        receipt_rename_then_raise,
+    )
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="synthetic exception after successful receipt rename",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+    assert archive_path.exists()
+    assert receipt_path.exists()
+    assert sorted(path.name for path in destination.iterdir()) == sorted(
+        (archive_path.name, receipt_path.name),
+    )
+    message = str(captured.value)
+    assert "candidate_label=archive" in message
+    assert "candidate_label=receipt" in message
+    assert (
+        "candidate_state=destination-or-private-stage-name-may-be-owned-or-"
+        "replaced-do-not-auto-delete"
+    ) in message
+    assert str(receipt_path) in message
+    assert ".synthetic-release.tar.receipt.json.private-" in message
+
+
+def test_dual_pre_rename_failure_retains_both_fully_verified_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    calls = 0
+
+    def fail_before_rename(_value: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            message = "synthetic pre-rename failure"
+            raise public_release.PublicReleaseError(message)
+
+    monkeypatch.setattr(public_release, "_revalidate_prepared", fail_before_rename)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="synthetic pre-rename failure",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+    assert not archive_path.exists()
+    assert not receipt_path.exists()
+    assert len(list(destination.glob(".synthetic-release.tar.private-*"))) == 1
+    assert (
+        len(
+            list(
+                destination.glob(
+                    ".synthetic-release.tar.receipt.json.private-*",
+                ),
+            ),
+        )
+        == 1
+    )
+    message = str(captured.value)
+    assert message.count("expected_sha256=") == 2
+    assert "expected_sha256=unknown" not in message
+
+
+def test_dual_snapshot_cap_failure_retains_published_names_and_stops_scanning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    monkeypatch.setattr(public_release, "_revalidate_prepared", lambda _value: None)
+    original_scandir = public_release.os.scandir
+    saturated = _AdversarialScandir(
+        lambda read: f"attacker-entry-{read}",
+        maximum_reads=public_release.PUBLICATION_DIRECTORY_SCAN_CAP,
+    )
+    scans = 0
+
+    def selected_scandir(descriptor: int) -> object:
+        nonlocal scans
+        scans += 1
+        if scans == 2:
+            return saturated
+        return original_scandir(descriptor)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "bounded snapshot failure must never unlink published names"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.os, "scandir", selected_scandir)
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="publication directory exceeds the bounded policy",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
+    monkeypatch.setattr(public_release.os, "scandir", original_scandir)
+    assert saturated.reads == public_release.PUBLICATION_DIRECTORY_SCAN_CAP
+    assert sorted(path.name for path in destination.iterdir()) == sorted(
+        (archive_path.name, receipt_path.name),
+    )
+    message = str(captured.value)
+    assert (
+        message.count(
+            "destination-name-may-be-owned-or-replaced-do-not-auto-delete",
+        )
+        == 2
+    )
+
+
+def test_dual_publication_fails_closed_on_final_archive_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, destination, archive_path, receipt_path = _publication_case(tmp_path)
+    calls = 0
+
+    def swap_during_final_input_validation(_value: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls != 5:
+            return
+        decoy = destination / "archive-decoy"
+        decoy.write_bytes(archive_path.read_bytes())
+        decoy.chmod(0o400)
+        decoy.replace(archive_path)
+
+    monkeypatch.setattr(
+        public_release,
+        "_revalidate_prepared",
+        swap_during_final_input_validation,
+    )
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "final readback failure must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
+    parent = public_release._destination_parent(  # noqa: SLF001
+        (archive_path, receipt_path),
+        forbidden_roots=(),
+        context="public release",
+    )
+    try:
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="final readback",
+        ) as captured:
+            public_release._publish_release(prepared, parent)  # noqa: SLF001
+    finally:
+        parent.close()
     assert archive_path.read_bytes()
-    assert not any(".staging-" in path.name for path in destination.iterdir())
+    assert receipt_path.read_bytes()
+    assert sorted(path.name for path in destination.iterdir()) == sorted(
+        (archive_path.name, receipt_path.name),
+    )
+    assert (
+        str(captured.value).count(
+            "destination-name-may-be-owned-or-replaced-do-not-auto-delete",
+        )
+        == 2
+    )
 
 
 def test_portal_readback_fails_closed_on_final_receipt_swap(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     destination = (tmp_path / "readback.json").resolve()
     parent = public_release._pin_root(tmp_path.resolve(), context="destination")  # noqa: SLF001
@@ -2046,13 +2947,22 @@ def test_portal_readback_fails_closed_on_final_receipt_swap(
         calls += 1
         if calls != 3:
             return
-        raw = destination.read_bytes()
-        destination.unlink()
-        destination.write_bytes(raw)
-        destination.chmod(0o400)
+        decoy = tmp_path / "receipt-decoy"
+        decoy.write_bytes(destination.read_bytes())
+        decoy.chmod(0o400)
+        decoy.replace(destination)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "portal final readback failure must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(public_release.os, "unlink", forbidden_unlink)
 
     try:
-        with pytest.raises(public_release.PublicReleaseError, match="final readback"):
+        with pytest.raises(
+            public_release.PublicReleaseError,
+            match="final readback",
+        ) as captured:
             public_release._publish_portal_readback(  # noqa: SLF001
                 parent,
                 destination,
@@ -2062,4 +2972,5 @@ def test_portal_readback_fails_closed_on_final_receipt_swap(
     finally:
         parent.close()
     assert destination.read_bytes() == b"synthetic receipt\n"
-    assert not any(".staging-" in path.name for path in tmp_path.iterdir())
+    assert sorted(path.name for path in tmp_path.iterdir()) == [destination.name]
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)

@@ -14,13 +14,14 @@ document structure and digests, never inserted prose or scientific table rows.
 from __future__ import annotations
 
 import argparse
-import contextlib
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
 import stat
-import uuid
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Final, NoReturn
@@ -165,6 +166,10 @@ _ARTIFACT_KIND_TO_REPRESENTATION_GATE: Final = {
 
 class DocumentReconciliationError(ValueError):
     """Raised when document reconciliation is incomplete or inconsistent."""
+
+
+class _AtomicNoReplaceRenameError(DocumentReconciliationError):
+    """Report a native rename failure that proves no rename was performed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,7 +339,8 @@ def _read_descriptor(descriptor: int, *, maximum: int, context: str) -> bytes:
     size = 0
     os.lseek(descriptor, 0, os.SEEK_SET)
     while True:
-        chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+        read_size = min(_READ_CHUNK_BYTES, maximum - size + 1)
+        chunk = os.read(descriptor, read_size)
         if not chunk:
             break
         size += len(chunk)
@@ -359,7 +365,14 @@ def _pin_file(path: Path, *, maximum: int, context: str) -> _PinnedFile:
         _fail(f"{context} must be a canonical non-symlink regular file")
     if path_entry.st_nlink != 1:
         _fail(f"{context} must have exactly one hard link")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if path_entry.st_size > maximum:
+        _fail(f"{context} exceeds the {maximum}-byte limit")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(absolute, flags)
     except OSError as error:
@@ -382,8 +395,30 @@ def _pin_file(path: Path, *, maximum: int, context: str) -> _PinnedFile:
             path_entry.st_mtime_ns,
         ):
             _fail(f"{context} changed while it was pinned")
-        raw = _read_descriptor(descriptor, maximum=maximum, context=context)
+        raw = _read_descriptor(
+            descriptor,
+            maximum=entry.st_size,
+            context=context,
+        )
         if len(raw) != entry.st_size:
+            _fail(f"{context} changed while it was read")
+        after = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(after.st_mode)
+            or after.st_nlink != 1
+            or (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            )
+            != (
+                entry.st_dev,
+                entry.st_ino,
+                entry.st_size,
+                entry.st_mtime_ns,
+            )
+        ):
             _fail(f"{context} changed while it was read")
         return _PinnedFile(
             path=absolute,
@@ -395,7 +430,7 @@ def _pin_file(path: Path, *, maximum: int, context: str) -> _PinnedFile:
             sha256=_sha256(raw),
             raw=raw,
         )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         raise
 
@@ -428,6 +463,9 @@ def _pin_root(path: Path, *, context: str) -> _PinnedRoot:
     except OSError:
         os.close(descriptor)
         raise
+    except BaseException:
+        os.close(descriptor)
+        raise
     if not stat.S_ISDIR(entry.st_mode):
         os.close(descriptor)
         _fail(f"{context} must be a directory")
@@ -448,10 +486,14 @@ def _open_root_member(
     member: str,
     *,
     maximum: int,
+    expected_size: int,
     context: str,
 ) -> _PinnedFile:
+    if expected_size > maximum:
+        _fail(f"{context} exceeds the {maximum}-byte limit")
     parts = PurePosixPath(member).parts
     directory_descriptor = os.dup(root.descriptor)
+    descriptor = -1
     try:
         for part in parts[:-1]:
             flags = (
@@ -461,22 +503,57 @@ def _open_root_member(
                 | getattr(os, "O_NOFOLLOW", 0)
             )
             next_descriptor = os.open(part, flags, dir_fd=directory_descriptor)
-            os.close(directory_descriptor)
+            previous_descriptor = directory_descriptor
             directory_descriptor = next_descriptor
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            os.close(previous_descriptor)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
         descriptor = os.open(parts[-1], flags, dir_fd=directory_descriptor)
-    except OSError as error:
-        _fail(f"cannot open {context}: {error}")
-    finally:
-        os.close(directory_descriptor)
-    try:
         entry = os.fstat(descriptor)
         if not stat.S_ISREG(entry.st_mode):
             _fail(f"{context} must be a regular file")
         if entry.st_nlink != 1:
             _fail(f"{context} must have exactly one hard link")
-        raw = _read_descriptor(descriptor, maximum=maximum, context=context)
-        if len(raw) != entry.st_size:
+        if entry.st_size != expected_size:
+            _fail(
+                f"{context} differs from its independent anchor: "
+                "byte count changed before read",
+            )
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        _fail(f"cannot open {context}: {error}")
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(directory_descriptor)
+    try:
+        raw = _read_descriptor(descriptor, maximum=expected_size, context=context)
+        if len(raw) != expected_size:
+            _fail(f"{context} changed while it was read")
+        after = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(after.st_mode)
+            or after.st_nlink != 1
+            or (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            )
+            != (
+                entry.st_dev,
+                entry.st_ino,
+                entry.st_size,
+                entry.st_mtime_ns,
+            )
+        ):
             _fail(f"{context} changed while it was read")
         return _PinnedFile(
             path=root.path / member,
@@ -488,7 +565,7 @@ def _open_root_member(
             sha256=_sha256(raw),
             raw=raw,
         )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         raise
 
@@ -514,9 +591,16 @@ def _revalidate_file(pinned: _PinnedFile, *, context: str) -> None:
         _fail(f"{context} identity changed after validation")
     raw = _read_descriptor(
         pinned.descriptor,
-        maximum=max(pinned.size, 1),
+        maximum=pinned.size,
         context=context,
     )
+    after = os.fstat(pinned.descriptor)
+    if (
+        not stat.S_ISREG(after.st_mode)
+        or after.st_nlink != 1
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != expected
+    ):
+        _fail(f"{context} identity changed during validation read")
     if _sha256(raw) != pinned.sha256:
         _fail(f"{context} bytes changed after validation")
 
@@ -1880,11 +1964,15 @@ def _ensure_new_destination(destination: Path) -> tuple[Path, int]:
         ):
             _fail("destination parent changed while it was pinned")
         try:
-            os.stat(absolute.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            os.stat(
+                absolute.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
         except FileNotFoundError:
             return absolute, parent_descriptor
         _fail("document reconciliation destination already exists")
-    except Exception:
+    except BaseException:
         os.close(parent_descriptor)
         raise
 
@@ -1914,7 +2002,12 @@ def _verify_published_destination(
     expected_links: int,
     raw: bytes,
 ) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(absolute.name, flags, dir_fd=parent_descriptor)
     except OSError as error:
@@ -1970,6 +2063,92 @@ def _verify_published_destination(
         os.close(descriptor)
 
 
+def _rename_no_replace(
+    source: str,
+    destination: str,
+    parent_descriptor: int,
+) -> None:
+    """Atomically rename one staged reconciliation without replacement."""
+    library = ctypes.CDLL(None, use_errno=True)
+    ctypes.set_errno(0)
+    if sys.platform == "darwin":
+        try:
+            function = library.renameatx_np
+        except AttributeError as error:
+            raise _AtomicNoReplaceRenameError(
+                "platform atomic no-replace rename symbol renameatx_np is unavailable",
+            ) from error
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        result = function(
+            parent_descriptor,
+            os.fsencode(source),
+            parent_descriptor,
+            os.fsencode(destination),
+            0x00000004,  # RENAME_EXCL
+        )
+    elif sys.platform.startswith("linux"):
+        try:
+            function = library.renameat2
+        except AttributeError as error:
+            raise _AtomicNoReplaceRenameError(
+                "platform atomic no-replace rename symbol renameat2 is unavailable",
+            ) from error
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        result = function(
+            parent_descriptor,
+            os.fsencode(source),
+            parent_descriptor,
+            os.fsencode(destination),
+            1,  # RENAME_NOREPLACE
+        )
+    else:
+        raise _AtomicNoReplaceRenameError(
+            "platform lacks a supported atomic no-replace rename",
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise DocumentReconciliationError(
+            "document reconciliation destination may already exist",
+        )
+    unsupported_errors = {
+        number
+        for number in (
+            getattr(errno, "ENOSYS", None),
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EOPNOTSUPP", None),
+            getattr(errno, "EINVAL", None),
+        )
+        if number is not None
+    }
+    if error_number in unsupported_errors:
+        message = (
+            "filesystem/platform does not support atomic no-replace rename: "
+            f"{os.strerror(error_number)} (errno {error_number})"
+        )
+        raise DocumentReconciliationError(message)
+    message = (
+        "atomic no-replace reconciliation publication failed: "
+        f"{os.strerror(error_number)} (errno {error_number})"
+    )
+    raise DocumentReconciliationError(message)
+
+
 def _publish_no_replace(
     destination: Path,
     raw: bytes,
@@ -1977,11 +2156,33 @@ def _publish_no_replace(
     revalidate: Callable[[], None],
 ) -> None:
     absolute, parent_descriptor = _ensure_new_destination(destination)
-    staging_name = f".{absolute.name}.private-{uuid.uuid4().hex}"
+    staging_name = f".{absolute.name}.private-candidate"
+    try:
+        os.stat(
+            staging_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        os.close(parent_descriptor)
+        _fail(f"cannot inspect retained private reconciliation stage: {error}")
+    except BaseException:
+        os.close(parent_descriptor)
+        raise
+    else:
+        os.close(parent_descriptor)
+        _fail(
+            "retained private reconciliation stage requires explicit review "
+            f"before retry: {absolute.parent / staging_name}",
+        )
     descriptor = -1
     staging_present = False
-    destination_linked = False
-    published = False
+    stage_owned = False
+    destination_renamed = False
+    rename_attempted = False
+    stage_verified = False
     staged_identity: tuple[int, int] | None = None
     try:
         flags = (
@@ -1991,8 +2192,21 @@ def _publish_no_replace(
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(staging_name, flags, 0o600, dir_fd=parent_descriptor)
+        try:
+            descriptor = os.open(
+                staging_name,
+                flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError as error:
+            staging_present = True
+            raise DocumentReconciliationError(
+                "private reconciliation stage appeared after the retained-stage "
+                "preflight",
+            ) from error
         staging_present = True
+        stage_owned = True
         offset = 0
         while offset < len(raw):
             count = os.write(descriptor, raw[offset:])
@@ -2019,32 +2233,13 @@ def _publish_no_replace(
         ):
             _fail("staged reconciliation identity is invalid")
         staged_identity = (staged.st_dev, staged.st_ino)
+        stage_verified = True
         revalidate()
         _revalidate_destination_parent(absolute, parent_descriptor)
-        try:
-            os.link(
-                staging_name,
-                absolute.name,
-                src_dir_fd=parent_descriptor,
-                dst_dir_fd=parent_descriptor,
-                follow_symlinks=False,
-            )
-        except FileExistsError as error:
-            raise DocumentReconciliationError(
-                "document reconciliation destination already exists",
-            ) from error
-        destination_linked = True
-        os.fsync(parent_descriptor)
-        _verify_published_destination(
-            absolute,
-            parent_descriptor,
-            expected_identity=staged_identity,
-            expected_links=2,
-            raw=raw,
-        )
-        revalidate()
-        os.unlink(staging_name, dir_fd=parent_descriptor)
+        rename_attempted = True
+        _rename_no_replace(staging_name, absolute.name, parent_descriptor)
         staging_present = False
+        destination_renamed = True
         os.fsync(parent_descriptor)
         _verify_published_destination(
             absolute,
@@ -2071,31 +2266,67 @@ def _publish_no_replace(
             expected_links=1,
             raw=raw,
         )
-        published = True
+        revalidate()
+        _revalidate_destination_parent(absolute, parent_descriptor)
+        _verify_published_destination(
+            absolute,
+            parent_descriptor,
+            expected_identity=staged_identity,
+            expected_links=1,
+            raw=raw,
+        )
+    except Exception as error:
+        candidate_path: Path | None = None
+        candidate_state = "none"
+        if destination_renamed:
+            candidate_path = absolute
+            candidate_state = (
+                "destination-name-may-be-owned-or-replaced-do-not-auto-delete"
+            )
+        elif (
+            staging_present
+            and rename_attempted
+            and not isinstance(error, _AtomicNoReplaceRenameError)
+        ):
+            candidate_path = absolute
+            candidate_state = (
+                "destination-or-private-stage-names-may-be-owned-or-replaced-"
+                "do-not-auto-delete"
+            )
+        elif staging_present:
+            candidate_path = absolute.parent / staging_name
+            if stage_owned:
+                candidate_state = (
+                    "private-stage-name-may-be-owned-or-replaced-do-not-auto-delete"
+                )
+            else:
+                candidate_state = (
+                    "private-stage-name-not-proven-owned-or-may-be-replaced-"
+                    "do-not-auto-delete"
+                )
+        if candidate_path is None:
+            raise
+        expected_sha256 = _sha256(raw) if stage_verified else "unknown"
+        expected_bytes: int | str = len(raw) if stage_verified else "unknown"
+        alternate = ""
+        if "destination-or-private-stage" in candidate_state:
+            alternate = f"alternate_candidate_path={absolute.parent / staging_name}; "
+        diagnostic = (
+            f"{error}; candidate_path={candidate_path}; "
+            f"{alternate}"
+            f"expected_sha256={expected_sha256}; expected_bytes={expected_bytes}; "
+            f"candidate_state={candidate_state}; inspect identity and bytes before "
+            "any explicit removal"
+        )
+        raise DocumentReconciliationError(diagnostic) from error
     finally:
         try:
             if descriptor >= 0:
                 os.close(descriptor)
         finally:
-            try:
-                if not published and destination_linked and staged_identity is not None:
-                    with contextlib.suppress(FileNotFoundError):
-                        destination = os.stat(
-                            absolute.name,
-                            dir_fd=parent_descriptor,
-                            follow_symlinks=False,
-                        )
-                        if (destination.st_dev, destination.st_ino) == staged_identity:
-                            os.unlink(absolute.name, dir_fd=parent_descriptor)
-                            os.fsync(parent_descriptor)
-            finally:
-                try:
-                    if staging_present:
-                        with contextlib.suppress(FileNotFoundError):
-                            os.unlink(staging_name, dir_fd=parent_descriptor)
-                            os.fsync(parent_descriptor)
-                finally:
-                    os.close(parent_descriptor)
+            # Name-based rollback can delete a competitor after a swap.  Retain
+            # and report the candidate for explicit identity/byte inspection.
+            os.close(parent_descriptor)
 
 
 def _open_documents(
@@ -2111,6 +2342,10 @@ def _open_documents(
                 root,
                 str(record["member"]),
                 maximum=_MAX_DOCUMENT_BYTES,
+                expected_size=_expect_nonnegative_int(
+                    record["bytes"],
+                    context=f"document {document_id} bytes",
+                ),
                 context=f"document {document_id}",
             )
             pins.append(pinned)
@@ -2120,7 +2355,7 @@ def _open_documents(
                 pinned,
                 context=f"document {document_id}",
             )
-    except Exception:
+    except BaseException:
         while pins:
             pins.pop().close()
         raise
@@ -2146,6 +2381,10 @@ def _revalidate_inputs(
             document_root,
             str(record["member"]),
             maximum=_MAX_DOCUMENT_BYTES,
+            expected_size=_expect_nonnegative_int(
+                record["bytes"],
+                context=f"document member {index} bytes",
+            ),
             context=f"current document member {index}",
         )
         try:

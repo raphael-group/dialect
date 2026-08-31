@@ -23,13 +23,14 @@ layout decision.
 from __future__ import annotations
 
 import argparse
-import contextlib
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
 import stat
-import uuid
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
@@ -40,9 +41,7 @@ from typing import Final
 # of one-use exception subclasses.
 # ruff: noqa: EM101, EM102, TRY003, TRY301
 
-RECONCILIATION_INPUT_SCHEMA: Final = (
-    "dialect-revision-artifact-reconciliation-input-v1"
-)
+RECONCILIATION_INPUT_SCHEMA: Final = "dialect-revision-artifact-reconciliation-input-v1"
 ARTIFACT_REGISTRY_SCHEMA: Final = "dialect-revision-artifact-registry-v1"
 ARTIFACT_REGISTRY_CONTRACT: Final = (
     "semantic-artifact-gates-source-to-render-reconciliation-v1"
@@ -84,15 +83,14 @@ TRUST_MODEL: Final = {
     ),
     "scientific_scope": "no result interpretation or scientific approval is inferred",
 }
-_BUILDER_SCRIPT_MEMBER: Final = (
-    "analysis/build_tcga_revision_artifact_registry.py"
-)
+_BUILDER_SCRIPT_MEMBER: Final = "analysis/build_tcga_revision_artifact_registry.py"
 
 _SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 _TOKEN_PATTERN: Final = re.compile(r"[a-z0-9][a-z0-9._:/-]{1,127}")
 _RELEASE_ID_PATTERN: Final = re.compile(r"[a-z0-9][a-z0-9._-]{2,127}")
 _READ_CHUNK_BYTES: Final = 1024 * 1024
 _MAX_RECONCILIATION_BYTES: Final = 1024 * 1024
+_MAX_PINNED_MEMBER_BYTES: Final = 1024 * 1024 * 1024
 
 _OUTPUT_MEDIA_SUFFIXES: Final = {
     "application/json": (".json",),
@@ -135,6 +133,10 @@ _UPSTREAM_MANIFEST_MEMBERS: Final = {
 
 class ArtifactRegistryError(ValueError):
     """Raised when an artifact reconciliation cannot be validated."""
+
+
+class _AtomicNoReplaceRenameError(ArtifactRegistryError):
+    """Report a native rename failure that proves no rename was performed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,7 +568,12 @@ def _pin_root(path: Path, *, context: str) -> _PinnedRoot:
         raise ArtifactRegistryError(f"cannot inspect {context}: {absolute}") from exc
     if stat.S_ISLNK(entry.st_mode) or not stat.S_ISDIR(entry.st_mode):
         raise ArtifactRegistryError(f"{context} must be a non-symlink directory")
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(absolute, flags)
     except OSError as exc:
@@ -578,23 +585,36 @@ def _pin_root(path: Path, *, context: str) -> _PinnedRoot:
         raise ArtifactRegistryError(
             f"cannot inspect pinned {context}: {absolute}",
         ) from exc
+    except BaseException:
+        os.close(descriptor)
+        raise
     if (identity.st_dev, identity.st_ino) != (entry.st_dev, entry.st_ino):
         os.close(descriptor)
         raise ArtifactRegistryError(f"{context} changed while it was pinned")
     return _PinnedRoot(path=absolute, descriptor=descriptor, identity=identity)
 
 
-def _digest_descriptor(descriptor: int) -> tuple[str, int, os.stat_result]:
+def _digest_descriptor(
+    descriptor: int,
+    *,
+    maximum: int,
+    context: str,
+) -> tuple[str, int, os.stat_result]:
     before = os.fstat(descriptor)
     os.lseek(descriptor, 0, os.SEEK_SET)
     digest = hashlib.sha256()
     size = 0
     while True:
-        chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+        read_size = min(_READ_CHUNK_BYTES, maximum - size + 1)
+        chunk = os.read(descriptor, read_size)
         if not chunk:
             break
         digest.update(chunk)
         size += len(chunk)
+        if size > maximum:
+            raise ArtifactRegistryError(
+                f"{context} exceeds its {maximum}-byte read bound",
+            )
     after = os.fstat(descriptor)
     before_identity = (
         before.st_dev,
@@ -613,49 +633,105 @@ def _digest_descriptor(descriptor: int) -> tuple[str, int, os.stat_result]:
     return digest.hexdigest(), size, after
 
 
-def _open_member_descriptor(root: _PinnedRoot, member: str) -> int:
+def _open_member_descriptor(
+    root: _PinnedRoot,
+    member: str,
+    *,
+    context: str,
+    expected_size: int | None,
+    maximum: int,
+) -> tuple[int, os.stat_result]:
+    if expected_size is not None and expected_size > maximum:
+        raise ArtifactRegistryError(f"{context} exceeds the member size limit")
     parts = PurePosixPath(member).parts
     directory_descriptor = os.dup(root.descriptor)
+    descriptor = -1
     try:
         for part in parts[:-1]:
             flags = (
                 os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
                 | getattr(os, "O_DIRECTORY", 0)
                 | getattr(os, "O_NOFOLLOW", 0)
             )
             next_descriptor = os.open(part, flags, dir_fd=directory_descriptor)
-            os.close(directory_descriptor)
+            previous_descriptor = directory_descriptor
             directory_descriptor = next_descriptor
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        return os.open(parts[-1], flags, dir_fd=directory_descriptor)
-    except OSError as exc:
-        raise ArtifactRegistryError(
-            f"cannot open pinned member {member!r} under {root.path}",
-        ) from exc
-    finally:
-        os.close(directory_descriptor)
-
-
-def _pin_member(root: _PinnedRoot, member: str, *, context: str) -> _PinnedMember:
-    descriptor = _open_member_descriptor(root, member)
-    try:
+            os.close(previous_descriptor)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(parts[-1], flags, dir_fd=directory_descriptor)
         identity = os.fstat(descriptor)
         if not stat.S_ISREG(identity.st_mode) or identity.st_nlink != 1:
             raise ArtifactRegistryError(
                 f"{context} must be a singly linked regular file",
             )
-        digest, size, identity = _digest_descriptor(descriptor)
+        if identity.st_size > maximum:
+            raise ArtifactRegistryError(f"{context} exceeds the member size limit")
+        if expected_size is not None and identity.st_size != expected_size:
+            raise ArtifactRegistryError(f"{context} byte count changed before read")
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise ArtifactRegistryError(
+            f"cannot open pinned member {member!r} under {root.path}",
+        ) from exc
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(directory_descriptor)
+    return descriptor, identity
+
+
+def _pin_member(
+    root: _PinnedRoot,
+    member: str,
+    *,
+    context: str,
+    expected_size: int | None = None,
+) -> _PinnedMember:
+    descriptor, identity = _open_member_descriptor(
+        root,
+        member,
+        context=context,
+        expected_size=expected_size,
+        maximum=_MAX_PINNED_MEMBER_BYTES,
+    )
+    try:
+        maximum = (
+            expected_size if expected_size is not None else _MAX_PINNED_MEMBER_BYTES
+        )
+        digest, size, after = _digest_descriptor(
+            descriptor,
+            maximum=maximum,
+            context=context,
+        )
+        if (
+            not stat.S_ISREG(after.st_mode)
+            or after.st_nlink != 1
+            or (after.st_dev, after.st_ino) != (identity.st_dev, identity.st_ino)
+            or after.st_size != identity.st_size
+            or after.st_mtime_ns != identity.st_mtime_ns
+            or (expected_size is not None and size != expected_size)
+        ):
+            raise ArtifactRegistryError(f"{context} changed while it was hashed")
         return _PinnedMember(
             root=root,
             member=member,
             descriptor=descriptor,
-            device=identity.st_dev,
-            inode=identity.st_ino,
+            device=after.st_dev,
+            inode=after.st_ino,
             size_bytes=size,
-            modified_ns=identity.st_mtime_ns,
+            modified_ns=after.st_mtime_ns,
             sha256=digest,
         )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         raise
 
@@ -674,27 +750,47 @@ def _pin_metadata(path: Path, *, context: str) -> _PinnedMetadata:
         raise ArtifactRegistryError(f"{context} must be a singly linked regular file")
     if entry.st_size > _MAX_RECONCILIATION_BYTES:
         raise ArtifactRegistryError(f"{context} exceeds the metadata size limit")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(absolute, flags)
     except OSError as exc:
         raise ArtifactRegistryError(f"cannot pin {context}: {absolute}") from exc
     try:
+        identity = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(identity.st_mode)
+            or identity.st_nlink != 1
+            or (identity.st_dev, identity.st_ino) != (entry.st_dev, entry.st_ino)
+            or identity.st_size != entry.st_size
+            or identity.st_mtime_ns != entry.st_mtime_ns
+        ):
+            raise ArtifactRegistryError(f"{context} changed while it was pinned")
         raw = bytearray()
         while True:
-            chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+            read_size = min(
+                _READ_CHUNK_BYTES,
+                entry.st_size - len(raw) + 1,
+            )
+            chunk = os.read(descriptor, read_size)
             if not chunk:
                 break
             raw.extend(chunk)
-            if len(raw) > _MAX_RECONCILIATION_BYTES:
+            if len(raw) > entry.st_size:
                 raise ArtifactRegistryError(
-                    f"{context} exceeds the metadata size limit",
+                    f"{context} grew while it was read",
                 )
-        identity = os.fstat(descriptor)
+        after = os.fstat(descriptor)
         if (
-            (identity.st_dev, identity.st_ino) != (entry.st_dev, entry.st_ino)
-            or identity.st_size != len(raw)
-            or identity.st_mtime_ns != entry.st_mtime_ns
+            not stat.S_ISREG(after.st_mode)
+            or after.st_nlink != 1
+            or (after.st_dev, after.st_ino) != (entry.st_dev, entry.st_ino)
+            or after.st_size != len(raw)
+            or after.st_mtime_ns != entry.st_mtime_ns
         ):
             raise ArtifactRegistryError(
                 f"{context} changed while it was read",
@@ -703,14 +799,14 @@ def _pin_metadata(path: Path, *, context: str) -> _PinnedMetadata:
         return _PinnedMetadata(
             path=absolute,
             descriptor=descriptor,
-            device=identity.st_dev,
-            inode=identity.st_ino,
-            size_bytes=identity.st_size,
-            modified_ns=identity.st_mtime_ns,
+            device=after.st_dev,
+            inode=after.st_ino,
+            size_bytes=after.st_size,
+            modified_ns=after.st_mtime_ns,
             sha256=_sha256(raw_bytes),
             raw=raw_bytes,
         )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         raise
 
@@ -731,15 +827,37 @@ def _revalidate_root(root: _PinnedRoot, *, context: str) -> None:
 
 
 def _revalidate_member(member: _PinnedMember, *, context: str) -> None:
-    digest, size, identity = _digest_descriptor(member.descriptor)
+    before = os.fstat(member.descriptor)
     if (
-        (identity.st_dev, identity.st_ino) != (member.device, member.inode)
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or (before.st_dev, before.st_ino) != (member.device, member.inode)
+        or before.st_size != member.size_bytes
+        or before.st_mtime_ns != member.modified_ns
+    ):
+        raise ArtifactRegistryError(
+            f"{context} changed during validation before read",
+        )
+    digest, size, identity = _digest_descriptor(
+        member.descriptor,
+        maximum=member.size_bytes,
+        context=context,
+    )
+    if (
+        not stat.S_ISREG(identity.st_mode)
+        or identity.st_nlink != 1
+        or (identity.st_dev, identity.st_ino) != (member.device, member.inode)
         or identity.st_mtime_ns != member.modified_ns
         or size != member.size_bytes
         or digest != member.sha256
     ):
         raise ArtifactRegistryError(f"{context} changed during validation")
-    replacement = _pin_member(member.root, member.member, context=context)
+    replacement = _pin_member(
+        member.root,
+        member.member,
+        context=context,
+        expected_size=member.size_bytes,
+    )
     try:
         if (
             (replacement.device, replacement.inode) != (member.device, member.inode)
@@ -753,20 +871,52 @@ def _revalidate_member(member: _PinnedMember, *, context: str) -> None:
 
 
 def _revalidate_metadata(metadata: _PinnedMetadata, *, context: str) -> None:
-    digest, size, identity = _digest_descriptor(metadata.descriptor)
+    before = os.fstat(metadata.descriptor)
     try:
         entry = os.lstat(metadata.path)
     except OSError as exc:
         raise ArtifactRegistryError(f"{context} disappeared during validation") from exc
     if (
-        (identity.st_dev, identity.st_ino) != (metadata.device, metadata.inode)
+        not stat.S_ISREG(before.st_mode)
+        or not stat.S_ISREG(entry.st_mode)
+        or before.st_nlink != 1
+        or entry.st_nlink != 1
+        or (before.st_dev, before.st_ino) != (metadata.device, metadata.inode)
         or (entry.st_dev, entry.st_ino) != (metadata.device, metadata.inode)
-        or identity.st_mtime_ns != metadata.modified_ns
+        or before.st_mtime_ns != metadata.modified_ns
         or entry.st_mtime_ns != metadata.modified_ns
+        or before.st_size != metadata.size_bytes
+        or entry.st_size != metadata.size_bytes
+    ):
+        raise ArtifactRegistryError(f"{context} changed before validation read")
+    digest, size, identity = _digest_descriptor(
+        metadata.descriptor,
+        maximum=metadata.size_bytes,
+        context=context,
+    )
+    if (
+        not stat.S_ISREG(identity.st_mode)
+        or identity.st_nlink != 1
+        or (identity.st_dev, identity.st_ino) != (metadata.device, metadata.inode)
+        or identity.st_mtime_ns != metadata.modified_ns
         or size != metadata.size_bytes
         or digest != metadata.sha256
     ):
         raise ArtifactRegistryError(f"{context} changed during validation")
+    try:
+        named_after = os.lstat(metadata.path)
+    except OSError as exc:
+        raise ArtifactRegistryError(
+            f"{context} disappeared during validation",
+        ) from exc
+    if (
+        not stat.S_ISREG(named_after.st_mode)
+        or named_after.st_nlink != 1
+        or (named_after.st_dev, named_after.st_ino) != (metadata.device, metadata.inode)
+        or named_after.st_mtime_ns != metadata.modified_ns
+        or named_after.st_size != metadata.size_bytes
+    ):
+        raise ArtifactRegistryError(f"{context} name changed during validation")
 
 
 def _parse_canonical_metadata(
@@ -1021,7 +1171,12 @@ def _normalize_renderer_registry(
         )
     expected_sha256 = _expect_sha256(renderer["sha256"], context=f"{context}.sha256")
     expected_bytes = _expect_size(renderer["bytes"], context=f"{context}.bytes")
-    pinned = _pin_member(renderer_root, script, context=context)
+    pinned = _pin_member(
+        renderer_root,
+        script,
+        context=f"{context} renderer script",
+        expected_size=expected_bytes,
+    )
     if pinned.sha256 != expected_sha256 or pinned.size_bytes != expected_bytes:
         pinned.close()
         raise ArtifactRegistryError(f"{context} does not match the renderer script")
@@ -1036,7 +1191,8 @@ def _bind_live_builder(
     pinned = _pin_member(
         renderer_root,
         _BUILDER_SCRIPT_MEMBER,
-        context="artifact registry builder",
+        context="live artifact registry builder",
+        expected_size=live_builder.size_bytes,
     )
     if (
         pinned.sha256 != live_builder.sha256
@@ -1091,7 +1247,7 @@ def _normalize_outputs(
             _expect_keys(
                 record,
                 {"output_id", "release_member", "media_type", "sha256", "bytes"},
-                context=record_context,
+                context=f"{record_context} rendered output",
             )
             output_id = _expect_token(
                 record["output_id"],
@@ -1130,7 +1286,12 @@ def _normalize_outputs(
                 record["bytes"],
                 context=f"{record_context}.bytes",
             )
-            pinned = _pin_member(output_root, member, context=record_context)
+            pinned = _pin_member(
+                output_root,
+                member,
+                context=f"{record_context} rendered output",
+                expected_size=expected_bytes,
+            )
             if pinned.sha256 != expected_sha256 or pinned.size_bytes != expected_bytes:
                 pinned.close()
                 raise ArtifactRegistryError(
@@ -1146,7 +1307,7 @@ def _normalize_outputs(
                     "bytes": expected_bytes,
                 },
             )
-    except Exception:
+    except BaseException:
         for pinned in pinned_members:
             pinned.close()
         raise
@@ -1212,9 +1373,7 @@ def _normalize_omission(  # noqa: PLR0913
     expected_unsatisfied = [
         gate for gate in spec.required_gates if gate not in satisfied
     ]
-    expected_unsatisfied = [
-        gate for gate in GATE_ORDER if gate in expected_unsatisfied
-    ]
+    expected_unsatisfied = [gate for gate in GATE_ORDER if gate in expected_unsatisfied]
     if unsatisfied != expected_unsatisfied:
         raise ArtifactRegistryError(
             f"{context}.unsatisfied_gates does not exactly complement receipts",
@@ -1223,9 +1382,8 @@ def _normalize_omission(  # noqa: PLR0913
         raise ArtifactRegistryError(
             f"{context} requires at least one unsatisfied gate",
         )
-    if (
-        reason_code == "coauthor_decision_to_omit"
-        and (unsatisfied or "COAUTH" not in global_receipt_gates)
+    if reason_code == "coauthor_decision_to_omit" and (
+        unsatisfied or "COAUTH" not in global_receipt_gates
     ):
         raise ArtifactRegistryError(
             f"{context} requires complete gates including COAUTH",
@@ -1379,9 +1537,7 @@ def _normalize_input_artifacts(
                         "status": "omitted",
                         "gate_receipts": receipts,
                         "omission": omission,
-                        "planned_claims": [
-                            claim.as_record() for claim in spec.claims
-                        ],
+                        "planned_claims": [claim.as_record() for claim in spec.claims],
                     },
                 )
             else:
@@ -1389,7 +1545,7 @@ def _normalize_input_artifacts(
                     f"{context}.status must be 'ready' or 'omitted'",
                 )
         _validate_global_reconciliation(normalized, gate_ledger=gate_ledger)
-    except Exception:
+    except BaseException:
         for pinned in pins:
             pinned.close()
         raise
@@ -1508,7 +1664,7 @@ def _normalize_reconciliation(
             renderer_root=renderer_root,
             output_root=output_root,
         )
-    except Exception:
+    except BaseException:
         builder_pin.close()
         raise
     pins = [builder_pin, *artifact_pins]
@@ -1695,7 +1851,7 @@ def _validate_registry_artifacts(
                 )
             validated.append(artifact)
         _validate_global_reconciliation(validated, gate_ledger=gate_ledger)
-    except Exception:
+    except BaseException:
         for pinned in pins:
             pinned.close()
         raise
@@ -1766,7 +1922,7 @@ def _validate_registry_object(
             renderer_root=renderer_root,
             output_root=output_root,
         )
-    except Exception:
+    except BaseException:
         builder_pin.close()
         raise
     return artifacts, [builder_pin, *artifact_pins]
@@ -1811,7 +1967,12 @@ def _ensure_destination_parent(destination: Path) -> tuple[Path, int]:
         raise ArtifactRegistryError(
             "registry destination parent has symlinked ancestors",
         )
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     parent_descriptor = os.open(absolute.parent, flags)
     try:
         pinned_parent = os.fstat(parent_descriptor)
@@ -1820,6 +1981,9 @@ def _ensure_destination_parent(destination: Path) -> tuple[Path, int]:
         raise ArtifactRegistryError(
             "cannot inspect pinned registry destination parent",
         ) from exc
+    except BaseException:
+        os.close(parent_descriptor)
+        raise
     if (pinned_parent.st_dev, pinned_parent.st_ino) != (
         parent_entry.st_dev,
         parent_entry.st_ino,
@@ -1829,10 +1993,17 @@ def _ensure_destination_parent(destination: Path) -> tuple[Path, int]:
             "registry destination parent changed while it was pinned",
         )
     try:
-        os.stat(absolute.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        os.stat(
+            absolute.name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         return absolute, parent_descriptor
     except OSError:
+        os.close(parent_descriptor)
+        raise
+    except BaseException:
         os.close(parent_descriptor)
         raise
     os.close(parent_descriptor)
@@ -1866,7 +2037,12 @@ def _validate_published_destination(
     *,
     expected: _PublishedDestinationExpectation,
 ) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(absolute.name, flags, dir_fd=parent_descriptor)
     except OSError as exc:
@@ -1874,7 +2050,22 @@ def _validate_published_destination(
             "published registry destination cannot be pinned",
         ) from exc
     try:
-        digest, size, identity = _digest_descriptor(descriptor)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != 0o400
+            or (before.st_dev, before.st_ino) != expected.staged_identity
+            or before.st_nlink != expected.link_count
+            or before.st_size != expected.size_bytes
+        ):
+            raise ArtifactRegistryError(
+                "published registry destination does not match the staged file",
+            )
+        digest, size, identity = _digest_descriptor(
+            descriptor,
+            maximum=expected.size_bytes,
+            context="published registry destination",
+        )
         if (
             not stat.S_ISREG(identity.st_mode)
             or stat.S_IMODE(identity.st_mode) != 0o400
@@ -1912,69 +2103,182 @@ def _validate_published_destination(
         os.close(descriptor)
 
 
+def _rename_no_replace(
+    source: str,
+    destination: str,
+    parent_descriptor: int,
+) -> None:
+    """Atomically rename one staged registry without replacing a destination."""
+    library = ctypes.CDLL(None, use_errno=True)
+    ctypes.set_errno(0)
+    if sys.platform == "darwin":
+        try:
+            function = library.renameatx_np
+        except AttributeError as exc:
+            raise _AtomicNoReplaceRenameError(
+                "platform atomic no-replace rename symbol renameatx_np is unavailable",
+            ) from exc
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        result = function(
+            parent_descriptor,
+            os.fsencode(source),
+            parent_descriptor,
+            os.fsencode(destination),
+            0x00000004,  # RENAME_EXCL
+        )
+    elif sys.platform.startswith("linux"):
+        try:
+            function = library.renameat2
+        except AttributeError as exc:
+            raise _AtomicNoReplaceRenameError(
+                "platform atomic no-replace rename symbol renameat2 is unavailable",
+            ) from exc
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        result = function(
+            parent_descriptor,
+            os.fsencode(source),
+            parent_descriptor,
+            os.fsencode(destination),
+            1,  # RENAME_NOREPLACE
+        )
+    else:
+        raise _AtomicNoReplaceRenameError(
+            "platform lacks a supported atomic no-replace rename",
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ArtifactRegistryError("registry destination may already exist")
+    unsupported_errors = {
+        number
+        for number in (
+            getattr(errno, "ENOSYS", None),
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EOPNOTSUPP", None),
+            getattr(errno, "EINVAL", None),
+        )
+        if number is not None
+    }
+    if error_number in unsupported_errors:
+        raise ArtifactRegistryError(
+            "filesystem/platform does not support atomic no-replace rename: "
+            f"{os.strerror(error_number)} (errno {error_number})",
+        )
+    raise ArtifactRegistryError(
+        "atomic no-replace registry publication failed: "
+        f"{os.strerror(error_number)} (errno {error_number})",
+    )
+
+
 def _publish_no_replace(
     destination: Path,
     raw: bytes,
     *,
-    link_boundary_check: Callable[[], None] | None = None,
+    boundary_check: Callable[[], None] | None = None,
 ) -> None:
     absolute, parent_descriptor = _ensure_destination_parent(destination)
-    staging_name = f".{absolute.name}.staging-{uuid.uuid4().hex}"
+    staging_name = f".{absolute.name}.private-candidate"
+    try:
+        os.stat(
+            staging_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        os.close(parent_descriptor)
+        raise ArtifactRegistryError(
+            "cannot inspect the retained private registry stage",
+        ) from exc
+    except BaseException:
+        os.close(parent_descriptor)
+        raise
+    else:
+        os.close(parent_descriptor)
+        raise ArtifactRegistryError(
+            "retained private registry stage requires explicit review before retry: "
+            f"{absolute.parent / staging_name}",
+        )
     descriptor = -1
     staging_present = False
-    destination_linked = False
-    published = False
+    stage_owned = False
+    destination_renamed = False
+    rename_attempted = False
+    stage_verified = False
     staged_identity: tuple[int, int] | None = None
+    staged_sha256 = "unknown"
+    staged_size: int | str = "unknown"
     try:
         flags = (
             os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(staging_name, flags, 0o600, dir_fd=parent_descriptor)
+        try:
+            descriptor = os.open(
+                staging_name,
+                flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError as exc:
+            staging_present = True
+            raise ArtifactRegistryError(
+                "private registry stage appeared after the retained-stage preflight",
+            ) from exc
         staging_present = True
+        stage_owned = True
         written = 0
         while written < len(raw):
-            written += os.write(descriptor, raw[written:])
+            count = os.write(descriptor, raw[written:])
+            if count <= 0:
+                raise ArtifactRegistryError(
+                    "staged registry write made no progress",
+                )
+            written += count
         os.fsync(descriptor)
         os.fchmod(descriptor, 0o400)
         os.fsync(descriptor)
-        staged_sha256, staged_size, staged = _digest_descriptor(descriptor)
+        staged_sha256, staged_size, staged = _digest_descriptor(
+            descriptor,
+            maximum=len(raw),
+            context="staged registry",
+        )
         if (
             not stat.S_ISREG(staged.st_mode)
+            or stat.S_IMODE(staged.st_mode) != 0o400
+            or staged.st_nlink != 1
             or staged_size != len(raw)
             or staged_sha256 != _sha256(raw)
         ):
             raise ArtifactRegistryError("staged registry failed readback accounting")
         staged_identity = (staged.st_dev, staged.st_ino)
-        if link_boundary_check is not None:
-            link_boundary_check()
+        stage_verified = True
+        if boundary_check is not None:
+            boundary_check()
         _revalidate_destination_parent(absolute, parent_descriptor)
-        os.link(
-            staging_name,
-            absolute.name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
-            follow_symlinks=False,
-        )
-        destination_linked = True
-        os.fsync(parent_descriptor)
-        _validate_published_destination(
-            absolute,
-            parent_descriptor,
-            expected=_PublishedDestinationExpectation(
-                staged_identity=staged_identity,
-                sha256=staged_sha256,
-                size_bytes=staged_size,
-                link_count=2,
-            ),
-        )
-        if link_boundary_check is not None:
-            link_boundary_check()
-        _revalidate_destination_parent(absolute, parent_descriptor)
-        os.unlink(staging_name, dir_fd=parent_descriptor)
+        rename_attempted = True
+        _rename_no_replace(staging_name, absolute.name, parent_descriptor)
         staging_present = False
+        destination_renamed = True
         os.fsync(parent_descriptor)
         _validate_published_destination(
             absolute,
@@ -1986,8 +2290,8 @@ def _publish_no_replace(
                 link_count=1,
             ),
         )
-        if link_boundary_check is not None:
-            link_boundary_check()
+        if boundary_check is not None:
+            boundary_check()
         _revalidate_destination_parent(absolute, parent_descriptor)
         _validate_published_destination(
             absolute,
@@ -1999,41 +2303,72 @@ def _publish_no_replace(
                 link_count=1,
             ),
         )
-        published = True
-    except FileExistsError as exc:
-        raise ArtifactRegistryError("registry destination already exists") from exc
+        if boundary_check is not None:
+            boundary_check()
+        _revalidate_destination_parent(absolute, parent_descriptor)
+        _validate_published_destination(
+            absolute,
+            parent_descriptor,
+            expected=_PublishedDestinationExpectation(
+                staged_identity=staged_identity,
+                sha256=staged_sha256,
+                size_bytes=staged_size,
+                link_count=1,
+            ),
+        )
+    except Exception as exc:
+        candidate_path: Path | None = None
+        candidate_state = "none"
+        if destination_renamed:
+            candidate_path = absolute
+            candidate_state = (
+                "destination-name-may-be-owned-or-replaced-do-not-auto-delete"
+            )
+        elif (
+            staging_present
+            and rename_attempted
+            and not isinstance(exc, _AtomicNoReplaceRenameError)
+        ):
+            candidate_path = absolute
+            candidate_state = (
+                "destination-or-private-stage-names-may-be-owned-or-replaced-"
+                "do-not-auto-delete"
+            )
+        elif staging_present:
+            candidate_path = absolute.parent / staging_name
+            if stage_owned:
+                candidate_state = (
+                    "private-stage-name-may-be-owned-or-replaced-do-not-auto-delete"
+                )
+            else:
+                candidate_state = (
+                    "private-stage-name-not-proven-owned-or-may-be-replaced-"
+                    "do-not-auto-delete"
+                )
+        if candidate_path is None:
+            raise
+        expected_sha256 = staged_sha256 if stage_verified else "unknown"
+        expected_bytes = staged_size if stage_verified else "unknown"
+        alternate = ""
+        if "destination-or-private-stage" in candidate_state:
+            alternate = f"alternate_candidate_path={absolute.parent / staging_name}; "
+        diagnostic = (
+            f"{exc}; candidate_path={candidate_path}; "
+            f"{alternate}"
+            f"expected_sha256={expected_sha256}; expected_bytes={expected_bytes}; "
+            f"candidate_state={candidate_state}; inspect identity and bytes before "
+            "any explicit removal"
+        )
+        raise ArtifactRegistryError(diagnostic) from exc
     finally:
         try:
             if descriptor >= 0:
                 os.close(descriptor)
         finally:
-            try:
-                if (
-                    not published
-                    and destination_linked
-                    and staged_identity is not None
-                ):
-                    with contextlib.suppress(FileNotFoundError):
-                        destination_entry = os.stat(
-                            absolute.name,
-                            dir_fd=parent_descriptor,
-                            follow_symlinks=False,
-                        )
-                        destination_identity = (
-                            destination_entry.st_dev,
-                            destination_entry.st_ino,
-                        )
-                        if destination_identity == staged_identity:
-                            os.unlink(absolute.name, dir_fd=parent_descriptor)
-                            os.fsync(parent_descriptor)
-            finally:
-                try:
-                    if staging_present:
-                        with contextlib.suppress(FileNotFoundError):
-                            os.unlink(staging_name, dir_fd=parent_descriptor)
-                            os.fsync(parent_descriptor)
-                finally:
-                    os.close(parent_descriptor)
+            # No name-based failure cleanup is safe: a name can be replaced after
+            # any identity check.  Retain and report the immutable candidate for
+            # explicit inspection instead.
+            os.close(parent_descriptor)
 
 
 def build_artifact_registry(
@@ -2099,7 +2434,7 @@ def build_artifact_registry(
             metadata_context="reconciliation manifest",
         )
 
-        def revalidate_at_link_boundary() -> None:
+        def revalidate_at_publication_boundary() -> None:
             _revalidate_metadata(
                 live_builder,
                 context="live artifact registry builder",
@@ -2115,7 +2450,7 @@ def build_artifact_registry(
         _publish_no_replace(
             absolute_destination,
             raw,
-            link_boundary_check=revalidate_at_link_boundary,
+            boundary_check=revalidate_at_publication_boundary,
         )
         ready_count = sum(
             artifact["status"] == "ready"

@@ -7,6 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -19,13 +20,16 @@ def _sha256(raw: bytes) -> str:
 
 
 def _canonical(value: object) -> bytes:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("ascii") + b"\n"
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        + b"\n"
+    )
 
 
 def _write(root: Path, member: str, raw: bytes) -> Path:
@@ -265,20 +269,15 @@ def test_build_and_validate_close_every_declared_opaque_byte(tmp_path: Path) -> 
         gate: sorted(
             artifact["semantic_id"]
             for artifact in registry_value["artifacts"]
-            if any(
-                receipt["gate"] == gate
-                for receipt in artifact["gate_receipts"]
-            )
+            if any(receipt["gate"] == gate for receipt in artifact["gate_receipts"])
         )
         for gate in ("K500", "CAL", "COAUTH")
     }
     assert {
-        record["gate"]: record["artifacts"]
-        for record in value["gate_receipts"]
+        record["gate"]: record["artifacts"] for record in value["gate_receipts"]
     } == expected_gate_bindings
     registry_artifacts = {
-        artifact["semantic_id"]: artifact
-        for artifact in registry_value["artifacts"]
+        artifact["semantic_id"]: artifact for artifact in registry_value["artifacts"]
     }
     for artifact in value["artifacts"]:
         declared = registry_artifacts[artifact["semantic_id"]]
@@ -397,7 +396,10 @@ def test_exact_inventory_rejects_extraneous_member(
     fixture = _make_fixture(tmp_path)
     root = fixture.gate_root if root_name == "gate" else fixture.source_root
     _write(root, "unexpected.bin", b"not declared")
-    with pytest.raises(closure.ReleaseEvidenceError, match="inventory mismatch"):
+    with pytest.raises(
+        closure.ReleaseEvidenceError,
+        match=r"expected entry limit|unexpected entry",
+    ):
         _build(fixture, tmp_path / "closure.json")
 
 
@@ -412,7 +414,7 @@ def test_source_digest_mismatch_is_rejected_without_parsing_rows(
     tmp_path: Path,
 ) -> None:
     fixture = _make_fixture(tmp_path)
-    fixture.primary_source.write_bytes(b"changed opaque bytes")
+    fixture.primary_source.write_bytes(b"\x00" * fixture.primary_source.stat().st_size)
     with pytest.raises(closure.ReleaseEvidenceError, match="SHA-256 mismatch"):
         _build(fixture, tmp_path / "closure.json")
 
@@ -461,6 +463,368 @@ def test_hardlinked_source_member_is_rejected(tmp_path: Path) -> None:
         _build(fixture, tmp_path / "closure.json")
 
 
+def test_absolute_metadata_fifo_is_rejected_without_opening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    os.mkfifo(metadata)
+    native_open = closure.os.open
+
+    def guarded_open(path: str | Path, *args: object, **kwargs: object) -> int:
+        if path == metadata:
+            message = "FIFO must be rejected by metadata preflight"
+            raise AssertionError(message)
+        return native_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(closure.os, "open", guarded_open)
+    with pytest.raises(closure.ReleaseEvidenceError, match="regular file"):
+        closure._pin_absolute_file(metadata, context="synthetic metadata")  # noqa: SLF001
+
+
+def test_absolute_metadata_open_swap_to_fifo_is_nonblocking_and_closes_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "metadata.json"
+    backup = tmp_path / "metadata.before-fifo.json"
+    metadata.write_bytes(b"{}\n")
+    native_open = closure.os.open
+    native_fstat = closure.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == metadata and not swapped:
+            assert flags & os.O_NONBLOCK
+            assert flags & os.O_CLOEXEC
+            metadata.rename(backup)
+            os.mkfifo(metadata)
+            swapped = True
+        descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+        if path == metadata:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(closure.os, "open", swapping_open)
+    with pytest.raises(
+        closure.ReleaseEvidenceError,
+        match="changed while it was pinned",
+    ):
+        closure._pin_absolute_file(metadata, context="synthetic metadata")  # noqa: SLF001
+    assert swapped
+    assert backup.read_bytes() == b"{}\n"
+    assert metadata.is_fifo()
+    assert len(opened) == 1
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_inventory_to_member_open_fifo_swap_is_nonblocking_and_closes_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    raw = b"opaque evidence\n"
+    member = "member.bin"
+    member_path = _write(evidence_root, member, raw)
+    backup = evidence_root / "member.before-fifo.bin"
+    root = closure._pin_root(evidence_root, context="evidence root")  # noqa: SLF001
+    closure._require_exact_inventory(  # noqa: SLF001
+        root,
+        (member,),
+        context="evidence root",
+    )
+    native_open = closure.os.open
+    native_fstat = closure.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == member and dir_fd is not None and not swapped:
+            assert flags & os.O_NONBLOCK
+            assert flags & os.O_CLOEXEC
+            member_path.rename(backup)
+            os.mkfifo(member_path)
+            swapped = True
+        descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+        if path == member and dir_fd is not None:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(closure.os, "open", swapping_open)
+    try:
+        with pytest.raises(closure.ReleaseEvidenceError, match="single-link regular"):
+            closure._pin_member(  # noqa: SLF001
+                root,
+                member,
+                context="evidence member",
+                expected_sha256=_sha256(raw),
+                expected_size=len(raw),
+            )
+    finally:
+        root.close()
+    assert swapped
+    assert backup.read_bytes() == raw
+    assert member_path.is_fifo()
+    assert len(opened) == 1
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_oversized_metadata_is_rejected_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / "oversized.json"
+    metadata.write_bytes(b"12345")
+    monkeypatch.setattr(closure, "_MAX_METADATA_BYTES", 4)
+
+    def forbidden_open(*_args: object, **_kwargs: object) -> int:
+        message = "oversized metadata must fail before open"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(closure.os, "open", forbidden_open)
+    with pytest.raises(closure.ReleaseEvidenceError, match="metadata size limit"):
+        closure._pin_absolute_file(metadata, context="synthetic metadata")  # noqa: SLF001
+
+
+def test_oversized_member_is_rejected_after_bounded_open_and_closes_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    member = "oversized.bin"
+    raw = b"12345"
+    _write(evidence_root, member, raw)
+    root = closure._pin_root(evidence_root, context="evidence root")  # noqa: SLF001
+    monkeypatch.setattr(closure, "_MAX_EVIDENCE_MEMBER_BYTES", 4)
+    native_open = closure.os.open
+    native_fstat = closure.os.fstat
+    opened: list[int] = []
+
+    def tracking_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+        if path == member and dir_fd is not None:
+            assert flags & os.O_NONBLOCK
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(closure.os, "open", tracking_open)
+    try:
+        with pytest.raises(closure.ReleaseEvidenceError, match="evidence size limit"):
+            closure._pin_member(  # noqa: SLF001
+                root,
+                member,
+                context="evidence member",
+                expected_sha256=_sha256(raw),
+                expected_size=None,
+            )
+    finally:
+        root.close()
+    assert len(opened) == 1
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_digest_growth_reads_only_declared_maximum_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "growing.bin"
+    raw = b"abc"
+    evidence.write_bytes(raw)
+    descriptor = os.open(evidence, os.O_RDONLY)
+    native_read = closure.os.read
+    requested: list[int] = []
+    grew = False
+
+    def growing_read(candidate: int, size: int) -> bytes:
+        nonlocal grew
+        if candidate == descriptor:
+            requested.append(size)
+            if not grew:
+                with evidence.open("ab") as stream:
+                    stream.write(b"d")
+                grew = True
+        return native_read(candidate, size)
+
+    monkeypatch.setattr(closure.os, "read", growing_read)
+    try:
+        with pytest.raises(closure.ReleaseEvidenceError, match="read bound"):
+            closure._digest_descriptor(  # noqa: SLF001
+                descriptor,
+                maximum=len(raw),
+                context="growing evidence",
+            )
+    finally:
+        os.close(descriptor)
+    assert requested == [len(raw) + 1]
+
+
+def test_expected_inventory_rejects_member_count_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(closure, "_MAX_INVENTORY_MEMBERS", 2)
+    with pytest.raises(closure.ReleaseEvidenceError, match="2-member limit"):
+        closure._prepare_expected_inventory(  # noqa: SLF001
+            ("first.bin", "second.bin", "third.bin"),
+            context="synthetic inventory",
+        )
+
+
+def test_expected_inventory_rejects_component_depth_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(closure, "_MAX_INVENTORY_DEPTH", 2)
+    with pytest.raises(closure.ReleaseEvidenceError, match="2-component depth limit"):
+        closure._prepare_expected_inventory(  # noqa: SLF001
+            ("one/two/three.bin",),
+            context="synthetic inventory",
+        )
+
+
+def test_many_sibling_inventory_directories_use_bounded_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    members = tuple(f"directory-{index:03d}/member.bin" for index in range(128))
+    for member in members:
+        _write(evidence_root, member, b"opaque\n")
+    root = closure._pin_root(evidence_root, context="evidence root")  # noqa: SLF001
+    native_dup = closure.os.dup
+    native_open = closure.os.open
+    native_close = closure.os.close
+    live: set[int] = set()
+    maximum_live = 0
+
+    def track(descriptor: int) -> int:
+        nonlocal maximum_live
+        live.add(descriptor)
+        maximum_live = max(maximum_live, len(live))
+        return descriptor
+
+    def tracking_dup(descriptor: int) -> int:
+        return track(native_dup(descriptor))
+
+    def tracking_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        return track(native_open(path, flags, mode, dir_fd=dir_fd))
+
+    def tracking_close(descriptor: int) -> None:
+        live.discard(descriptor)
+        native_close(descriptor)
+
+    monkeypatch.setattr(closure.os, "dup", tracking_dup)
+    monkeypatch.setattr(closure.os, "open", tracking_open)
+    monkeypatch.setattr(closure.os, "close", tracking_close)
+    try:
+        closure._require_exact_inventory(  # noqa: SLF001
+            root,
+            members,
+            context="evidence root",
+        )
+        assert not live
+        assert maximum_live <= 2
+    finally:
+        root.close()
+
+
+def test_scandir_base_exception_closes_inventory_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InventoryInterrupted(BaseException):
+        pass
+
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    _write(evidence_root, "member.bin", b"opaque\n")
+    root = closure._pin_root(evidence_root, context="evidence root")  # noqa: SLF001
+    expected = closure._prepare_expected_inventory(  # noqa: SLF001
+        ("member.bin",),
+        context="evidence root",
+    )
+    native_dup = closure.os.dup
+    native_fstat = closure.os.fstat
+    native_scandir = closure.os.scandir
+    opened: list[int] = []
+    iterator_closed = False
+
+    class InterruptingIterator:
+        def __init__(self, descriptor: int) -> None:
+            self._iterator = native_scandir(descriptor)
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            _exception_type: object,
+            _exception: object,
+            _traceback: object,
+        ) -> None:
+            nonlocal iterator_closed
+            iterator_closed = True
+            self._iterator.close()
+
+        def __iter__(self) -> InterruptingIterator:
+            return self
+
+        def __next__(self) -> os.DirEntry[str]:
+            raise InventoryInterrupted
+
+    def tracking_dup(descriptor: int) -> int:
+        duplicate = native_dup(descriptor)
+        opened.append(duplicate)
+        return duplicate
+
+    monkeypatch.setattr(closure.os, "dup", tracking_dup)
+    monkeypatch.setattr(closure.os, "scandir", InterruptingIterator)
+    try:
+        with pytest.raises(InventoryInterrupted):
+            closure._enumerate_tree(  # noqa: SLF001
+                root,
+                expected=expected,
+                context="evidence root",
+            )
+    finally:
+        root.close()
+    assert iterator_closed
+    assert len(opened) == 1
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
 def test_existing_destination_is_preserved(tmp_path: Path) -> None:
     fixture = _make_fixture(tmp_path)
     destination = tmp_path / "closure.json"
@@ -470,7 +834,7 @@ def test_existing_destination_is_preserved(tmp_path: Path) -> None:
     assert destination.read_bytes() == b"preserve me"
 
 
-def test_source_mutation_at_link_boundary_prevents_publication(
+def test_source_mutation_before_rename_retains_private_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -488,33 +852,158 @@ def test_source_mutation_at_link_boundary_prevents_publication(
         )
 
     monkeypatch.setattr(closure, "_publish_no_replace", mutate_then_publish)
-    with pytest.raises(closure.ReleaseEvidenceError, match="changed"):
+    with pytest.raises(closure.ReleaseEvidenceError, match="changed") as captured:
         _build(fixture, destination)
     assert not destination.exists()
-    assert not list(tmp_path.glob(".closure.json.staging-*"))
+    assert "candidate_path=" in str(captured.value)
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
+    assert len(list(tmp_path.glob(".closure.json.private-*"))) == 1
 
 
-def test_source_mutation_immediately_after_link_rolls_back_publication(
+def test_pre_rename_failure_retains_one_stage_and_blocks_retry(
+    tmp_path: Path,
+) -> None:
+    publish_root = tmp_path / "publish"
+    publish_root.mkdir()
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        publish_root / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    raw = b'{"valid":true}\n'
+
+    def fail_before_rename() -> None:
+        message = "synthetic pre-rename failure"
+        raise closure.ReleaseEvidenceError(message)
+
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="synthetic pre-rename failure",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=fail_before_rename,
+            )
+        message = str(captured.value)
+        assert f"expected_sha256={_sha256(raw)}" in message
+        assert f"expected_bytes={len(raw)}" in message
+        assert "private-stage-name-may-be-owned-or-replaced" in message
+        stages = list(publish_root.glob(".closure.json.private-*"))
+        assert len(stages) == 1
+        assert stages[0].stat().st_mode & 0o777 == 0o400
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="retained private closure stage requires explicit review",
+        ):
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=lambda: None,
+            )
+        assert list(publish_root.glob(".closure.json.private-*")) == stages
+    finally:
+        os.close(parent_fd)
+
+
+def test_post_scan_stage_reservation_race_preserves_unowned_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    candidate = tmp_path / ".closure.json.private-candidate"
+    competitor = b"competitor-stage\n"
+    native_open = closure.os.open
+    injected = False
+
+    def racing_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal injected
+        if path == candidate.name and not injected:
+            injected = True
+            descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+            try:
+                closure.os.write(descriptor, competitor)
+            finally:
+                closure.os.close(descriptor)
+            raise FileExistsError(
+                closure.errno.EEXIST,
+                closure.os.strerror(closure.errno.EEXIST),
+                path,
+            )
+        return native_open(path, flags, mode, dir_fd=dir_fd)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(closure.os, "open", racing_open)
+    monkeypatch.setattr(closure.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="appeared after the retained-stage preflight",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+        message = str(captured.value)
+        assert f"candidate_path={candidate}" in message
+        assert "expected_sha256=unknown" in message
+        assert "expected_bytes=unknown" in message
+        assert "private-stage-name-not-proven-owned" in message
+        assert candidate.read_bytes() == competitor
+        assert list(tmp_path.glob(".closure.json.private-*")) == [candidate]
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="retained private closure stage requires explicit review",
+        ):
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+        assert candidate.read_bytes() == competitor
+        assert list(tmp_path.glob(".closure.json.private-*")) == [candidate]
+    finally:
+        os.close(parent_fd)
+
+
+def test_source_mutation_immediately_after_rename_retains_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _make_fixture(tmp_path)
     destination = tmp_path / "closure.json"
-    native_link = os.link
+    native_rename = closure._rename_no_replace  # noqa: SLF001
 
-    def link_then_mutate(*args, **kwargs):
-        result = native_link(*args, **kwargs)
+    def rename_then_mutate(source: str, target: str, parent_fd: int) -> None:
+        native_rename(source, target, parent_fd)
         fixture.primary_source.write_bytes(b"post-link source mutation")
-        return result
 
-    monkeypatch.setattr(closure.os, "link", link_then_mutate)
-    with pytest.raises(closure.ReleaseEvidenceError, match="changed"):
+    monkeypatch.setattr(closure, "_rename_no_replace", rename_then_mutate)
+    with pytest.raises(closure.ReleaseEvidenceError, match="changed") as captured:
         _build(fixture, destination)
-    assert not destination.exists()
-    assert not list(tmp_path.glob(".closure.json.staging-*"))
+    assert destination.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert not list(tmp_path.glob(".closure.json.private-*"))
 
 
-def test_post_link_readback_failure_rolls_back_publication(
+def test_post_rename_readback_failure_retains_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -531,13 +1020,184 @@ def test_post_link_readback_failure_rolls_back_publication(
     with pytest.raises(
         closure.ReleaseEvidenceError,
         match="published closure destination cannot be pinned",
-    ):
+    ) as captured:
         _build(fixture, destination)
-    assert not destination.exists()
-    assert not list(tmp_path.glob(".closure.json.staging-*"))
+    assert destination.exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert not list(tmp_path.glob(".closure.json.private-*"))
 
 
-def test_destination_parent_replacement_after_link_rolls_back_publication(
+def test_published_destination_fifo_swap_is_nonblocking_and_closes_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    owned_output = tmp_path / "owned-closure.json"
+    raw = b'{"valid":true}\n'
+    native_open = closure.os.open
+    native_fstat = closure.os.fstat
+    opened: list[int] = []
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == destination.name and dir_fd is not None and not swapped:
+            assert flags & os.O_NONBLOCK
+            assert flags & os.O_CLOEXEC
+            destination.rename(owned_output)
+            os.mkfifo(destination)
+            swapped = True
+        descriptor = native_open(path, flags, mode, dir_fd=dir_fd)
+        if path == destination.name and dir_fd is not None:
+            opened.append(descriptor)
+        return descriptor
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(closure.os, "open", swapping_open)
+    monkeypatch.setattr(closure.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="does not match the staged file",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    assert swapped
+    assert destination.is_fifo()
+    assert owned_output.read_bytes() == raw
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert not list(tmp_path.glob(".closure.json.private-*"))
+    assert len(opened) == 1
+    with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+        native_fstat(opened[0])
+
+
+def test_published_destination_oversized_swap_is_rejected_before_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    owned_output = tmp_path / "owned-closure.json"
+    raw = b'{"valid":true}\n'
+    competitor = raw + b"oversized"
+    native_open = closure.os.open
+    native_digest = closure._digest_descriptor  # noqa: SLF001
+    swapped = False
+
+    def swapping_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == destination.name and dir_fd is not None and not swapped:
+            destination.rename(owned_output)
+            destination.write_bytes(competitor)
+            swapped = True
+        return native_open(path, flags, mode, dir_fd=dir_fd)
+
+    def guarded_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ) -> tuple[str, int, os.stat_result]:
+        assert context != "published closure destination"
+        return native_digest(descriptor, maximum=maximum, context=context)
+
+    monkeypatch.setattr(closure.os, "open", swapping_open)
+    monkeypatch.setattr(closure, "_digest_descriptor", guarded_digest)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="does not match the staged file",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    assert swapped
+    assert destination.read_bytes() == competitor
+    assert owned_output.read_bytes() == raw
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+
+
+def test_published_destination_growth_uses_expected_size_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    raw = b'{"valid":true}\n'
+    native_digest = closure._digest_descriptor  # noqa: SLF001
+    published_maxima: list[int] = []
+    grown = False
+
+    def growing_digest(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ) -> tuple[str, int, os.stat_result]:
+        nonlocal grown
+        if context == "published closure destination":
+            published_maxima.append(maximum)
+            if not grown:
+                grown = True
+                destination.chmod(0o600)
+                with destination.open("ab") as stream:
+                    stream.write(b"x")
+        return native_digest(descriptor, maximum=maximum, context=context)
+
+    monkeypatch.setattr(closure, "_digest_descriptor", growing_digest)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="read bound",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    assert published_maxima == [len(raw)]
+    assert destination.read_bytes() == raw + b"x"
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+
+
+def test_destination_parent_replacement_after_rename_retains_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -546,26 +1206,26 @@ def test_destination_parent_replacement_after_link_rolls_back_publication(
     moved_root = tmp_path / "publish-moved"
     publish_root.mkdir()
     destination = publish_root / "closure.json"
-    native_link = os.link
+    native_rename = closure._rename_no_replace  # noqa: SLF001
 
-    def link_then_replace_parent(*args, **kwargs):
-        result = native_link(*args, **kwargs)
+    def rename_then_replace_parent(source: str, target: str, parent_fd: int) -> None:
+        native_rename(source, target, parent_fd)
         publish_root.rename(moved_root)
         publish_root.mkdir()
-        return result
 
-    monkeypatch.setattr(closure.os, "link", link_then_replace_parent)
+    monkeypatch.setattr(closure, "_rename_no_replace", rename_then_replace_parent)
     with pytest.raises(
         closure.ReleaseEvidenceError,
         match="destination parent changed",
-    ):
+    ) as captured:
         _build(fixture, destination)
     assert not destination.exists()
-    assert not (moved_root / "closure.json").exists()
-    assert not list(moved_root.glob(".closure.json.staging-*"))
+    assert (moved_root / "closure.json").exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert not list(moved_root.glob(".closure.json.private-*"))
 
 
-def test_destination_parent_replacement_before_link_rolls_back_staging(
+def test_destination_parent_replacement_before_rename_retains_staging(
     tmp_path: Path,
 ) -> None:
     publish_root = tmp_path / "publish"
@@ -584,7 +1244,7 @@ def test_destination_parent_replacement_before_link_rolls_back_staging(
         with pytest.raises(
             closure.ReleaseEvidenceError,
             match="destination parent changed",
-        ):
+        ) as captured:
             closure._publish_no_replace(  # noqa: SLF001
                 destination,
                 parent_fd,
@@ -595,10 +1255,11 @@ def test_destination_parent_replacement_before_link_rolls_back_staging(
         os.close(parent_fd)
     assert not destination.exists()
     assert not (moved_root / "closure.json").exists()
-    assert not list(moved_root.glob(".closure.json.staging-*"))
+    assert "private-stage-name-may-be-owned-or-replaced" in str(captured.value)
+    assert len(list(moved_root.glob(".closure.json.private-*"))) == 1
 
 
-def test_destination_parent_replacement_during_final_digest_rolls_back(
+def test_destination_parent_replacement_during_final_digest_retains_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -612,9 +1273,14 @@ def test_destination_parent_replacement_during_final_digest_rolls_back(
     digest_calls = 0
     native_digest = closure._digest_descriptor  # noqa: SLF001
 
-    def digest_then_replace_parent(descriptor: int):
+    def digest_then_replace_parent(
+        descriptor: int,
+        *,
+        maximum: int,
+        context: str,
+    ) -> tuple[str, int, os.stat_result]:
         nonlocal digest_calls
-        result = native_digest(descriptor)
+        result = native_digest(descriptor, maximum=maximum, context=context)
         digest_calls += 1
         if digest_calls == 4:
             publish_root.rename(moved_root)
@@ -626,7 +1292,7 @@ def test_destination_parent_replacement_during_final_digest_rolls_back(
         with pytest.raises(
             closure.ReleaseEvidenceError,
             match="destination parent changed",
-        ):
+        ) as captured:
             closure._publish_no_replace(  # noqa: SLF001
                 destination,
                 parent_fd,
@@ -637,42 +1303,266 @@ def test_destination_parent_replacement_during_final_digest_rolls_back(
         os.close(parent_fd)
     assert digest_calls == 4
     assert not destination.exists()
-    assert not (moved_root / "closure.json").exists()
-    assert not list(moved_root.glob(".closure.json.staging-*"))
+    assert (moved_root / "closure.json").exists()
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert not list(moved_root.glob(".closure.json.private-*"))
 
 
-def test_same_inode_corruption_after_staging_unlink_rolls_back_publication(
+def test_competitor_at_atomic_rename_survives_and_stage_is_retained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    competitor = b"competitor-owned\n"
+    native_rename = closure._rename_no_replace  # noqa: SLF001
+
+    def race(source: str, target: str, directory_fd: int) -> None:
+        descriptor = os.open(
+            target,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        try:
+            os.write(descriptor, competitor)
+        finally:
+            os.close(descriptor)
+        native_rename(source, target, directory_fd)
+
+    monkeypatch.setattr(closure, "_rename_no_replace", race)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="destination may already exist",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    assert destination.read_bytes() == competitor
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".closure.json.private-*"))) == 1
+
+
+def test_rename_then_raise_reports_both_candidates_without_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    native_rename = closure._rename_no_replace  # noqa: SLF001
+
+    def rename_then_raise(source: str, target: str, directory_fd: int) -> None:
+        native_rename(source, target, directory_fd)
+        message = "synthetic ambiguous rename return"
+        raise OSError(message)
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(closure, "_rename_no_replace", rename_then_raise)
+    monkeypatch.setattr(closure.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="synthetic ambiguous rename return",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert ".closure.json.private-" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert destination.exists()
+    assert not list(tmp_path.glob(".closure.json.private-*"))
+
+
+def test_post_rename_failure_never_unlinks_and_leaks_no_descriptors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _make_fixture(tmp_path)
     destination = tmp_path / "closure.json"
-    native_unlink = os.unlink
-    native_open = os.open
+    opened_descriptors: list[int] = []
+    native_open = closure.os.open
+    native_fstat = closure.os.fstat
+    native_rename = closure._rename_no_replace  # noqa: SLF001
 
-    def unlink_then_corrupt(path, *args, **kwargs):
-        result = native_unlink(path, *args, **kwargs)
-        if isinstance(path, str) and path.startswith(".closure.json.staging-"):
-            parent_fd = kwargs["dir_fd"]
-            os.chmod(destination.name, 0o600, dir_fd=parent_fd)
-            descriptor = native_open(destination.name, os.O_WRONLY, dir_fd=parent_fd)
-            try:
-                size = os.fstat(descriptor).st_size
-                os.write(descriptor, b"X" * size)
-                os.fsync(descriptor)
-                os.fchmod(descriptor, 0o400)
-            finally:
-                os.close(descriptor)
-        return result
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened_descriptors.append(descriptor)
+        return descriptor
 
-    monkeypatch.setattr(closure.os, "unlink", unlink_then_corrupt)
-    with pytest.raises(
-        closure.ReleaseEvidenceError,
-        match="does not match the staged file",
-    ):
+    def rename_then_mutate(source: str, target: str, parent_fd: int) -> None:
+        native_rename(source, target, parent_fd)
+        fixture.primary_source.write_bytes(b"post-rename source mutation")
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(closure.os, "open", tracking_open)
+    monkeypatch.setattr(closure, "_rename_no_replace", rename_then_mutate)
+    monkeypatch.setattr(closure.os, "unlink", forbidden_unlink)
+    with pytest.raises(closure.ReleaseEvidenceError, match="changed") as captured:
         _build(fixture, destination)
+    assert "destination-name-may-be-owned-or-replaced" in str(captured.value)
+    assert destination.exists()
+    assert opened_descriptors
+    for descriptor in opened_descriptors:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            native_fstat(descriptor)
+
+
+def test_missing_atomic_rename_symbol_retains_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+
+    class MissingRenameLibrary:
+        pass
+
+    monkeypatch.setattr(
+        closure.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: MissingRenameLibrary(),
+    )
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="rename symbol",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    message = str(captured.value)
+    assert f"candidate_path={tmp_path / '.closure.json.private-candidate'}" in message
+    assert "alternate_candidate_path=" not in message
+    assert "private-stage-name-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".closure.json.private-*"))) == 1
+
+
+def test_unsupported_atomic_rename_error_is_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+
+    class UnsupportedRename:
+        def __call__(self, *_args: object) -> int:
+            closure.ctypes.set_errno(closure.errno.ENOTSUP)
+            return -1
+
+    class UnsupportedRenameLibrary:
+        renameatx_np = UnsupportedRename()
+        renameat2 = UnsupportedRename()
+
+    monkeypatch.setattr(
+        closure.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: UnsupportedRenameLibrary(),
+    )
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="does not support atomic no-replace rename",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                b'{"valid":true}\n',
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert "alternate_candidate_path=" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
+    assert len(list(tmp_path.glob(".closure.json.private-*"))) == 1
+
+
+def test_post_syscall_eio_reports_both_candidates_and_retains_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination, parent_fd = closure._ensure_destination(  # noqa: SLF001
+        tmp_path / "closure.json",
+        registry_path=tmp_path / "registry.json",
+    )
+    candidate = tmp_path / ".closure.json.private-candidate"
+    raw = b'{"valid":true}\n'
+
+    class FailedRename:
+        def __call__(self, *_args: object) -> int:
+            closure.ctypes.set_errno(closure.errno.EIO)
+            return -1
+
+    class FailedRenameLibrary:
+        renameatx_np = FailedRename()
+        renameat2 = FailedRename()
+
+    def forbidden_unlink(*_args: object, **_kwargs: object) -> None:
+        message = "publication must never unlink a mutable name"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(
+        closure.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: FailedRenameLibrary(),
+    )
+    monkeypatch.setattr(closure.os, "unlink", forbidden_unlink)
+    try:
+        with pytest.raises(
+            closure.ReleaseEvidenceError,
+            match="publication failed",
+        ) as captured:
+            closure._publish_no_replace(  # noqa: SLF001
+                destination,
+                parent_fd,
+                raw,
+                boundary_check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    message = str(captured.value)
+    assert f"candidate_path={destination}" in message
+    assert f"alternate_candidate_path={candidate}" in message
+    assert "destination-or-private-stage-names-may-be-owned-or-replaced" in message
     assert not destination.exists()
-    assert not list(tmp_path.glob(".closure.json.staging-*"))
+    assert candidate.read_bytes() == raw
 
 
 def test_validator_rejects_canonical_tampering_even_with_new_file_anchor(
@@ -710,3 +1600,40 @@ def test_cli_help_exposes_build_and_validate_commands() -> None:
         parser.parse_args(["build", "--help"])
     with pytest.raises(SystemExit, match="0"):
         parser.parse_args(["validate", "--help"])
+
+
+def test_destination_base_exception_closes_parent_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "closure.json"
+    native_open = closure.os.open
+    native_stat = closure.os.stat
+    native_fstat = closure.os.fstat
+    opened: list[int] = []
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = native_open(*args, **kwargs)  # type: ignore[arg-type]
+        opened.append(descriptor)
+        return descriptor
+
+    def interrupting_stat(
+        path: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        if kwargs.get("dir_fd") is not None and path == destination.name:
+            raise KeyboardInterrupt
+        return native_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(closure.os, "open", tracking_open)
+    monkeypatch.setattr(closure.os, "stat", interrupting_stat)
+    with pytest.raises(KeyboardInterrupt):
+        closure._ensure_destination(  # noqa: SLF001
+            destination,
+            registry_path=tmp_path / "registry.json",
+        )
+    assert opened
+    for descriptor in opened:
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            native_fstat(descriptor)
