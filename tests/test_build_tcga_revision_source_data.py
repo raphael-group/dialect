@@ -43,6 +43,15 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _resize_frozen_file(path: Path, size_bytes: int) -> None:
+    path.parent.chmod(0o700)
+    path.chmod(0o600)
+    with path.open("r+b") as stream:
+        stream.truncate(size_bytes)
+    path.chmod(0o400)
+    path.parent.chmod(0o500)
+
+
 def _pair_sha256(pairs=_PAIRS) -> str:
     return source_data._sequence_sha256(  # noqa: SLF001
         [f"{gene_a}\t{gene_b}" for gene_a, gene_b in pairs],
@@ -526,9 +535,7 @@ def _fixture(
         "cohorts": ["TEST"],
         "contract": source_data.POSTPROCESS_RELEASE_CONTRACT,
         "grid_authority_sha256": authority_sha256,
-        "marginal_validity_evidence_sha256": (
-            _EVIDENCE_SHA256 if certified else None
-        ),
+        "marginal_validity_evidence_sha256": (_EVIDENCE_SHA256 if certified else None),
         "outputs": [
             {
                 "cohort": "TEST",
@@ -675,9 +682,7 @@ def test_metadata_authentication_failures_precede_row_parsing(
     if mutation == "authority-anchor":
         config = replace(config, expected_postprocess_authority_sha256="0" * 64)
     else:
-        manifest_path = (
-            root / "TEST" / source_data.POSTPROCESS_COHORT_MANIFEST_NAME
-        )
+        manifest_path = root / "TEST" / source_data.POSTPROCESS_COHORT_MANIFEST_NAME
         manifest_path.chmod(0o600)
         manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
         manifest_path.chmod(0o400)
@@ -701,6 +706,105 @@ def test_metadata_authentication_failures_precede_row_parsing(
             writable_tmp_path / "output",
         )
     assert parsed is False
+
+
+@pytest.mark.parametrize(
+    ("member_kind", "target_label"),
+    [
+        ("release", "postprocess release manifest"),
+        ("authority", "postprocess authority"),
+        ("cohort", "TEST postprocess manifest"),
+    ],
+)
+def test_sparse_oversize_postprocess_metadata_fails_before_read_or_parse(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member_kind: str,
+    target_label: str,
+) -> None:
+    config, root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    target = {
+        "release": root / source_data.POSTPROCESS_RELEASE_MANIFEST_NAME,
+        "authority": root / source_data.POSTPROCESS_AUTHORITY_NAME,
+        "cohort": (root / "TEST" / source_data.POSTPROCESS_COHORT_MANIFEST_NAME),
+    }[member_kind]
+    _resize_frozen_file(
+        target,
+        source_data._MAX_POSTPROCESS_METADATA_BYTES + 1,  # noqa: SLF001
+    )
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    original_read = source_data._read_stable_descriptor  # noqa: SLF001
+    original_parse = source_data._parse_canonical_json  # noqa: SLF001
+    read_labels: list[str] = []
+    parsed_labels: list[str] = []
+
+    def read_spy(descriptor, identity, *, label):
+        read_labels.append(label)
+        return original_read(descriptor, identity, label=label)
+
+    def parse_spy(raw, *, label):
+        parsed_labels.append(label)
+        return original_parse(raw, label=label)
+
+    monkeypatch.setattr(source_data, "_read_stable_descriptor", read_spy)
+    monkeypatch.setattr(source_data, "_parse_canonical_json", parse_spy)
+    output = writable_tmp_path / "source-data"
+    before = _open_descriptor_count()
+
+    with pytest.raises(source_data.SourceDataBuildError, match=r"bounded.*size"):
+        source_data.build_source_data_release(config, output)
+
+    assert target_label not in read_labels
+    assert target_label not in parsed_labels
+    assert _open_descriptor_count() == before
+    assert not output.exists()
+    assert list(writable_tmp_path.glob(f".{output.name}.*.tmp")) == []
+
+
+def test_sparse_oversize_postprocess_csv_fails_before_hash_or_parser(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    target = root / "TEST" / source_data.POSTPROCESS_CSV_NAME
+    _resize_frozen_file(
+        target,
+        source_data._MAX_SOURCE_DATA_COHORT_CSV_BYTES + 1,  # noqa: SLF001
+    )
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    original_hash = source_data._hash_stable_descriptor  # noqa: SLF001
+    hashed_labels: list[str] = []
+
+    def hash_spy(descriptor, identity, *, label):
+        hashed_labels.append(label)
+        return original_hash(descriptor, identity, label=label)
+
+    def forbid_csv_parser(*_args, **_kwargs):
+        msg = "oversize postprocess CSV reached semantic parsing"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(source_data, "_hash_stable_descriptor", hash_spy)
+    monkeypatch.setattr(source_data, "_validate_csv_descriptor", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_rows", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_stream", forbid_csv_parser)
+    output = writable_tmp_path / "source-data"
+    before = _open_descriptor_count()
+
+    with pytest.raises(source_data.SourceDataBuildError, match=r"bounded.*size"):
+        source_data.build_source_data_release(config, output)
+
+    assert "TEST source CSV" not in hashed_labels
+    assert _open_descriptor_count() == before
+    assert not output.exists()
+    assert list(writable_tmp_path.glob(f".{output.name}.*.tmp")) == []
 
 
 def test_incomplete_postprocess_source_closure_fails(
@@ -946,11 +1050,7 @@ def test_root_semantic_contract_must_match_cohort_axis(
         (root / source_data.POSTPROCESS_AUTHORITY_NAME).read_bytes(),
     )
     manifest = json.loads(
-        (
-            root
-            / "TEST"
-            / source_data.POSTPROCESS_COHORT_MANIFEST_NAME
-        ).read_bytes(),
+        (root / "TEST" / source_data.POSTPROCESS_COHORT_MANIFEST_NAME).read_bytes(),
     )
     authority["contracts"][0]["contract_sha256"] = "0" * 64
 
@@ -974,11 +1074,7 @@ def test_task_bindings_must_cover_all_three_providers(
         (root / source_data.POSTPROCESS_AUTHORITY_NAME).read_bytes(),
     )
     manifest = json.loads(
-        (
-            root
-            / "TEST"
-            / source_data.POSTPROCESS_COHORT_MANIFEST_NAME
-        ).read_bytes(),
+        (root / "TEST" / source_data.POSTPROCESS_COHORT_MANIFEST_NAME).read_bytes(),
     )
     manifest["production_authority"]["task_bindings"].pop()
 
@@ -1320,8 +1416,7 @@ def test_certified_evidence_path_builds_and_reports_conditional_flags(
     assert receipt.total_rows == 3
     manifest = json.loads((output / source_data.SOURCE_DATA_MANIFEST_NAME).read_bytes())
     assert (
-        manifest["authority"]["marginal_validity_evidence_sha256"]
-        == _EVIDENCE_SHA256
+        manifest["authority"]["marginal_validity_evidence_sha256"] == _EVIDENCE_SHA256
     )
     with (output / "cohorts" / "TEST.csv").open(newline="") as stream:
         row = next(csv.DictReader(stream))
@@ -1350,9 +1445,7 @@ def test_certified_evidence_inconsistencies_are_rejected(
         with pytest.raises(source_data.SourceDataBuildError, match="production roots"):
             source_data._validate_authority(config, authority)  # noqa: SLF001
     else:
-        manifest["marginal_validity"][
-            "conditional_by_inferential_eligible"
-        ] = False
+        manifest["marginal_validity"]["conditional_by_inferential_eligible"] = False
         with pytest.raises(source_data.SourceDataBuildError, match="validity gate"):
             source_data._validate_cohort_policy(  # noqa: SLF001
                 manifest,
@@ -1400,9 +1493,10 @@ def test_builder_implementation_inventory_and_digest_sensitivity(
         "analysis/build_tcga_revision_source_data.py",
         "src/dialect/data/revision_approval.py",
     }
-    assert first["files"]["src/dialect/data/revision_approval.py"] != second[
-        "files"
-    ]["src/dialect/data/revision_approval.py"]
+    assert (
+        first["files"]["src/dialect/data/revision_approval.py"]
+        != second["files"]["src/dialect/data/revision_approval.py"]
+    )
     assert first["combined_sha256"] != second["combined_sha256"]
 
 
@@ -1488,6 +1582,210 @@ def test_frozen_output_file_inodes_are_fsynced_before_rename(
     )
 
 
+def test_output_pin_hash_is_bracketed_by_live_entry_identity(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = writable_tmp_path / "staging"
+    directory.mkdir(mode=0o700)
+    member = directory / source_data.README_NAME
+    content = b"opaque support bytes\n"
+    member.write_bytes(content)
+    member.chmod(0o600)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(directory, flags)
+    pin = source_data._pin_output_file(  # noqa: SLF001
+        directory_fd,
+        source_data.README_NAME,
+        expected_sha256=_sha(content),
+        expected_size=len(content),
+    )
+    original_hash = source_data._hash_stable_descriptor  # noqa: SLF001
+    swapped = False
+
+    def hash_then_swap(descriptor, identity, *, label):
+        nonlocal swapped
+        digest = original_hash(descriptor, identity, label=label)
+        if not swapped:
+            member.rename(writable_tmp_path / "attacker-held-output")
+            member.write_bytes(content)
+            member.chmod(0o600)
+            swapped = True
+        return digest
+
+    monkeypatch.setattr(source_data, "_hash_stable_descriptor", hash_then_swap)
+    try:
+        with pytest.raises(source_data.SourceDataBuildError, match="identity changed"):
+            source_data._validate_output_pin(  # noqa: SLF001
+                directory_fd,
+                pin,
+                frozen=False,
+            )
+    finally:
+        os.close(pin.descriptor)
+        os.close(directory_fd)
+
+
+def test_staged_output_fifo_is_rejected_without_blocking(
+    writable_tmp_path: Path,
+) -> None:
+    directory = writable_tmp_path / "staging-fifo"
+    directory.mkdir(mode=0o700)
+    os.mkfifo(directory / source_data.README_NAME, mode=0o600)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(directory, flags)
+    try:
+        with pytest.raises(source_data.SourceDataBuildError, match="Cannot pin"):
+            source_data._pin_output_file(  # noqa: SLF001
+                directory_fd,
+                source_data.README_NAME,
+                expected_sha256=_sha(b"opaque"),
+                expected_size=6,
+            )
+    finally:
+        os.close(directory_fd)
+
+
+def test_output_tree_final_sweep_rejects_post_member_inventory_change(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    original_validate = source_data._validate_output_pin  # noqa: SLF001
+    mutated = False
+
+    def validate_then_add(directory_fd, pin, *, frozen):
+        nonlocal mutated
+        original_validate(directory_fd, pin, frozen=frozen)
+        if pin.name == "TEST.csv" and not frozen and not mutated:
+            source_data._write_file(directory_fd, "extra.csv", b"opaque")  # noqa: SLF001
+            mutated = True
+
+    monkeypatch.setattr(source_data, "_validate_output_pin", validate_then_add)
+    output = writable_tmp_path / "source-data"
+
+    with pytest.raises(source_data.SourceDataBuildError, match="inventory"):
+        source_data.build_source_data_release(config, output)
+    assert mutated is True
+    assert output.exists() is False
+
+
+def test_final_input_sweep_rejects_last_hash_inventory_change(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    original_hash = source_data._hash_stable_descriptor  # noqa: SLF001
+    target = f"TEST/{source_data.POSTPROCESS_COHORT_MANIFEST_NAME}"
+    target_hashes = 0
+
+    def hash_then_add(descriptor, identity, *, label):
+        nonlocal target_hashes
+        digest = original_hash(descriptor, identity, label=label)
+        if label == target:
+            target_hashes += 1
+            if target_hashes == 2:
+                cohort_root = root / "TEST"
+                cohort_root.chmod(0o700)
+                extra = cohort_root / "late-extra.bin"
+                extra.write_bytes(b"opaque")
+                extra.chmod(0o400)
+                cohort_root.chmod(0o500)
+        return digest
+
+    monkeypatch.setattr(source_data, "_hash_stable_descriptor", hash_then_add)
+    output = writable_tmp_path / "source-data"
+
+    with pytest.raises(source_data.SourceDataBuildError):
+        source_data.build_source_data_release(config, output)
+    assert target_hashes == 2
+    assert output.exists() is False
+
+
+def test_publication_parent_fstat_failure_does_not_leak_descriptor(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    output = writable_tmp_path / "source-data"
+    publication_parent = output.parent.resolve()
+    original_open = source_data.os.open
+    original_fstat = source_data.os.fstat
+    parent_descriptor: int | None = None
+
+    def open_spy(path, *args, **kwargs):
+        nonlocal parent_descriptor
+        descriptor = original_open(path, *args, **kwargs)
+        if Path(path) == publication_parent and kwargs.get("dir_fd") is None:
+            parent_descriptor = descriptor
+        return descriptor
+
+    def fstat_spy(descriptor):
+        if descriptor == parent_descriptor:
+            msg = "synthetic publication-parent fstat failure"
+            raise OSError(msg)
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+    monkeypatch.setattr(source_data.os, "fstat", fstat_spy)
+    before = _open_descriptor_count()
+
+    with pytest.raises(source_data.SourceDataBuildError, match="publication parent"):
+        source_data.build_source_data_release(config, output)
+    assert _open_descriptor_count() == before
+
+
+def test_final_published_root_path_identity_is_revalidated(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    output = writable_tmp_path / "source-data"
+    original_parent_check = source_data._require_parent  # noqa: SLF001
+    checks = 0
+
+    def check_then_replace(lexical, resolved, descriptor, expected):
+        nonlocal checks
+        original_parent_check(lexical, resolved, descriptor, expected)
+        checks += 1
+        if checks == 3:
+            os.rename(
+                output.name,
+                "attacker-held-published-root",
+                src_dir_fd=descriptor,
+                dst_dir_fd=descriptor,
+            )
+            os.mkdir(output.name, mode=0o500, dir_fd=descriptor)
+
+    monkeypatch.setattr(source_data, "_require_parent", check_then_replace)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="identity changed"):
+        source_data.build_source_data_release(config, output)
+    assert checks == 3
+    assert output.is_dir()
+    assert (writable_tmp_path / "attacker-held-published-root").is_dir()
+
+
 @pytest.mark.parametrize("method", ["bh", "by"])
 def test_independent_q_replay_matches_production_algorithm(method: str) -> None:
     values = [0.7, 0.01, 0.2, 0.01, 1.0, 0.0]
@@ -1527,3 +1825,620 @@ def test_identical_inputs_produce_identical_manifests(
     ).read_bytes() == (
         second_root / "release" / source_data.SOURCE_DATA_MANIFEST_NAME
     ).read_bytes()
+
+
+def _published_source_data_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, source_data.SourceDataReleaseReceipt]:
+    config, _postprocess_root, _csv = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        source_data,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: _valid_approval(config),
+    )
+    output = tmp_path / "source-data"
+    receipt = source_data.build_source_data_release(config, output)
+    return output, receipt
+
+
+def _rewrite_published_manifest(
+    root: Path,
+    mutate,
+) -> str:
+    manifest_path = root / source_data.SOURCE_DATA_MANIFEST_NAME
+    root.chmod(0o700)
+    manifest_path.chmod(0o600)
+    manifest = json.loads(manifest_path.read_bytes())
+    mutate(manifest)
+    raw = _canonical(manifest)
+    manifest_path.write_bytes(raw)
+    manifest_path.chmod(0o400)
+    root.chmod(0o500)
+    return _sha(raw)
+
+
+def _open_descriptor_count() -> int:
+    fd_root = Path("/proc/self/fd")
+    if not fd_root.is_dir():
+        fd_root = Path("/dev/fd")
+    return sum(1 for _entry in fd_root.iterdir())
+
+
+def test_result_blind_release_validator_accepts_exact_opaque_tree(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, build_receipt = _published_source_data_fixture(
+        writable_tmp_path,
+        monkeypatch,
+    )
+
+    def forbid_csv_parser(*_args, **_kwargs):
+        msg = "source-data release validation parsed CSV rows"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(source_data, "_validate_csv_descriptor", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_rows", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_stream", forbid_csv_parser)
+
+    receipt = source_data.validate_source_data_release(
+        root,
+        build_receipt.manifest_sha256,
+    )
+
+    expected_files = (
+        root / source_data.SOURCE_DATA_MANIFEST_NAME,
+        root / source_data.DATA_DICTIONARY_NAME,
+        root / source_data.README_NAME,
+        root / source_data.COHORT_DIRECTORY_NAME / "TEST.csv",
+    )
+    assert receipt == source_data.SourceDataValidationReceipt(
+        source_data_root=root.as_posix(),
+        manifest_sha256=build_receipt.manifest_sha256,
+        file_count=4,
+        cohort_count=1,
+        total_bytes=sum(path.stat().st_size for path in expected_files),
+        total_rows=3,
+    )
+
+
+def test_production_source_data_inventory_is_exactly_35_files() -> None:
+    assert len(source_data.TCGA_COHORTS) == 32
+    assert 3 + len(source_data.TCGA_COHORTS) == 35
+
+
+def test_malformed_manifest_anchor_opens_nothing(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    opened = False
+
+    def open_spy(*_args, **_kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="lowercase SHA-256"):
+        source_data.validate_source_data_release(root, "not-a-digest")
+    assert opened is False
+
+
+def test_wrong_manifest_anchor_opens_only_root_and_manifest(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    original_open = source_data.os.open
+    opened: list[str] = []
+
+    def open_spy(path, *args, **kwargs):
+        opened.append(os.fspath(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="independent"):
+        source_data.validate_source_data_release(root, "0" * 64)
+    assert opened == [root.as_posix(), source_data.SOURCE_DATA_MANIFEST_NAME]
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../TEST.csv",
+        "/synthetic/TEST.csv",
+        "cohorts/../TEST.csv",
+        "cohorts//TEST.csv",
+    ],
+)
+def test_manifest_member_path_traversal_fails_before_cohort_open(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_path: str,
+) -> None:
+    root, _receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    digest = _rewrite_published_manifest(
+        root,
+        lambda manifest: manifest["dataset"]["cohort_files"][0].__setitem__(
+            "path",
+            unsafe_path,
+        ),
+    )
+    original_open = source_data.os.open
+    opened: list[str] = []
+
+    def open_spy(path, *args, **kwargs):
+        opened.append(os.fspath(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="cohort receipt"):
+        source_data.validate_source_data_release(root, digest)
+    assert source_data.COHORT_DIRECTORY_NAME not in opened
+    assert "TEST.csv" not in opened
+
+
+@pytest.mark.parametrize(
+    ("location", "mutation"),
+    [
+        ("root", "extra"),
+        ("root", "missing"),
+        ("cohorts", "extra"),
+        ("cohorts", "missing"),
+    ],
+)
+def test_release_validator_rejects_extra_or_missing_tree_members(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    location: str,
+    mutation: str,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    directory = root if location == "root" else root / source_data.COHORT_DIRECTORY_NAME
+    directory.chmod(0o700)
+    if mutation == "extra":
+        extra = directory / "extra.bin"
+        extra.write_bytes(b"extra")
+        extra.chmod(0o400)
+    else:
+        name = source_data.README_NAME if location == "root" else "TEST.csv"
+        (directory / name).rename(writable_tmp_path / f"held-{location}")
+    directory.chmod(0o500)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="inventory"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_ancestor_symlink(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    alias = writable_tmp_path.parent / f"{writable_tmp_path.name}-alias"
+    alias.symlink_to(writable_tmp_path, target_is_directory=True)
+    aliased_root = alias / root.name
+
+    with pytest.raises(source_data.SourceDataBuildError, match="symlinked"):
+        source_data.validate_source_data_release(
+            aliased_root,
+            receipt.manifest_sha256,
+        )
+
+
+def test_release_validator_rejects_lexical_path_traversal_before_open(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    traversing = root.parent / ".." / root.parent.name / root.name
+    opened = False
+
+    def open_spy(*_args, **_kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="traversal-free"):
+        source_data.validate_source_data_release(
+            traversing,
+            receipt.manifest_sha256,
+        )
+    assert opened is False
+
+
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "directory"])
+def test_release_validator_rejects_nonregular_cohort_member_without_blocking(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    cohorts = root / source_data.COHORT_DIRECTORY_NAME
+    member = cohorts / "TEST.csv"
+    held = writable_tmp_path / f"held-{kind}.csv"
+    cohorts.chmod(0o700)
+    member.rename(held)
+    if kind == "symlink":
+        member.symlink_to(held)
+    elif kind == "fifo":
+        os.mkfifo(member, mode=0o400)
+    else:
+        member.mkdir(mode=0o400)
+    cohorts.chmod(0o500)
+
+    with pytest.raises(source_data.SourceDataBuildError):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_manifest_fifo_without_blocking(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    manifest = root / source_data.SOURCE_DATA_MANIFEST_NAME
+    root.chmod(0o700)
+    manifest.rename(writable_tmp_path / "held-manifest.json")
+    os.mkfifo(manifest, mode=0o400)
+    root.chmod(0o500)
+
+    with pytest.raises(source_data.SourceDataBuildError):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_hardlinked_cohort_member(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    member = root / source_data.COHORT_DIRECTORY_NAME / "TEST.csv"
+    os.link(member, writable_tmp_path / "attacker-hardlink.csv")
+
+    with pytest.raises(source_data.SourceDataBuildError, match="single-link"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_same_byte_descriptor_path_swap(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    member = root / source_data.COHORT_DIRECTORY_NAME / "TEST.csv"
+    replacement_bytes = member.read_bytes()
+    original_hash = source_data._hash_stable_descriptor  # noqa: SLF001
+    swapped = False
+
+    def hash_then_swap(descriptor, identity, *, label):
+        nonlocal swapped
+        digest = original_hash(descriptor, identity, label=label)
+        if label == "source-data cohort file TEST.csv" and not swapped:
+            cohorts = member.parent
+            cohorts.chmod(0o700)
+            member.rename(writable_tmp_path / "attacker-held.csv")
+            member.write_bytes(replacement_bytes)
+            member.chmod(0o400)
+            cohorts.chmod(0o500)
+            swapped = True
+        return digest
+
+    monkeypatch.setattr(source_data, "_hash_stable_descriptor", hash_then_swap)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="identity changed"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_root_rename_and_recreation(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    original_validate = source_data._validate_source_data_release_manifest  # noqa: SLF001
+    moved = False
+
+    def validate_then_replace(manifest):
+        nonlocal moved
+        plan = original_validate(manifest)
+        if not moved:
+            root.rename(writable_tmp_path / "attacker-held-root")
+            root.mkdir(mode=0o500)
+            moved = True
+        return plan
+
+    monkeypatch.setattr(
+        source_data,
+        "_validate_source_data_release_manifest",
+        validate_then_replace,
+    )
+
+    with pytest.raises(source_data.SourceDataBuildError, match="root changed"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+def test_release_validator_rejects_live_builder_drift(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    drifted = source_data._builder_implementation()  # noqa: SLF001
+    drifted["files"] = dict(drifted["files"])
+    drifted["files"]["src/dialect/data/revision_approval.py"] = "0" * 64
+    drifted["combined_sha256"] = _sha(
+        source_data._canonical_json(drifted["files"]),  # noqa: SLF001
+    )
+    monkeypatch.setattr(source_data, "_builder_implementation", lambda: drifted)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="drifted"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+@pytest.mark.parametrize("member", [source_data.README_NAME, "TEST.csv"])
+def test_release_validator_rejects_member_byte_or_size_mismatch(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member: str,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    if member == source_data.README_NAME:
+        directory = root
+        path = root / member
+        replacement = path.read_bytes().replace(b"DIALECT", b"D1ALECT", 1)
+    else:
+        directory = root / source_data.COHORT_DIRECTORY_NAME
+        path = directory / member
+        replacement = path.read_bytes() + b"x"
+    directory.chmod(0o700)
+    path.chmod(0o600)
+    path.write_bytes(replacement)
+    path.chmod(0o400)
+    directory.chmod(0o500)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="receipt"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+@pytest.mark.parametrize("member_kind", ["support", "cohort"])
+def test_release_validator_rejects_malformed_declared_size_before_member_open(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member_kind: str,
+) -> None:
+    root, _receipt = _published_source_data_fixture(
+        writable_tmp_path,
+        monkeypatch,
+    )
+
+    def mutate(manifest):
+        if member_kind == "support":
+            manifest["supporting_files"]["readme"]["bytes"] = "not-an-integer"
+        else:
+            manifest["dataset"]["cohort_files"][0]["bytes"] = False
+
+    digest = _rewrite_published_manifest(root, mutate)
+    original_open = source_data.os.open
+    opened: list[str] = []
+
+    def open_spy(path, *args, **kwargs):
+        opened.append(os.fspath(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+    before = _open_descriptor_count()
+
+    with pytest.raises(source_data.SourceDataBuildError, match="positive integer"):
+        source_data.validate_source_data_release(root, digest)
+
+    assert opened == [root.as_posix(), source_data.SOURCE_DATA_MANIFEST_NAME]
+    assert _open_descriptor_count() == before
+    assert list(writable_tmp_path.glob(f".{root.name}.*.tmp")) == []
+
+
+@pytest.mark.parametrize(
+    ("member_kind", "error_pattern"),
+    [("support", "receipt size"), ("cohort", "bounded.*size")],
+)
+def test_release_validator_rejects_sparse_oversize_member_before_hashing(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member_kind: str,
+    error_pattern: str,
+) -> None:
+    root, receipt = _published_source_data_fixture(
+        writable_tmp_path,
+        monkeypatch,
+    )
+    if member_kind == "support":
+        target = root / source_data.README_NAME
+        _resize_frozen_file(target, target.stat().st_size + 1)
+        digest = receipt.manifest_sha256
+        target_label = f"source-data support file {source_data.README_NAME}"
+    else:
+        target = root / source_data.COHORT_DIRECTORY_NAME / "TEST.csv"
+        oversize = source_data._MAX_SOURCE_DATA_COHORT_CSV_BYTES + 1  # noqa: SLF001
+        _resize_frozen_file(target, oversize)
+        digest = _rewrite_published_manifest(
+            root,
+            lambda manifest: manifest["dataset"]["cohort_files"][0].__setitem__(
+                "bytes",
+                oversize,
+            ),
+        )
+        target_label = "source-data cohort file TEST.csv"
+
+    original_hash = source_data._hash_stable_descriptor  # noqa: SLF001
+    hashed_labels: list[str] = []
+
+    def hash_spy(descriptor, identity, *, label):
+        hashed_labels.append(label)
+        return original_hash(descriptor, identity, label=label)
+
+    def forbid_csv_parser(*_args, **_kwargs):
+        msg = "source-data release validation parsed CSV rows"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(source_data, "_hash_stable_descriptor", hash_spy)
+    monkeypatch.setattr(source_data, "_validate_csv_descriptor", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_rows", forbid_csv_parser)
+    monkeypatch.setattr(source_data, "_validate_csv_stream", forbid_csv_parser)
+    before = _open_descriptor_count()
+
+    with pytest.raises(source_data.SourceDataBuildError, match=error_pattern):
+        source_data.validate_source_data_release(root, digest)
+
+    assert target_label not in hashed_labels
+    assert _open_descriptor_count() == before
+    assert list(writable_tmp_path.glob(f".{root.name}.*.tmp")) == []
+
+
+def test_release_validator_rejects_noncanonical_nan_manifest_without_member_open(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    manifest_path = root / source_data.SOURCE_DATA_MANIFEST_NAME
+    root.chmod(0o700)
+    manifest_path.chmod(0o600)
+    raw = manifest_path.read_bytes().replace(b'"total_rows":3', b'"total_rows":NaN')
+    assert b"NaN" in raw
+    manifest_path.write_bytes(raw)
+    manifest_path.chmod(0o400)
+    root.chmod(0o500)
+    original_open = source_data.os.open
+    opened: list[str] = []
+
+    def open_spy(path, *args, **kwargs):
+        opened.append(os.fspath(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_data.os, "open", open_spy)
+
+    with pytest.raises(source_data.SourceDataBuildError, match="not valid JSON"):
+        source_data.validate_source_data_release(root, _sha(raw))
+    assert source_data.COHORT_DIRECTORY_NAME not in opened
+    assert "TEST.csv" not in opened
+
+
+def test_release_validator_final_boundary_rechecks_live_member_path(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    member = root / source_data.README_NAME
+    replacement = member.read_bytes()
+    original_live = source_data._require_live_builder_implementation  # noqa: SLF001
+    calls = 0
+
+    def mutate_on_second_builder_check(expected):
+        nonlocal calls
+        original_live(expected)
+        calls += 1
+        if calls == 2:
+            root.chmod(0o700)
+            member.rename(writable_tmp_path / "attacker-held-readme.md")
+            member.write_bytes(replacement)
+            member.chmod(0o400)
+            root.chmod(0o500)
+
+    monkeypatch.setattr(
+        source_data,
+        "_require_live_builder_implementation",
+        mutate_on_second_builder_check,
+    )
+
+    with pytest.raises(source_data.SourceDataBuildError, match="changed"):
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+def test_release_validator_closes_all_descriptors(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    root, receipt = _published_source_data_fixture(writable_tmp_path, monkeypatch)
+    before = _open_descriptor_count()
+    if outcome == "failure":
+        with pytest.raises(source_data.SourceDataBuildError):
+            source_data.validate_source_data_release(root, "0" * 64)
+    else:
+        source_data.validate_source_data_release(root, receipt.manifest_sha256)
+    assert _open_descriptor_count() == before
+
+
+def test_open_cohort_oserror_is_wrapped_without_descriptor_leak(
+    writable_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config, root, _csv = _fixture(writable_tmp_path, monkeypatch)
+    root_fd = os.open(
+        root,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    original_inventory = source_data._require_inventory  # noqa: SLF001
+
+    def inventory_error(directory_fd, expected, *, label):
+        if label == "postprocess cohort TEST":
+            msg = "synthetic inventory failure"
+            raise OSError(msg)
+        return original_inventory(directory_fd, expected, label=label)
+
+    monkeypatch.setattr(source_data, "_require_inventory", inventory_error)
+    before = _open_descriptor_count()
+    try:
+        with pytest.raises(
+            source_data.SourceDataBuildError,
+            match="postprocess cohort TEST",
+        ):
+            source_data._open_cohort(root_fd, "TEST")  # noqa: SLF001
+        assert _open_descriptor_count() == before
+    finally:
+        os.close(root_fd)
+
+
+def test_cli_preserves_legacy_build_flags_and_adds_explicit_modes() -> None:
+    build_flags = [
+        "--postprocess-root",
+        "/synthetic/postprocess",
+        "--release-approval-manifest",
+        "/synthetic/approval.json",
+        "--expected-postprocess-release-sha256",
+        "1" * 64,
+        "--expected-postprocess-authority-sha256",
+        "2" * 64,
+        "--expected-postprocess-implementation-sha256",
+        "3" * 64,
+        "--expected-sealed-completion-sha256",
+        "4" * 64,
+        "--expected-canonical-input-sha256",
+        "5" * 64,
+        "--expected-provider-input-sha256",
+        "6" * 64,
+        "--expected-release-approval-sha256",
+        "7" * 64,
+        "--output-root",
+        "/synthetic/output",
+    ]
+
+    assert source_data._parse_cli_arguments(build_flags).command == "build"  # noqa: SLF001
+    assert (
+        source_data._parse_cli_arguments(  # noqa: SLF001
+            ["build", *build_flags],
+        ).command
+        == "build"
+    )
+    validate_args = source_data._parse_cli_arguments(  # noqa: SLF001
+        [
+            "validate",
+            "--source-data-root",
+            "/synthetic/source-data",
+            "--expected-manifest-sha256",
+            "8" * 64,
+        ],
+    )
+    assert validate_args.command == "validate"
+    assert validate_args.expected_manifest_sha256 == "8" * 64
