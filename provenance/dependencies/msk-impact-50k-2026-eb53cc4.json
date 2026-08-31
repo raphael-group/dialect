@@ -1,0 +1,26 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "msk-impact-50k-2026-eb53cc4",
+  "dependency_class": "msk_raw_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://www.cbioportal.org/study/summary?id=msk_impact_50k_2026",
+  "version": "candidate DataHub commit eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e; source review incomplete",
+  "acquisition": "Fetch the three commit-pinned Git LFS artifacts into private storage, record bytes and access time, and never redistribute raw files.",
+  "identity": {
+    "source": "cBioPortal DataHub msk_impact_50k_2026",
+    "study_url": "https://www.cbioportal.org/study/summary?id=msk_impact_50k_2026",
+    "archive_record_url": "https://zenodo.org/records/18445440",
+    "candidate_commit": "eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e",
+    "citation_doi": "10.1016/j.ccell.2026.03.003"
+  },
+  "license_id": "CC-BY-NC-ND-4.0",
+  "license_status": "restricted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "Raw MSK-IMPACT files are always excluded. Derived aggregate results require an accountable terms and scope decision before use.",
+  "unresolved": [
+    "Freeze exact file bytes, access times, and attribution if MSK sensitivity analysis is retained.",
+    "Approve internal analysis and derived-output treatment."
+  ]
+}

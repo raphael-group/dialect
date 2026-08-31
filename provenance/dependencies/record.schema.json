@@ -1,0 +1,1559 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dialectcanceratlas.com/provenance/dependency-record-v1.schema.json",
+  "title": "DIALECT revision dependency provenance record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_schema_version",
+    "dependency_id",
+    "dependency_class",
+    "recorded_on",
+    "source",
+    "version",
+    "acquisition",
+    "identity",
+    "license_id",
+    "license_status",
+    "redistribution",
+    "included_in_public_release",
+    "source_artifacts",
+    "scope",
+    "unresolved"
+  ],
+  "properties": {
+    "record_schema_version": {
+      "const": "1.0.0"
+    },
+    "dependency_id": {
+      "enum": [
+        "atlas-code-v2.3.1-563ae0f",
+        "atlas-k100-v1.0.0-0ef212a",
+        "cbase-v1.2-dialect-fork",
+        "dig-pancan-artifact-4402b76e",
+        "digdriver-source-5bb565a",
+        "discover-0.9.6-a46d99f",
+        "megsa-source-9e75152f",
+        "msk-chord-2024-eb53cc4",
+        "msk-impact-50k-2026-eb53cc4",
+        "mutsig2cv-patch-1e0aa209",
+        "mutsig2cv-source-0109e27",
+        "oncokb-cancer-gene-list-2024-12-19-56cea460",
+        "tcga-datahub-64392ef-32-study"
+      ]
+    },
+    "dependency_class": {
+      "enum": [
+        "atlas_code",
+        "atlas_k100_data",
+        "cbase_source",
+        "dig_artifact",
+        "dig_source",
+        "discover_source",
+        "megsa_source",
+        "msk_raw_source",
+        "mutsig_patch",
+        "mutsig_source",
+        "oncokb_snapshot",
+        "tcga_raw_source"
+      ]
+    },
+    "recorded_on": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acquisition": {
+      "type": "string",
+      "minLength": 1
+    },
+    "identity": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "license_id": {
+      "enum": [
+        "Apache-2.0",
+        "BSD-3-Clause",
+        "CC-BY-NC-ND-4.0",
+        "LicenseRef-Broad-MutSig2CV",
+        "LicenseRef-CBaSE-Public-Domain",
+        "LicenseRef-CBaSE-Public-Domain AND BSD-3-Clause",
+        "NOASSERTION"
+      ]
+    },
+    "license_status": {
+      "enum": [
+        "permitted",
+        "restricted",
+        "unknown"
+      ]
+    },
+    "redistribution": {
+      "enum": [
+        "include",
+        "exclude"
+      ]
+    },
+    "included_in_public_release": {
+      "type": "boolean"
+    },
+    "source_artifacts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "source_uri",
+          "bytes",
+          "sha256",
+          "accessed_at"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "clinical",
+              "mutations",
+              "panel_matrix"
+            ]
+          },
+          "source_uri": {
+            "type": "string",
+            "pattern": "^https://[^#]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "accessed_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unresolved": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "atlas-code-v2.3.1-563ae0f"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "atlas_code"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commit",
+              "license_file_sha256",
+              "repository_url",
+              "site_url",
+              "source",
+              "tag"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "license_file_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "site_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tag": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "atlas-k100-v1.0.0-0ef212a"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "atlas_k100_data"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cohort_count",
+              "cohort_payload_sha256",
+              "index_sha256",
+              "manifest_sha256",
+              "readme_sha256",
+              "repository_url",
+              "site_url",
+              "source",
+              "tag_commit"
+            ],
+            "properties": {
+              "cohort_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "cohort_payload_sha256": {
+                "type": "array",
+                "minItems": 71,
+                "maxItems": 71,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "index_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "readme_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "site_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tag_commit": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "cbase-v1.2-dialect-fork"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "cbase_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "archive_url",
+              "dialect_license_file_sha256",
+              "dialect_license_id",
+              "historical_repository_snapshot",
+              "landing_page",
+              "lineage_status",
+              "official_archive_bytes",
+              "official_archive_reference_members",
+              "official_archive_role",
+              "official_archive_sha256",
+              "release_file_licenses",
+              "release_file_roles",
+              "release_files",
+              "source",
+              "upstream_license_id"
+            ],
+            "properties": {
+              "archive_url": {
+                "const": "https://weghornlab.org/Software/CBaSE_v1.2.zip"
+              },
+              "dialect_license_file_sha256": {
+                "const": "3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16"
+              },
+              "dialect_license_id": {
+                "const": "BSD-3-Clause"
+              },
+              "historical_repository_snapshot": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "commit",
+                  "files"
+                ],
+                "properties": {
+                  "commit": {
+                    "const": "d4c195fafcdcd18a0f066b139754f280ca068b66"
+                  },
+                  "files": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "archive/bmrs/cbase/cbase_params_v1.2.py",
+                      "archive/bmrs/cbase/cbase_qvals_v1.2.py"
+                    ],
+                    "properties": {
+                      "archive/bmrs/cbase/cbase_params_v1.2.py": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "bytes",
+                          "sha256"
+                        ],
+                        "properties": {
+                          "bytes": {
+                            "const": 56121
+                          },
+                          "sha256": {
+                            "const": "d6b3583d118603e802ae173d2593784004357bde35d83487f9587f658159cf08"
+                          }
+                        }
+                      },
+                      "archive/bmrs/cbase/cbase_qvals_v1.2.py": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "bytes",
+                          "sha256"
+                        ],
+                        "properties": {
+                          "bytes": {
+                            "const": 42135
+                          },
+                          "sha256": {
+                            "const": "327048957e576133c2a70be353bbf4e5f87ef9fea6f9aca33e30622bc84a720b"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "landing_page": {
+                "const": "https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html"
+              },
+              "lineage_status": {
+                "const": "historical-two-script-fork-exact-upstream-distribution-parent-unrecovered"
+              },
+              "official_archive_bytes": {
+                "const": 1356868245
+              },
+              "official_archive_reference_members": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_parameters.py",
+                  "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_qvalues.py",
+                  "CBaSE_v1.2/CBaSE_v1.2.py"
+                ],
+                "properties": {
+                  "CBaSE_v1.2/CBaSE_v1.2.py": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "bytes",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "bytes": {
+                        "const": 2085
+                      },
+                      "sha256": {
+                        "const": "8e19d8505c3bd36002065395627c9a266576e6c1a11ab999713c8f77beff58cd"
+                      }
+                    }
+                  },
+                  "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_parameters.py": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "bytes",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "bytes": {
+                        "const": 37113
+                      },
+                      "sha256": {
+                        "const": "2923cacfbf6317b5b859a8e82c686f05d119bf95a1a78cfab32a4b4075a1f0e9"
+                      }
+                    }
+                  },
+                  "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_qvalues.py": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "bytes",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "bytes": {
+                        "const": 30398
+                      },
+                      "sha256": {
+                        "const": "2e209740a15bb34e0fcba08f6da0eccc02c2ef1d2d1146c2162b93763d3998b3"
+                      }
+                    }
+                  }
+                }
+              },
+              "official_archive_role": {
+                "const": "current-v1.2-comparison-reference-not-exact-parent"
+              },
+              "official_archive_sha256": {
+                "const": "d2453bc208c0cb97fbbb530fe015c42c631564df9119fe59cb86b7a0902c5aae"
+              },
+              "release_file_licenses": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "external/CBaSE/CBaSE_params_v1.2.py",
+                  "external/CBaSE/CBaSE_qvals_v1.2.py",
+                  "external/CBaSE/NOTICE",
+                  "external/CBaSE/cbase_cohort_size.py"
+                ],
+                "properties": {
+                  "external/CBaSE/CBaSE_params_v1.2.py": {
+                    "const": [
+                      "LicenseRef-CBaSE-Public-Domain",
+                      "BSD-3-Clause"
+                    ]
+                  },
+                  "external/CBaSE/CBaSE_qvals_v1.2.py": {
+                    "const": [
+                      "LicenseRef-CBaSE-Public-Domain",
+                      "BSD-3-Clause"
+                    ]
+                  },
+                  "external/CBaSE/NOTICE": {
+                    "const": [
+                      "BSD-3-Clause"
+                    ]
+                  },
+                  "external/CBaSE/cbase_cohort_size.py": {
+                    "const": [
+                      "BSD-3-Clause"
+                    ]
+                  }
+                }
+              },
+              "release_file_roles": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "external/CBaSE/CBaSE_params_v1.2.py",
+                  "external/CBaSE/CBaSE_qvals_v1.2.py",
+                  "external/CBaSE/NOTICE",
+                  "external/CBaSE/cbase_cohort_size.py"
+                ],
+                "properties": {
+                  "external/CBaSE/CBaSE_params_v1.2.py": {
+                    "const": "historical-upstream-derived-fork-with-dialect-modifications"
+                  },
+                  "external/CBaSE/CBaSE_qvals_v1.2.py": {
+                    "const": "historical-upstream-derived-fork-with-dialect-modifications"
+                  },
+                  "external/CBaSE/NOTICE": {
+                    "const": "dialect-authored-provenance-notice"
+                  },
+                  "external/CBaSE/cbase_cohort_size.py": {
+                    "const": "dialect-authored-helper"
+                  }
+                }
+              },
+              "release_files": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "external/CBaSE/CBaSE_params_v1.2.py",
+                  "external/CBaSE/CBaSE_qvals_v1.2.py",
+                  "external/CBaSE/NOTICE",
+                  "external/CBaSE/cbase_cohort_size.py"
+                ],
+                "properties": {
+                  "external/CBaSE/CBaSE_params_v1.2.py": {
+                    "const": "d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c"
+                  },
+                  "external/CBaSE/CBaSE_qvals_v1.2.py": {
+                    "const": "f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff"
+                  },
+                  "external/CBaSE/NOTICE": {
+                    "const": "ee27cf923bfa65f5a8f09720281d66307ba245e93776e595a0fdd2cc02b48139"
+                  },
+                  "external/CBaSE/cbase_cohort_size.py": {
+                    "const": "381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69"
+                  }
+                }
+              },
+              "source": {
+                "const": "CBaSE v1.2 by Donate Weghorn"
+              },
+              "upstream_license_id": {
+                "const": "LicenseRef-CBaSE-Public-Domain"
+              }
+            }
+          },
+          "included_in_public_release": {
+            "const": true
+          },
+          "license_id": {
+            "const": "LicenseRef-CBaSE-Public-Domain AND BSD-3-Clause"
+          },
+          "license_status": {
+            "const": "permitted"
+          },
+          "redistribution": {
+            "const": "include"
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "dig-pancan-artifact-4402b76e"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "dig_artifact"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "annotation_bytes",
+              "annotation_sha256",
+              "artifact_bytes",
+              "artifact_sha256",
+              "pretrained_model_bytes",
+              "pretrained_model_sha256",
+              "source"
+            ],
+            "properties": {
+              "annotation_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "annotation_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "artifact_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "artifact_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "pretrained_model_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "pretrained_model_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "digdriver-source-5bb565a"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "dig_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commit",
+              "license_file_sha256",
+              "repository_url",
+              "source"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "license_file_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "discover-0.9.6-a46d99f"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "discover_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commit",
+              "license_file_sha256",
+              "repository_url",
+              "source",
+              "source_archive_bytes",
+              "source_archive_sha256"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "license_file_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_archive_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "source_archive_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "megsa-source-9e75152f"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "megsa_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact_bytes",
+              "artifact_sha256",
+              "repository_introduction_commit",
+              "source"
+            ],
+            "properties": {
+              "artifact_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "artifact_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_introduction_commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "msk-chord-2024-eb53cc4"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "msk_raw_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "candidate_commit",
+              "citation_doi",
+              "source",
+              "study_url"
+            ],
+            "properties": {
+              "candidate_commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "citation_doi": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "study_url": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "oneOf": [
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "allOf": [
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "clinical"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_chord_2024/data_clinical_sample.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "mutations"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_chord_2024/data_mutations.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "panel_matrix"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_chord_2024/data_gene_panel_matrix.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "msk-impact-50k-2026-eb53cc4"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "msk_raw_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "archive_record_url",
+              "candidate_commit",
+              "citation_doi",
+              "source",
+              "study_url"
+            ],
+            "properties": {
+              "archive_record_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "candidate_commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "citation_doi": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "study_url": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "oneOf": [
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "allOf": [
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "clinical"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_impact_50k_2026/data_clinical_sample.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "mutations"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_impact_50k_2026/data_mutations.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "const": "panel_matrix"
+                        },
+                        "source_uri": {
+                          "const": "https://media.githubusercontent.com/media/cBioPortal/datahub/eb53cc4a9b69fac59e3fa8db9d5204b2d25ba73e/public/msk_impact_50k_2026/data_gene_panel_matrix.txt"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "source_uri"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "mutsig2cv-patch-1e0aa209"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "mutsig_patch"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "patch_bytes",
+              "patch_sha256",
+              "source"
+            ],
+            "properties": {
+              "patch_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "patch_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "mutsig2cv-source-0109e27"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "mutsig_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commit",
+              "license_file_sha256",
+              "repository_url",
+              "source",
+              "source_record_sha256"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "license_file_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_record_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "oncokb-cancer-gene-list-2024-12-19-56cea460"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "oncokb_snapshot"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact_bytes",
+              "artifact_sha256",
+              "data_rows",
+              "snapshot_date",
+              "source"
+            ],
+            "properties": {
+              "artifact_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "artifact_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "data_rows": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "snapshot_date": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "tcga-datahub-64392ef-32-study"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "tcga_raw_source"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commit",
+              "git_object_attestation_sha256",
+              "repository_url",
+              "source",
+              "study_count",
+              "total_content_bytes"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "git_object_attestation_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "study_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "total_content_bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "dependency_id": {"const": "atlas-code-v2.3.1-563ae0f"},
+        "license_id": {"const": "BSD-3-Clause"},
+        "license_status": {"const": "permitted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {"const": []}
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "atlas-k100-v1.0.0-0ef212a"},
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Publish a data license and third-party notice after inherited source terms are resolved."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "cbase-v1.2-dialect-fork"},
+        "license_id": {
+          "const": "LicenseRef-CBaSE-Public-Domain AND BSD-3-Clause"
+        },
+        "license_status": {"const": "permitted"},
+        "redistribution": {"const": "include"},
+        "included_in_public_release": {"const": true},
+        "unresolved": {"const": []}
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "dig-pancan-artifact-4402b76e"},
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Record authoritative acquisition URLs, versions, timestamps, and terms for all three artifacts."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "digdriver-source-5bb565a"},
+        "license_id": {"const": "BSD-3-Clause"},
+        "license_status": {"const": "permitted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {"const": []}
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "discover-0.9.6-a46d99f"},
+        "license_id": {"const": "Apache-2.0"},
+        "license_status": {"const": "permitted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {"const": []}
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "megsa-source-9e75152f"},
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Identify the authoritative upstream artifact, version, source URL, and license or obtain written permission."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "msk-chord-2024-eb53cc4"},
+        "license_id": {"const": "CC-BY-NC-ND-4.0"},
+        "license_status": {"const": "restricted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Freeze exact file bytes, access times, and attribution if MSK sensitivity analysis is retained.",
+            "Approve internal analysis and derived-output treatment."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "msk-impact-50k-2026-eb53cc4"},
+        "license_id": {"const": "CC-BY-NC-ND-4.0"},
+        "license_status": {"const": "restricted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Freeze exact file bytes, access times, and attribution if MSK sensitivity analysis is retained.",
+            "Approve internal analysis and derived-output treatment."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "mutsig2cv-patch-1e0aa209"},
+        "license_id": {"const": "LicenseRef-Broad-MutSig2CV"},
+        "license_status": {"const": "restricted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Obtain a written redistribution decision for the source-derived patch."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "mutsig2cv-source-0109e27"},
+        "license_id": {"const": "LicenseRef-Broad-MutSig2CV"},
+        "license_status": {"const": "restricted"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Close the license obligation concerning modifications and any required notice to Broad."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {
+          "const": "oncokb-cancer-gene-list-2024-12-19-56cea460"
+        },
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Record the authoritative URL, access time, version identifier, terms, and derived-classification attribution decision."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "tcga-datahub-64392ef-32-study"},
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Fetch and hash each retained study license at the pinned commit and record the raw-data redistribution decision."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    }
+  ]
+}

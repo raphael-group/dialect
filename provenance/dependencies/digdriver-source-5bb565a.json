@@ -1,0 +1,22 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "digdriver-source-5bb565a",
+  "dependency_class": "dig_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://github.com/maxwellsh/DIGDriver",
+  "version": "commit 5bb565a1fbb3924ecdaaedeffb97123febc3b4d1",
+  "acquisition": "Clone the public repository and check out the exact commit; do not bundle the repository in the revision deposit.",
+  "identity": {
+    "source": "DIGDriver source repository",
+    "repository_url": "https://github.com/maxwellsh/DIGDriver",
+    "commit": "5bb565a1fbb3924ecdaaedeffb97123febc3b4d1",
+    "license_file_sha256": "1da0beca1633941d50b36da3c1f7678939d0167071445cd7a44317d2a382cb0b"
+  },
+  "license_id": "BSD-3-Clause",
+  "license_status": "permitted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "The revision release records the exact source commit and lawful acquisition path; it does not bundle the DIGDriver repository.",
+  "unresolved": []
+}

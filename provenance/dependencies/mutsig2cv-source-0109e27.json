@@ -1,0 +1,25 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "mutsig2cv-source-0109e27",
+  "dependency_class": "mutsig_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://github.com/getzlab/MutSig2CV",
+  "version": "commit 0109e27e70478181695f31ca8dd281bb44f0b3af",
+  "acquisition": "Acquire directly under the Broad license; publish identity and reconstruction instructions only.",
+  "identity": {
+    "source": "Broad Institute MutSig2CV source",
+    "repository_url": "https://github.com/getzlab/MutSig2CV",
+    "commit": "0109e27e70478181695f31ca8dd281bb44f0b3af",
+    "source_record_sha256": "7444f0aeaae8ec4438254aa9e7e8359faa5d5d0739a9e5154919f78d2590e1b3",
+    "license_file_sha256": "ba9f210813c9058ee7ca73e8a522669a0d5bd77e859f1923e6ebf5d4fa59b9fd"
+  },
+  "license_id": "LicenseRef-Broad-MutSig2CV",
+  "license_status": "restricted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "No MutSig2CV source bytes are copied into the revision release.",
+  "unresolved": [
+    "Close the license obligation concerning modifications and any required notice to Broad."
+  ]
+}

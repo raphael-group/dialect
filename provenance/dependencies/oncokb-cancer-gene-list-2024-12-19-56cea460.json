@@ -1,0 +1,25 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "oncokb-cancer-gene-list-2024-12-19-56cea460",
+  "dependency_class": "oncokb_snapshot",
+  "recorded_on": "2026-08-30",
+  "source": "OncoKB Cancer Gene List snapshot",
+  "version": "2024-12-19; SHA-256 56cea460e396451395738dbb8dbda5f5a8fe6fb146dde18c902c8b6bd6034193",
+  "acquisition": "Record the authoritative source and terms before final reconstruction instructions; do not redistribute the snapshot.",
+  "identity": {
+    "source": "OncoKB Cancer Gene List snapshot",
+    "snapshot_date": "2024-12-19",
+    "data_rows": 1172,
+    "artifact_bytes": 125986,
+    "artifact_sha256": "56cea460e396451395738dbb8dbda5f5a8fe6fb146dde18c902c8b6bd6034193"
+  },
+  "license_id": "NOASSERTION",
+  "license_status": "unknown",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "The raw gene-list snapshot is excluded; this record preserves the snapshot identity used for classification.",
+  "unresolved": [
+    "Record the authoritative URL, access time, version identifier, terms, and derived-classification attribution decision."
+  ]
+}

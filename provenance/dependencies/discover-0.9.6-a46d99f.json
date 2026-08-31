@@ -1,0 +1,24 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "discover-0.9.6-a46d99f",
+  "dependency_class": "discover_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://github.com/NKI-CCB/DISCOVER",
+  "version": "0.9.6; commit a46d99f9a8a76dc6302f42c814650ca2a1568267",
+  "acquisition": "Acquire the public Apache-2.0 source at the exact commit; the revision deposit records provenance without bundling the archive.",
+  "identity": {
+    "source": "DISCOVER 0.9.6",
+    "repository_url": "https://github.com/NKI-CCB/DISCOVER",
+    "commit": "a46d99f9a8a76dc6302f42c814650ca2a1568267",
+    "source_archive_bytes": 624640,
+    "source_archive_sha256": "6fbcc3f381f483d7e5dc1357458fcc5431fb5dbba34f159dfaea1e3c7358db81",
+    "license_file_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "license_id": "Apache-2.0",
+  "license_status": "permitted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "The revision release records the exact source and acquisition instructions without bundling the upstream source archive.",
+  "unresolved": []
+}

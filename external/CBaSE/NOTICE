@@ -1,13 +1,13 @@
-CBaSE v1.2 provenance and DIALECT modifications
-================================================
+CBaSE v1.2 provenance, DIALECT lineage, and license boundary
+============================================================
 
-Upstream work
--------------
+Current official upstream reference
+-----------------------------------
 
 Cancer Bayesian Selection Estimation (CBaSE) was authored by Donate Weghorn.
-The upstream source identifies itself as version 1.2 and as code accompanying
-Weghorn and Sunyaev, Nature Genetics (2017). Its source headers state
-"License: Public Domain" and retain the upstream copyright notice.
+The current official source identifies itself as version 1.2 and as code
+accompanying Weghorn and Sunyaev, Nature Genetics (2017). Its source headers
+state "License: Public Domain" and retain the upstream copyright notice.
 
 Official v1.2 landing page:
 https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html
@@ -15,38 +15,76 @@ https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html
 Official archive URL used for provenance:
 https://weghornlab.org/Software/CBaSE_v1.2.zip
 
-Archive SHA-256:
-d2453bc208c0cb97fbbb530fe015c42c631564df9119fe59cb86b7a0902c5aae
+Archive: 1,356,868,245 bytes
+SHA-256 d2453bc208c0cb97fbbb530fe015c42c631564df9119fe59cb86b7a0902c5aae
 
-The pristine 1,356,868,245-byte archive is not represented as DIALECT-authored
-code. The upstream author has not reviewed or endorsed DIALECT's modifications.
+Exact current-archive reference members:
 
-DIALECT fork
-------------
+- CBaSE_v1.2/CBaSE_v1.2.py
+  2,085 bytes
+  SHA-256 8e19d8505c3bd36002065395627c9a266576e6c1a11ab999713c8f77beff58cd
+- CBaSE_v1.2/Auxiliary/CBaSE_v1.2_parameters.py
+  37,113 bytes
+  SHA-256 2923cacfbf6317b5b859a8e82c686f05d119bf95a1a78cfab32a4b4075a1f0e9
+- CBaSE_v1.2/Auxiliary/CBaSE_v1.2_qvalues.py
+  30,398 bytes
+  SHA-256 2e209740a15bb34e0fcba08f6da0eccc02c2ef1d2d1146c2162b93763d3998b3
 
-The files in this directory are modified forks, not byte-identical copies of the
-official archive:
+This July 2024 archive is the current official v1.2 comparison and provenance
+reference. It is not represented as the exact parent of DIALECT's historical
+two-script fork.
+
+Historical DIALECT fork lineage
+-------------------------------
+
+The earliest recoverable DIALECT repository snapshot is commit
+d4c195fafcdcd18a0f066b139754f280ca068b66 (October 31, 2024). It contains:
+
+- archive/bmrs/cbase/cbase_params_v1.2.py
+  56,121 bytes
+  SHA-256 d6b3583d118603e802ae173d2593784004357bde35d83487f9587f658159cf08
+- archive/bmrs/cbase/cbase_qvals_v1.2.py
+  42,135 bytes
+  SHA-256 327048957e576133c2a70be353bbf4e5f87ef9fea6f9aca33e30622bc84a720b
+
+Git history connects those two files to the tracked files below. Their preserved
+headers identify CBaSE v1.2, Donate Weghorn, 2017-2022, and Public Domain. They are
+not byte-identical to the current official archive's 2017-2024 files. A
+byte-identical upstream distribution snapshot for the historical two-script parent
+has not been recovered, so no current-archive-to-fork patch is claimed.
+
+Tracked release files
+---------------------
 
 - CBaSE_params_v1.2.py
+  Historical CBaSE-derived fork with DIALECT modifications
   SHA-256 d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c
 - CBaSE_qvals_v1.2.py
+  Historical CBaSE-derived fork with DIALECT modifications
   SHA-256 f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff
 - cbase_cohort_size.py
+  DIALECT-authored cohort-axis helper; not an upstream CBaSE file
   SHA-256 381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69
 
-Relative to the official v1.2 scripts, DIALECT's functional integration changes:
+Relative to the earliest recoverable DIALECT repository snapshot, later DIALECT
+integration work preserves sample identifiers, repairs the expected tab-delimited
+mutation input, accepts explicit input/output/auxiliary/interpreter paths,
+parameterizes the PMF tail threshold, preserves high-count PMF values through
+arbitrary-precision serialization, and binds the cohort size to the authoritative
+selected sample axis. The last functional cohort-axis boundary is DIALECT commit
+d5883834a6ba52cf19145b5b26beecee9d2feaa2.
 
-- preserve sample identifiers and repair the expected tab-delimited mutation input;
-- accept explicit input, output, auxiliary-data, interpreter, and execution paths;
-- reconcile the distributed auxiliary filename and DIALECT output naming;
-- expose the PMF tail threshold instead of fixing one threshold for every cohort;
-- preserve high-count PMF values through arbitrary-precision serialization before
-  DIALECT's downstream deterministic conversion;
-- derive and verify the cohort size from the authoritative selected sample axis; and
-- include Python-compatibility, formatting, and lint maintenance needed by the
-  packaged workflow.
+License and non-endorsement
+---------------------------
 
-The last functional provenance boundary for the explicit cohort-axis binding is
-DIALECT commit d588383. Later release receipts must record the exact invoked
-parameters, auxiliary inputs, runtime, source hashes, and output hashes; this notice
-does not substitute for those run-specific receipts.
+The preserved headers label the upstream-derived CBaSE portions Public Domain.
+DIALECT-authored modifications, cbase_cohort_size.py, and this NOTICE are distributed
+under DIALECT's BSD 3-Clause license in the repository-root LICENSE file, SHA-256
+3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16.
+The pristine official archive and auxiliary data are not included in the DIALECT
+release. Donate Weghorn and the other upstream contributors have not reviewed or
+endorsed DIALECT's modifications.
+
+Run-specific receipts must separately record the exact invoked parameters,
+auxiliary inputs, runtime, source hashes, and output hashes. This notice does not
+substitute for those receipts.

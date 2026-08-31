@@ -1,0 +1,27 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "dig-pancan-artifact-4402b76e",
+  "dependency_class": "dig_artifact",
+  "recorded_on": "2026-08-30",
+  "source": "DIGDriver Pancan gene-results artifact",
+  "version": "SHA-256 4402b76ed39ef603f3c6ae41f0eb840456409fde8be76f27a1647d034327788c",
+  "acquisition": "Follow lawful upstream acquisition instructions after artifact, model, and annotation terms are resolved; do not redistribute local bytes.",
+  "identity": {
+    "source": "DIGDriver Pancan gene-results artifact",
+    "artifact_bytes": 14520830,
+    "artifact_sha256": "4402b76ed39ef603f3c6ae41f0eb840456409fde8be76f27a1647d034327788c",
+    "pretrained_model_bytes": 70042561,
+    "pretrained_model_sha256": "48a12d3748fe84562622a518c7fb22858f7997aee6c17d5111830daf0f2cddea",
+    "annotation_bytes": 257234816,
+    "annotation_sha256": "f40a60769de1888eee610601ed81a4ab5a228b22ddac0573373d6c149a0605b6"
+  },
+  "license_id": "NOASSERTION",
+  "license_status": "unknown",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "Artifact, model, and annotation bytes are excluded; this record supplies identity only.",
+  "unresolved": [
+    "Record authoritative acquisition URLs, versions, timestamps, and terms for all three artifacts."
+  ]
+}

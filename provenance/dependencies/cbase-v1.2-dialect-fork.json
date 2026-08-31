@@ -1,0 +1,83 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "cbase-v1.2-dialect-fork",
+  "dependency_class": "cbase_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html",
+  "version": "Historical CBaSE v1.2-derived DIALECT fork; exact upstream parent unrecovered",
+  "acquisition": "Use the hash-identified tracked DIALECT files; treat the current official CBaSE v1.2 archive only as a comparison and provenance reference; release exactly the four tracked files under the recorded per-file license boundary.",
+  "identity": {
+    "source": "CBaSE v1.2 by Donate Weghorn",
+    "landing_page": "https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html",
+    "archive_url": "https://weghornlab.org/Software/CBaSE_v1.2.zip",
+    "official_archive_bytes": 1356868245,
+    "official_archive_sha256": "d2453bc208c0cb97fbbb530fe015c42c631564df9119fe59cb86b7a0902c5aae",
+    "official_archive_role": "current-v1.2-comparison-reference-not-exact-parent",
+    "official_archive_reference_members": {
+      "CBaSE_v1.2/CBaSE_v1.2.py": {
+        "bytes": 2085,
+        "sha256": "8e19d8505c3bd36002065395627c9a266576e6c1a11ab999713c8f77beff58cd"
+      },
+      "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_parameters.py": {
+        "bytes": 37113,
+        "sha256": "2923cacfbf6317b5b859a8e82c686f05d119bf95a1a78cfab32a4b4075a1f0e9"
+      },
+      "CBaSE_v1.2/Auxiliary/CBaSE_v1.2_qvalues.py": {
+        "bytes": 30398,
+        "sha256": "2e209740a15bb34e0fcba08f6da0eccc02c2ef1d2d1146c2162b93763d3998b3"
+      }
+    },
+    "historical_repository_snapshot": {
+      "commit": "d4c195fafcdcd18a0f066b139754f280ca068b66",
+      "files": {
+        "archive/bmrs/cbase/cbase_params_v1.2.py": {
+          "bytes": 56121,
+          "sha256": "d6b3583d118603e802ae173d2593784004357bde35d83487f9587f658159cf08"
+        },
+        "archive/bmrs/cbase/cbase_qvals_v1.2.py": {
+          "bytes": 42135,
+          "sha256": "327048957e576133c2a70be353bbf4e5f87ef9fea6f9aca33e30622bc84a720b"
+        }
+      }
+    },
+    "lineage_status": "historical-two-script-fork-exact-upstream-distribution-parent-unrecovered",
+    "upstream_license_id": "LicenseRef-CBaSE-Public-Domain",
+    "dialect_license_id": "BSD-3-Clause",
+    "dialect_license_file_sha256": "3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16",
+    "release_files": {
+      "external/CBaSE/CBaSE_params_v1.2.py": "d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c",
+      "external/CBaSE/CBaSE_qvals_v1.2.py": "f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff",
+      "external/CBaSE/cbase_cohort_size.py": "381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69",
+      "external/CBaSE/NOTICE": "ee27cf923bfa65f5a8f09720281d66307ba245e93776e595a0fdd2cc02b48139"
+    },
+    "release_file_roles": {
+      "external/CBaSE/CBaSE_params_v1.2.py": "historical-upstream-derived-fork-with-dialect-modifications",
+      "external/CBaSE/CBaSE_qvals_v1.2.py": "historical-upstream-derived-fork-with-dialect-modifications",
+      "external/CBaSE/cbase_cohort_size.py": "dialect-authored-helper",
+      "external/CBaSE/NOTICE": "dialect-authored-provenance-notice"
+    },
+    "release_file_licenses": {
+      "external/CBaSE/CBaSE_params_v1.2.py": [
+        "LicenseRef-CBaSE-Public-Domain",
+        "BSD-3-Clause"
+      ],
+      "external/CBaSE/CBaSE_qvals_v1.2.py": [
+        "LicenseRef-CBaSE-Public-Domain",
+        "BSD-3-Clause"
+      ],
+      "external/CBaSE/cbase_cohort_size.py": [
+        "BSD-3-Clause"
+      ],
+      "external/CBaSE/NOTICE": [
+        "BSD-3-Clause"
+      ]
+    }
+  },
+  "license_id": "LicenseRef-CBaSE-Public-Domain AND BSD-3-Clause",
+  "license_status": "permitted",
+  "redistribution": "include",
+  "included_in_public_release": true,
+  "source_artifacts": [],
+  "scope": "Two historical CBaSE v1.2-derived scripts with preserved Public Domain headers and BSD-3-Clause DIALECT modifications, plus a BSD-3-Clause DIALECT helper and provenance notice; the current official archive and auxiliary data are excluded.",
+  "unresolved": []
+}

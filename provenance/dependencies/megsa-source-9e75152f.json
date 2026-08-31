@@ -1,0 +1,24 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "megsa-source-9e75152f",
+  "dependency_class": "megsa_source",
+  "recorded_on": "2026-08-30",
+  "source": "Locally retained MEGSA.R comparator source",
+  "version": "SHA-256 9e75152f4cf9e0cd7c876febd31d8758bfd076b761ef746aac32b57170f81954",
+  "acquisition": "Do not redistribute until authoritative upstream identity and license or written permission are established.",
+  "identity": {
+    "source": "Locally retained MEGSA.R comparator source",
+    "artifact_bytes": 6318,
+    "artifact_sha256": "9e75152f4cf9e0cd7c876febd31d8758bfd076b761ef746aac32b57170f81954",
+    "repository_introduction_commit": "2fe1ce87ed23c05d35e1764ba0c2c3ad395f3e81"
+  },
+  "license_id": "NOASSERTION",
+  "license_status": "unknown",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "MEGSA source bytes are excluded because upstream identity and redistribution terms are not established.",
+  "unresolved": [
+    "Identify the authoritative upstream artifact, version, source URL, and license or obtain written permission."
+  ]
+}

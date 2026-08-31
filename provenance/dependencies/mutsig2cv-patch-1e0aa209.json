@@ -1,0 +1,23 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "mutsig2cv-patch-1e0aa209",
+  "dependency_class": "mutsig_patch",
+  "recorded_on": "2026-08-30",
+  "source": "DIALECT Octave compatibility patch against MutSig2CV",
+  "version": "SHA-256 1e0aa20921983f74a4676f077860a78e51c3eb2b525d9f5b9e324fdf2d456222",
+  "acquisition": "Retain privately with the licensed source; exclude unless separately hashed written redistribution permission is approved.",
+  "identity": {
+    "source": "DIALECT Octave compatibility patch against MutSig2CV",
+    "patch_bytes": 22463,
+    "patch_sha256": "1e0aa20921983f74a4676f077860a78e51c3eb2b525d9f5b9e324fdf2d456222"
+  },
+  "license_id": "LicenseRef-Broad-MutSig2CV",
+  "license_status": "restricted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "The source-derived patch is excluded unless separately hashed written permission is obtained and approved.",
+  "unresolved": [
+    "Obtain a written redistribution decision for the source-derived patch."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "tcga-datahub-64392ef-32-study",
+  "dependency_class": "tcga_raw_source",
+  "recorded_on": "2026-08-30",
+  "source": "https://github.com/cBioPortal/datahub",
+  "version": "commit 64392efc82b38655f67188a4e95e44ca22e030c0; 32-study attestation",
+  "acquisition": "Reconstruct from the pinned DataHub commit; exclude raw payloads until all 32 study licenses are frozen and reviewed.",
+  "identity": {
+    "source": "cBioPortal DataHub TCGA mutation data",
+    "repository_url": "https://github.com/cBioPortal/datahub",
+    "commit": "64392efc82b38655f67188a4e95e44ca22e030c0",
+    "study_count": 32,
+    "total_content_bytes": 3508513737,
+    "git_object_attestation_sha256": "cd204ed81b1c90ae97d8427bd1fba3d848bbd7db97100f48db13d69860c16737"
+  },
+  "license_id": "NOASSERTION",
+  "license_status": "unknown",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "Raw TCGA payloads are excluded; the release retains aggregate corrected results and source identity evidence only.",
+  "unresolved": [
+    "Fetch and hash each retained study license at the pinned commit and record the raw-data redistribution decision."
+  ]
+}

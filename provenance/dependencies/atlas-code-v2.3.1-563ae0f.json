@@ -1,0 +1,24 @@
+{
+  "record_schema_version": "1.0.0",
+  "dependency_id": "atlas-code-v2.3.1-563ae0f",
+  "dependency_class": "atlas_code",
+  "recorded_on": "2026-08-30",
+  "source": "https://github.com/ahmed-shuaibi/dialect-atlas",
+  "version": "atlas-v2.3.1; commit 563ae0f8ffe55734cd9b57e5075d497aa27c16fa",
+  "acquisition": "Use the independently tagged BSD-3-Clause Atlas application; do not duplicate it in the corrected K500 deposit.",
+  "identity": {
+    "source": "DIALECT Cancer Atlas application",
+    "repository_url": "https://github.com/ahmed-shuaibi/dialect-atlas",
+    "site_url": "https://dialectcanceratlas.com",
+    "tag": "atlas-v2.3.1",
+    "commit": "563ae0f8ffe55734cd9b57e5075d497aa27c16fa",
+    "license_file_sha256": "3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16"
+  },
+  "license_id": "BSD-3-Clause",
+  "license_status": "permitted",
+  "redistribution": "exclude",
+  "included_in_public_release": false,
+  "source_artifacts": [],
+  "scope": "Atlas code remains an independently tagged public component and is not duplicated in the corrected K500 deposit.",
+  "unresolved": []
+}
