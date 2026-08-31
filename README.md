@@ -8,11 +8,31 @@
 
 DIALECT identifies mutually exclusive (ME) and co-occurring (CO) driver mutation pairs by modeling each somatic count as passenger background + latent driver, conditioned on a background mutation rate (BMR).
 
+The commands below require a Git checkout installed in editable mode. This is
+necessary for the default CBaSE provider: it resolves DIALECT's tracked CBaSE
+fork under `external/CBaSE/`. The configured wheel contains the installable
+`dialect` package, CLI metadata, and license. The configured source distribution
+contains the source package, tests, and selected README, license, and build
+metadata. Neither contains the `external/CBaSE` runtime scripts or auxiliary
+data.
+
+The checkout includes the CBaSE fork and its `NOTICE`, but its large
+`external/CBaSE/auxiliary/` directory is intentionally not tracked. Before
+running `dialect generate --bmr cbase`, provision a compatible auxiliary data
+set there and review the
+[`external/CBaSE/NOTICE`](external/CBaSE/NOTICE),
+which records the upstream source and lineage caveat. DIALECT does not automate
+that acquisition. If you already have `count_matrix.csv` and `bmr_pmfs.csv`, an
+installed wheel can run `dialect identify` without CBaSE.
+
 ```bash
-pip install -e ".[dev]"
+pip install -e .
 dialect generate -m cohort.maf -o out/cohort
 dialect identify -c out/cohort/count_matrix.csv -b out/cohort/bmr_pmfs.csv -o out/cohort -k 100
 ```
+
+For development, install the test and lint dependencies with
+`pip install -e ".[dev]"`.
 
 For a zero-complete CBaSE cohort, provide the exact ordered sample axis as one
 unique, nonempty identifier per line. The optional scalar is an equality assertion;

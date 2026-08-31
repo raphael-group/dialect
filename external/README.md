@@ -15,7 +15,10 @@ license status, and include/exclude decisions are recorded under `provenance/dep
 `external/CBaSE/NOTICE` is the authoritative lineage, license, and modification notice. It
 distinguishes the current official v1.2 reference archive from DIALECT's earlier two-script fork,
 identifies the DIALECT-authored helper, and records the per-file Public Domain/BSD-3-Clause
-boundary. The official archive and auxiliary data are not distributed by the DIALECT package.
+boundary. The wheel configured in `pyproject.toml` omits the entire `external/` tree. The source
+distribution includes selected README files, including this one, but not the CBaSE runtime scripts
+or auxiliary data. A Git checkout contains the tracked fork and notice, but not the ignored CBaSE
+auxiliary data.
 
 #### Original Contributors:
 - Donate Weghorn
@@ -50,9 +53,16 @@ Canisius, S., Martens, J. W. M., & Wessels, L. F. A. (2016). A novel independenc
 ## Release boundary
 
 MutSig2CV, MEGSA, DIG artifacts, OncoKB, and raw third-party data have separate restrictions or
-unresolved terms. The public release verifier excludes those bytes and verifies a sanitized,
-hash-pinned provenance record instead. The public comparison API retains optional WeSME support,
-but no current corrected-revision dependency record or coauthor-approved comparator scope selects
-WeSME or WeSCO. They therefore remain excluded from the prepared public release unless a future
-stage-scoped decision explicitly selects them and a separate exact provenance, license, acquisition,
-and redistribution review passes. Refer to each upstream project for lawful acquisition.
+unresolved terms. The configured Python distributions do not include them. While their dependency
+records retain an `exclude` disposition, any separate public research release must exclude those
+bytes and bind the corresponding sanitized, hash-pinned provenance records instead. This statement
+does not assert that such a release artifact has been built or approved.
+
+The public comparison API retains optional WeSME support in a compatible source checkout; the
+configured wheel and source distribution do not bundle its external implementation, and no current
+corrected-revision dependency record or coauthor-approved comparator scope selects WeSME or WeSCO.
+If a separate corrected-revision artifact is prepared under those records, they therefore remain
+excluded from the prepared public release unless a future stage-scoped decision explicitly selects
+them and a separate exact provenance, license, acquisition, and redistribution review passes. This
+conditional boundary does not assert that such an artifact already exists. Refer to each upstream
+project for lawful acquisition.
