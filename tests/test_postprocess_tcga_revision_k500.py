@@ -7,6 +7,7 @@ import json
 import math
 import os
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +16,8 @@ from scipy.special import gammaincc
 
 from analysis import postprocess_tcga_revision_k500 as postprocess
 from analysis import run_tcga_revision_k500 as runner
+from dialect.data import revision_approval as revision_approval_module
+from dialect.data import revision_fit_policy as revision_fit_policy_module
 from dialect.data.revision_fit_policy import (
     COMPONENT_FAILURE_SEMANTICS,
     CONJUNCTION_P_VALUE_COMBINER,
@@ -54,6 +57,7 @@ from dialect.data.revision_fit_policy import (
 from dialect.data.revision_fit_policy import (
     TestedFamilyPolicy as RevisionTestedFamilyPolicy,
 )
+from dialect.models import interaction as interaction_module
 from dialect.models.interaction import (
     PAIR_EFFECT_IDENTIFIED_STATUS,
     PAIR_EFFECT_RANK_DEFICIENT_STATUS,
@@ -349,6 +353,57 @@ def _write_qa_family(output, derived):
     postprocess._write_derived_cohort_family_for_qa(output, derived)  # noqa: SLF001
 
 
+def test_fit_decision_artifact_drift_changes_v4_record_and_is_rejected():
+    decisions = {}
+    for decision_id in postprocess.FIT_DECISION_IDS:
+        content = runner._canonical_json(  # noqa: SLF001
+            {
+                "contract": f"{decision_id.lower()}-contract-v1",
+                "decision_id": decision_id,
+                "payload": {"value": decision_id},
+                "schema": "synthetic-machine-decision-v1",
+            },
+        ) + b"\n"
+        decisions[decision_id] = SimpleNamespace(
+            decision_id=decision_id,
+            canonical_artifact=SimpleNamespace(
+                sha256=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+                content=content,
+            ),
+        )
+    approval = SimpleNamespace(decisions=decisions)
+    original = postprocess._fit_decision_artifact_records(approval)  # noqa: SLF001
+    authority_record = {"fit_decisions": original}
+    original_bytes = postprocess._canonical_json(authority_record) + b"\n"  # noqa: SLF001
+    changed = runner._canonical_json(  # noqa: SLF001
+        {
+            "contract": "d4-contract-v1",
+            "decision_id": "D4",
+            "payload": {"value": "changed"},
+            "schema": "synthetic-machine-decision-v1",
+        },
+    ) + b"\n"
+    decisions["D4"].canonical_artifact = SimpleNamespace(
+        sha256=hashlib.sha256(changed).hexdigest(),
+        size_bytes=len(changed),
+        content=changed,
+    )
+    changed_records = postprocess._fit_decision_artifact_records(approval)  # noqa: SLF001
+    changed_bytes = postprocess._canonical_json(  # noqa: SLF001
+        {"fit_decisions": changed_records},
+    ) + b"\n"
+
+    assert hashlib.sha256(original_bytes).hexdigest() != hashlib.sha256(
+        changed_bytes,
+    ).hexdigest()
+    with pytest.raises(postprocess.D5DerivationError, match="fit-decision artifacts"):
+        postprocess._require_live_fit_decision_records(  # noqa: SLF001
+            authority_record,
+            approval,
+        )
+
+
 @pytest.mark.parametrize(
     "effect_status",
     [PAIR_EFFECT_RANK_DEFICIENT_STATUS, PAIR_EFFECT_UNDERFLOW_STATUS],
@@ -628,6 +683,57 @@ def test_wrapper_derives_deterministic_complete_family_and_provenance():
     assert manifest["multiplicity"]["descriptive_methods"] == ["by", "bh"]
     assert manifest["marginal_validity"]["correction_selection_affected"] is False
     assert manifest["marginal_validity"]["q_values_affected"] is False
+
+
+_IMPLEMENTATION_MODULES = (
+    ("analysis/postprocess_tcga_revision_k500.py", postprocess),
+    ("analysis/run_tcga_revision_k500.py", runner),
+    ("src/dialect/data/revision_approval.py", revision_approval_module),
+    ("src/dialect/data/revision_fit_policy.py", revision_fit_policy_module),
+    ("src/dialect/models/interaction.py", interaction_module),
+    ("src/dialect/stats/revision_inference.py", revision_inference),
+)
+
+
+def test_implementation_provenance_has_exact_closed_file_inventory():
+    provenance = postprocess._implementation_provenance()  # noqa: SLF001
+    files = provenance["files"]
+    expected_labels = {label for label, _module in _IMPLEMENTATION_MODULES}
+
+    assert set(files) == expected_labels
+    assert files == {
+        label: hashlib.sha256(
+            Path(module.__file__).resolve().read_bytes(),
+        ).hexdigest()
+        for label, module in _IMPLEMENTATION_MODULES
+    }
+    assert provenance["combined_sha256"] == hashlib.sha256(
+        postprocess._canonical_json(files),  # noqa: SLF001
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(("label", "module"), _IMPLEMENTATION_MODULES)
+def test_implementation_provenance_is_sensitive_to_each_bound_file(
+    tmp_path,
+    monkeypatch,
+    label,
+    module,
+):
+    source = tmp_path / label.replace("/", "_")
+    source.write_bytes(b"first implementation\n")
+    monkeypatch.setattr(module, "__file__", str(source))
+
+    first = postprocess._implementation_provenance()  # noqa: SLF001
+    source.write_bytes(b"second implementation\n")
+    second = postprocess._implementation_provenance()  # noqa: SLF001
+
+    assert first["files"][label] != second["files"][label]
+    assert first["combined_sha256"] != second["combined_sha256"]
+    assert {
+        key: digest for key, digest in first["files"].items() if key != label
+    } == {
+        key: digest for key, digest in second["files"].items() if key != label
+    }
 
 
 def test_wrapper_calibration_changes_only_eligibility_fields():
@@ -1256,6 +1362,24 @@ def test_postprocess_authority_receipt_versions_and_records_calibration_digests(
         schema="dialect-revision-coauthor-approval-v6",
         decision_digests=decision_digests,
     )
+    fit_decisions = {}
+    for decision_id in postprocess.FIT_DECISION_IDS:
+        content = runner._canonical_json(  # noqa: SLF001
+            {
+                "contract": f"{decision_id.lower()}-contract-v1",
+                "decision_id": decision_id,
+                "payload": {"value": decision_id},
+                "schema": "synthetic-machine-decision-v1",
+            },
+        ) + b"\n"
+        fit_decisions[decision_id] = SimpleNamespace(
+            decision_id=decision_id,
+            canonical_artifact=SimpleNamespace(
+                sha256=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+                content=content,
+            ),
+        )
     monkeypatch.setattr(runner, "_fit_policy_record", lambda _policy: {})
     record = postprocess._build_authority_record(  # noqa: SLF001
         config,
@@ -1265,6 +1389,7 @@ def test_postprocess_authority_receipt_versions_and_records_calibration_digests(
         ),
         fit_approval=SimpleNamespace(
             manifest_sha256=config.expected_fit_approval_sha256,
+            decisions=fit_decisions,
         ),
         inspect_approval=SimpleNamespace(
             manifest_sha256=config.expected_inspect_approval_sha256,
@@ -1276,6 +1401,31 @@ def test_postprocess_authority_receipt_versions_and_records_calibration_digests(
 
     assert record["schema"] == postprocess.POSTPROCESS_AUTHORITY_SCHEMA
     assert record["contract"] == postprocess.POSTPROCESS_AUTHORITY_CONTRACT
+    assert record["schema"].endswith("-v4")
+    assert record["fit_decisions"] == [
+        {
+            "decision_id": decision_id,
+            "contract": f"{decision_id.lower()}-contract-v1",
+            "canonical_artifact_sha256": (
+                fit_decisions[decision_id].canonical_artifact.sha256
+            ),
+            "canonical_artifact_size_bytes": (
+                fit_decisions[decision_id].canonical_artifact.size_bytes
+            ),
+            "payload_sha256": runner._json_sha256(  # noqa: SLF001
+                {"value": decision_id},
+            ),
+        }
+        for decision_id in postprocess.FIT_DECISION_IDS
+    ]
+    assert record["contracts"] == [
+        {
+            "cohort": cohort,
+            "contract_sha256": runner._json_sha256({}),  # noqa: SLF001
+            "file_sha256": hashlib.sha256(b"{}\n").hexdigest(),
+        }
+        for cohort in postprocess.TCGA_COHORTS
+    ]
     assert record["approvals"]["calibration"] == {
         "path": config.calibration_approval_manifest.as_posix(),
         "sha256": config.expected_calibration_approval_sha256,

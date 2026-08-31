@@ -58,6 +58,7 @@ from analysis.run_tcga_revision_k500 import (
     Task,
     iter_tested_pairs,
 )
+from dialect.data import revision_approval as revision_approval_module
 from dialect.data import revision_fit_policy as revision_fit_policy_module
 from dialect.data.revision_approval import (
     CALIBRATION_STAGE,
@@ -88,6 +89,7 @@ from dialect.data.revision_fit_policy import (
     RevisionFitPolicy,
     validate_revision_fit_policy,
 )
+from dialect.models import interaction as interaction_module
 from dialect.models.interaction import compute_marshall_olkin_rho
 from dialect.stats import revision_inference as revision_inference_module
 from dialect.stats.revision_inference import (
@@ -119,10 +121,11 @@ MARGINAL_VALIDITY_EVIDENCE_SCHEMA: Final = (
 MARGINAL_VALIDITY_EVIDENCE_CONTRACT: Final = (
     "signed-d1-d6-complete-family-validity-gate-v2"
 )
-POSTPROCESS_AUTHORITY_SCHEMA: Final = "dialect-tcga-k500-postprocess-authority-v2"
+POSTPROCESS_AUTHORITY_SCHEMA: Final = "dialect-tcga-k500-postprocess-authority-v4"
 POSTPROCESS_AUTHORITY_CONTRACT: Final = (
-    "pinned-roots-sealed-grid-signed-d1-d6-evidence-v2"
+    "pinned-roots-sealed-grid-signed-d1-d6-evidence-v4"
 )
+FIT_DECISION_IDS: Final = STAGE_MINIMUM_DECISIONS_V6[FIT_SEALED_TCGA_K500_STAGE]
 CALIBRATION_DECISION_IDS: Final = STAGE_MINIMUM_DECISIONS_V6[CALIBRATION_STAGE]
 
 MARGINAL_VALIDITY_CERTIFIED: Final = "certified"
@@ -997,10 +1000,17 @@ def _build_authority_record(  # noqa: PLR0913
             "task_count": completion["grid"]["task_count"],
         },
         "fit_policy": runner._fit_policy_record(fit_policy),  # noqa: SLF001
+        "fit_decisions": _fit_decision_artifact_records(fit_approval),
         "d3_conjunction_role": fit_policy.d3.all_three_conjunction_role,
         "contracts": [
             {
                 "cohort": cohort,
+                "contract_sha256": runner._json_sha256(  # noqa: SLF001
+                    runner._parse_json_bytes(  # noqa: SLF001
+                        raw,
+                        path=Path(f"{cohort}.json"),
+                    ),
+                ),
                 "file_sha256": hashlib.sha256(raw).hexdigest(),
             }
             for cohort, raw in zip(TCGA_COHORTS, contract_bytes, strict=True)
@@ -1016,6 +1026,64 @@ def _build_authority_record(  # noqa: PLR0913
             "status": marginal_validity.status,
         },
     }
+
+
+def _fit_decision_artifact_records(
+    fit_approval: RevisionApproval,
+) -> list[dict[str, object]]:
+    """Return stage-independent D1--D6 artifact bindings for reauthorization."""
+    if tuple(fit_approval.decisions) != FIT_DECISION_IDS:
+        msg = "Fit approval does not contain the exact D1-D6 decision inventory."
+        raise D5DerivationError(msg)
+    records: list[dict[str, object]] = []
+    for decision_id in FIT_DECISION_IDS:
+        decision = fit_approval.decisions[decision_id]
+        artifact = decision.canonical_artifact
+        content = artifact.content
+        if (
+            decision.decision_id != decision_id
+            or not isinstance(content, bytes)
+            or len(content) != artifact.size_bytes
+            or hashlib.sha256(content).hexdigest() != artifact.sha256
+        ):
+            msg = f"Fit decision artifact is inconsistent for {decision_id}."
+            raise D5DerivationError(msg)
+        envelope = runner._parse_json_bytes(  # noqa: SLF001
+            content,
+            path=Path(f"fit-{decision_id}.json"),
+        )
+        if (
+            set(envelope) != {"contract", "decision_id", "payload", "schema"}
+            or envelope.get("decision_id") != decision_id
+            or not isinstance(envelope.get("contract"), str)
+            or not envelope["contract"]
+            or not isinstance(envelope.get("payload"), dict)
+        ):
+            msg = f"Fit decision envelope is invalid for {decision_id}."
+            raise D5DerivationError(msg)
+        records.append(
+            {
+                "decision_id": decision_id,
+                "contract": envelope["contract"],
+                "canonical_artifact_sha256": artifact.sha256,
+                "canonical_artifact_size_bytes": artifact.size_bytes,
+                "payload_sha256": runner._json_sha256(  # noqa: SLF001
+                    envelope["payload"],
+                ),
+            },
+        )
+    return records
+
+
+def _require_live_fit_decision_records(
+    authority_record: Mapping[str, object],
+    fit_approval: RevisionApproval,
+) -> None:
+    if authority_record.get("fit_decisions") != _fit_decision_artifact_records(
+        fit_approval,
+    ):
+        msg = "Live D1-D6 fit-decision artifacts changed after authority validation."
+        raise D5DerivationError(msg)
 
 
 def _require_validated_authority(authority: ValidatedPostprocessAuthority) -> None:
@@ -1051,6 +1119,7 @@ def _require_validated_authority(authority: ValidatedPostprocessAuthority) -> No
         "contract",
         "contracts",
         "d3_conjunction_role",
+        "fit_decisions",
         "fit_policy",
         "marginal_validity_evidence",
         "roots",
@@ -1104,6 +1173,7 @@ def _require_validated_authority(authority: ValidatedPostprocessAuthority) -> No
         FIT_SEALED_TCGA_K500_STAGE,
     )
     runner._require_fit_stage_binding(fit_approval, paths)  # noqa: SLF001
+    _require_live_fit_decision_records(record, fit_approval)
     current_policy = validate_revision_fit_policy(
         fit_approval,
         expected_d4_implementation=runner.REQUIRED_D4_IMPLEMENTATION,
@@ -3270,8 +3340,15 @@ def _build_manifest(  # noqa: PLR0913
 def _implementation_provenance() -> dict[str, object]:
     files = {
         "analysis/postprocess_tcga_revision_k500.py": Path(__file__).resolve(),
+        "analysis/run_tcga_revision_k500.py": Path(runner.__file__).resolve(),
+        "src/dialect/data/revision_approval.py": Path(
+            revision_approval_module.__file__,
+        ).resolve(),
         "src/dialect/data/revision_fit_policy.py": Path(
             revision_fit_policy_module.__file__,
+        ).resolve(),
+        "src/dialect/models/interaction.py": Path(
+            interaction_module.__file__,
         ).resolve(),
         "src/dialect/stats/revision_inference.py": Path(
             revision_inference_module.__file__,
