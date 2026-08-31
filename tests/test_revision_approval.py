@@ -31,8 +31,11 @@ from dialect.data.revision_approval import (
     SOURCE_NOTICE_KINDS,
     STAGE_BINDING_KEYS,
     STAGE_MINIMUM_DECISIONS,
+    STAGE_MINIMUM_DECISIONS_V6,
     STAGE_SCOPED_APPROVAL_SCHEMA,
+    STAGE_SCOPED_APPROVAL_SCHEMA_V6,
     STAGE_SCOPED_EVIDENCE_LINE_SCHEMA,
+    STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6,
     RevisionApprovalError,
     canonical_decision_evidence_line,
     compute_decision_authority_sha256,
@@ -186,11 +189,17 @@ def _stage_scoped_payload(
     tmp_path: Path,
     *,
     stage: str = MATERIALIZE_FINAL_INPUTS_STAGE,
+    approval_schema: str = STAGE_SCOPED_APPROVAL_SCHEMA,
 ) -> dict[str, object]:
-    """Return a v5 manifest with only one stage's canonical minimum decisions."""
+    """Return a stage-scoped manifest with its schema's exact decisions."""
     payload = _payload(tmp_path)
-    decision_ids = STAGE_MINIMUM_DECISIONS[stage]
-    payload["schema"] = STAGE_SCOPED_APPROVAL_SCHEMA
+    schema_contracts = {
+        STAGE_SCOPED_APPROVAL_SCHEMA: (STAGE_MINIMUM_DECISIONS, "v5"),
+        STAGE_SCOPED_APPROVAL_SCHEMA_V6: (STAGE_MINIMUM_DECISIONS_V6, "v6"),
+    }
+    stage_minima, schema_version = schema_contracts[approval_schema]
+    decision_ids = stage_minima[stage]
+    payload["schema"] = approval_schema
     payload["allowed_stages"] = [stage]
     payload["stage_bindings"] = {stage: payload["stage_bindings"][stage]}
     decisions = [
@@ -208,8 +217,8 @@ def _stage_scoped_payload(
             payload["stage_bindings"],
         )
     evidence_paths = {
-        APPROVERS[0]: "benjamin-evidence-v5.txt",
-        APPROVERS[1]: "uthsav-evidence-v5.txt",
+        APPROVERS[0]: f"benjamin-evidence-{schema_version}.txt",
+        APPROVERS[1]: f"uthsav-evidence-{schema_version}.txt",
     }
     evidence_receipts: dict[str, tuple[str, str]] = {}
     for approver in APPROVERS:
@@ -219,7 +228,7 @@ def _stage_scoped_payload(
                 tmp_path,
                 approver,
                 _attested_at(approver),
-                approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+                approval_schema=approval_schema,
             )
             for decision in decisions
         ]
@@ -232,7 +241,7 @@ def _stage_scoped_payload(
         authority_sha256 = compute_decision_authority_sha256(
             decision,
             tmp_path,
-            approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA,
+            approval_schema=approval_schema,
         )
         decision["attestations"] = [
             {
@@ -247,7 +256,9 @@ def _stage_scoped_payload(
                         "sha256": evidence_receipts[approver][1],
                     },
                     "kind": "coauthor-authored-machine-record",
-                    "locator": f"Message-ID <{approver}-v5@example.org>",
+                    "locator": (
+                        f"Message-ID <{approver}-{schema_version}@example.org>"
+                    ),
                 },
             }
             for approver in APPROVERS
@@ -442,7 +453,7 @@ def test_stage_scoped_manifest_authorizes_only_exact_d1_d2(tmp_path):
 
 
 @pytest.mark.parametrize("stage", REVISION_STAGES)
-def test_stage_scoped_schema_uses_exact_minimum_for_every_singleton_stage(
+def test_v5_stage_scoped_schema_uses_historical_minimum_for_every_stage(
     tmp_path,
     stage,
 ):
@@ -454,6 +465,25 @@ def test_stage_scoped_schema_uses_exact_minimum_for_every_singleton_stage(
     assert approval.allowed_stages == (stage,)
     assert tuple(approval.decisions) == STAGE_MINIMUM_DECISIONS[stage]
     assert tuple(approval.decision_digests) == STAGE_MINIMUM_DECISIONS[stage]
+
+
+@pytest.mark.parametrize("stage", REVISION_STAGES)
+def test_v6_stage_scoped_schema_uses_v6_minimum_for_every_stage(tmp_path, stage):
+    payload = _stage_scoped_payload(
+        tmp_path,
+        stage=stage,
+        approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA_V6,
+    )
+
+    approval = _validate(tmp_path, payload, stage=stage)
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA_V6
+    assert approval.allowed_stages == (stage,)
+    assert tuple(approval.decisions) == STAGE_MINIMUM_DECISIONS_V6[stage]
+    assert tuple(approval.decision_digests) == STAGE_MINIMUM_DECISIONS_V6[stage]
+    assert STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6.encode() in (
+        next(iter(approval.decisions.values())).attestations[0].evidence.file.content
+    )
 
 
 @pytest.mark.parametrize("attack", ["missing", "extra", "reordered"])
@@ -862,10 +892,95 @@ def test_evidence_marker_order_attack_is_rejected(tmp_path):
         _validate(tmp_path, payload)
 
 
-def test_fit_and_inspect_both_require_d1_through_d6():
+def test_historical_stage_minima_remain_unchanged_for_v4_and_v5():
     expected = tuple(f"D{index}" for index in range(1, 7))
     assert STAGE_MINIMUM_DECISIONS[FIT_SEALED_TCGA_K500_STAGE] == expected
     assert STAGE_MINIMUM_DECISIONS[INSPECT_TCGA_K500_STAGE] == expected
+    assert STAGE_MINIMUM_DECISIONS[CALIBRATION_STAGE] == ("D4", "D5", "D6")
+
+
+def test_v4_calibration_still_authorizes_with_d1_no_go(tmp_path):
+    payload = _payload(tmp_path)
+    _set_manifest_allowed_stages(tmp_path, payload, [CALIBRATION_STAGE])
+    _set_decision_disposition(tmp_path, payload, 0, NO_GO_DISPOSITION)
+
+    approval = _validate(tmp_path, payload, stage=CALIBRATION_STAGE)
+
+    assert approval.schema == APPROVAL_SCHEMA
+    assert approval.decisions["D1"].disposition == NO_GO_DISPOSITION
+    assert all(
+        approval.decisions[decision_id].disposition == "go"
+        for decision_id in STAGE_MINIMUM_DECISIONS[CALIBRATION_STAGE]
+    )
+
+
+def test_v5_calibration_still_uses_exact_d4_through_d6(tmp_path):
+    payload = _stage_scoped_payload(tmp_path, stage=CALIBRATION_STAGE)
+
+    approval = _validate(tmp_path, payload, stage=CALIBRATION_STAGE)
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA
+    assert tuple(approval.decisions) == ("D4", "D5", "D6")
+    assert STAGE_SCOPED_EVIDENCE_LINE_SCHEMA.encode() in (
+        approval.decisions["D4"].attestations[0].evidence.file.content
+    )
+
+
+def test_v6_calibration_uses_exact_d1_through_d6(tmp_path):
+    payload = _stage_scoped_payload(
+        tmp_path,
+        stage=CALIBRATION_STAGE,
+        approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA_V6,
+    )
+
+    approval = _validate(tmp_path, payload, stage=CALIBRATION_STAGE)
+
+    assert approval.schema == STAGE_SCOPED_APPROVAL_SCHEMA_V6
+    assert tuple(approval.decisions) == tuple(f"D{index}" for index in range(1, 7))
+    assert STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6.encode() in (
+        approval.decisions["D1"].attestations[0].evidence.file.content
+    )
+
+
+def test_v6_calibration_rejects_d4_through_d6_only(tmp_path):
+    payload = _stage_scoped_payload(
+        tmp_path,
+        stage=CALIBRATION_STAGE,
+        approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA_V6,
+    )
+    payload["decisions"] = payload["decisions"][3:]
+    path, digest = _write_manifest(tmp_path, payload)
+
+    with pytest.raises(RevisionApprovalError, match="must contain exactly"):
+        validate_revision_approval(
+            path,
+            digest,
+            CALIBRATION_STAGE,
+            now=NOW,
+        )
+
+
+def test_v6_calibration_rejects_v5_evidence_marker_replay(tmp_path):
+    payload = _stage_scoped_payload(
+        tmp_path,
+        stage=CALIBRATION_STAGE,
+        approval_schema=STAGE_SCOPED_APPROVAL_SCHEMA_V6,
+    )
+    for approver in APPROVERS:
+        attestation = next(
+            item
+            for item in payload["decisions"][0]["attestations"]
+            if item["approver"] == approver
+        )
+        path = tmp_path / attestation["evidence"]["file"]["path"]
+        attacked = path.read_bytes().replace(
+            STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6.encode(),
+            STAGE_SCOPED_EVIDENCE_LINE_SCHEMA.encode(),
+        )
+        _replace_evidence_bytes(tmp_path, payload, approver, attacked)
+
+    with pytest.raises(RevisionApprovalError, match="must use evidence schema"):
+        _validate(tmp_path, payload, stage=CALIBRATION_STAGE)
 
 
 def test_stage_minimum_decision_matrix_is_exact():
@@ -879,6 +994,10 @@ def test_stage_minimum_decision_matrix_is_exact():
         COMPARATORS_STAGE: ("D4", "D5", "D8"),
         MSK_STAGE: (*d1_to_d5, "D9"),
         RELEASE_STAGE: DECISION_IDS,
+    }
+    assert dict(STAGE_MINIMUM_DECISIONS_V6) == {
+        **STAGE_MINIMUM_DECISIONS,
+        CALIBRATION_STAGE: d1_to_d6,
     }
 
 

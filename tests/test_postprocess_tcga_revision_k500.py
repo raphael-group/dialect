@@ -195,15 +195,18 @@ def _config(tmp_path, *, evidence_sha256, design_path):
 
 
 def _calibration_evidence_payload(config, fit_policy, *, status="certified"):
+    decision_ids = tuple(f"D{index}" for index in range(1, 7))
     return {
         "analysis": "tcga-revision-k500",
         "bmrs": list(postprocess.BMRS),
         "calibration_authority": {
             "approval_manifest_sha256": (config.expected_calibration_approval_sha256),
+            "approval_schema": "dialect-revision-coauthor-approval-v6",
             "authorized_stage": "calibration",
-            "calibration_d6_decision_digest": "9" * 64,
+            "calibration_decision_digests": dict.fromkeys(decision_ids, "9" * 64),
             "compute_authority": asdict(fit_policy.d6.compute_authority),
             "design_authority": asdict(fit_policy.d6.design_authority),
+            "fit_decision_digests": dict.fromkeys(decision_ids, "6" * 64),
             "fit_d6_artifact_sha256": "7" * 64,
             "fit_d6_decision_digest": "6" * 64,
             "fit_d6_payload_sha256": "8" * 64,
@@ -1012,6 +1015,15 @@ def test_writer_rejects_corrupt_derived_receipt_before_staging(tmp_path):
     [
         (("correction_policy", "correction_selection_affected"), True),
         (("upstream", "sealed_completion_manifest_sha256"), "f" * 64),
+        (
+            ("calibration_authority", "calibration_decision_digests"),
+            dict.fromkeys(("D4", "D5", "D6"), "9" * 64),
+        ),
+        (
+            ("calibration_authority", "fit_decision_digests"),
+            dict.fromkeys(("D4", "D5", "D6"), "6" * 64),
+        ),
+        (("schema",), "dialect-tcga-k500-marginal-validity-evidence-v1"),
     ],
 )
 def test_authenticated_evidence_cannot_select_correction_or_swap_upstream(
@@ -1045,8 +1057,10 @@ def test_authenticated_evidence_cannot_select_correction_or_swap_upstream(
     )
     calibration_approval = SimpleNamespace(
         manifest_sha256=config.expected_calibration_approval_sha256,
-        decision_digests={"D6": "9" * 64},
+        schema="dialect-revision-coauthor-approval-v6",
+        decision_digests={f"D{index}": "9" * 64 for index in range(1, 7)},
     )
+    fit_approval.decision_digests = {f"D{index}": "6" * 64 for index in range(1, 7)}
 
     with pytest.raises(postprocess.D5DerivationError, match="invalid authenticated"):
         postprocess._validate_calibration_evidence(  # noqa: SLF001
@@ -1081,10 +1095,12 @@ def test_narrow_calibration_cannot_self_certify_from_pinned_bytes(tmp_path):
             fit_policy=fit_policy,
             fit_approval=SimpleNamespace(
                 manifest_sha256=config.expected_fit_approval_sha256,
+                decision_digests={f"D{index}": "6" * 64 for index in range(1, 7)},
             ),
             calibration_approval=SimpleNamespace(
                 manifest_sha256=config.expected_calibration_approval_sha256,
-                decision_digests={"D6": "9" * 64},
+                schema="dialect-revision-coauthor-approval-v6",
+                decision_digests={f"D{index}": "9" * 64 for index in range(1, 7)},
             ),
         )
 
@@ -1098,7 +1114,9 @@ def test_calibration_stage_authority_rejects_swapped_canonical_root(
         evidence_sha256="a" * 64,
         design_path=(tmp_path / "design.json").resolve(),
     )
+    decision_ids = tuple(f"D{index}" for index in range(1, 7))
     calibration = SimpleNamespace(
+        schema="dialect-revision-coauthor-approval-v6",
         allowed_stages=("calibration",),
         stage_bindings={
             "calibration": {
@@ -1111,6 +1129,8 @@ def test_calibration_stage_authority_rejects_swapped_canonical_root(
                 ),
             },
         },
+        decisions={decision_id: object() for decision_id in decision_ids},
+        decision_digests=dict.fromkeys(decision_ids, "9" * 64),
     )
     monkeypatch.setattr(
         postprocess,
@@ -1118,11 +1138,228 @@ def test_calibration_stage_authority_rejects_swapped_canonical_root(
         lambda *_args, **_kwargs: calibration,
     )
 
-    with pytest.raises(postprocess.D5DerivationError, match="exclusively bind"):
+    with pytest.raises(postprocess.D5DerivationError, match="bound to the sealed"):
         postprocess._validate_calibration_approval(  # noqa: SLF001
             config,
             fit_approval=SimpleNamespace(),
         )
+
+
+def test_calibration_stage_authority_rejects_d4_through_d6_only(
+    tmp_path,
+    monkeypatch,
+):
+    config = _config(
+        tmp_path,
+        evidence_sha256="a" * 64,
+        design_path=(tmp_path / "design.json").resolve(),
+    )
+    decision_ids = ("D4", "D5", "D6")
+    calibration = SimpleNamespace(
+        schema="dialect-revision-coauthor-approval-v6",
+        allowed_stages=("calibration",),
+        stage_bindings={
+            "calibration": {
+                "canonical_input_manifest_sha256": (
+                    config.expected_canonical_input_sha256
+                ),
+                "provider_input_manifest_sha256": (
+                    config.expected_provider_input_manifest_sha256
+                ),
+                "upstream_result_manifest_sha256": (
+                    config.expected_sealed_completion_sha256
+                ),
+            },
+        },
+        decisions={decision_id: object() for decision_id in decision_ids},
+        decision_digests=dict.fromkeys(decision_ids, "9" * 64),
+    )
+    monkeypatch.setattr(
+        postprocess,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: calibration,
+    )
+
+    with pytest.raises(postprocess.D5DerivationError, match="exact singleton"):
+        postprocess._validate_calibration_approval(  # noqa: SLF001
+            config,
+            fit_approval=SimpleNamespace(),
+        )
+
+
+@pytest.mark.parametrize(
+    "legacy_schema",
+    [
+        "dialect-revision-coauthor-approval-v4",
+        "dialect-revision-coauthor-approval-v5",
+    ],
+)
+def test_calibration_stage_authority_rejects_legacy_schema_even_with_d1_d6(
+    tmp_path,
+    monkeypatch,
+    legacy_schema,
+):
+    config = _config(
+        tmp_path,
+        evidence_sha256="a" * 64,
+        design_path=(tmp_path / "design.json").resolve(),
+    )
+    decision_ids = tuple(f"D{index}" for index in range(1, 7))
+    calibration = SimpleNamespace(
+        schema=legacy_schema,
+        allowed_stages=("calibration",),
+        stage_bindings={
+            "calibration": {
+                "canonical_input_manifest_sha256": (
+                    config.expected_canonical_input_sha256
+                ),
+                "provider_input_manifest_sha256": (
+                    config.expected_provider_input_manifest_sha256
+                ),
+                "upstream_result_manifest_sha256": (
+                    config.expected_sealed_completion_sha256
+                ),
+            },
+        },
+        decisions={decision_id: object() for decision_id in decision_ids},
+        decision_digests=dict.fromkeys(decision_ids, "9" * 64),
+    )
+    monkeypatch.setattr(
+        postprocess,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: calibration,
+    )
+
+    with pytest.raises(postprocess.D5DerivationError, match="stage-scoped v6"):
+        postprocess._validate_calibration_approval(  # noqa: SLF001
+            config,
+            fit_approval=SimpleNamespace(),
+        )
+
+
+def test_postprocess_authority_receipt_versions_and_records_calibration_digests(
+    tmp_path,
+    monkeypatch,
+):
+    config = _config(
+        tmp_path,
+        evidence_sha256="a" * 64,
+        design_path=(tmp_path / "design.json").resolve(),
+    )
+    decision_ids = tuple(f"D{index}" for index in range(1, 7))
+    decision_digests = {
+        decision_id: hashlib.sha256(decision_id.encode()).hexdigest()
+        for decision_id in decision_ids
+    }
+    calibration = SimpleNamespace(
+        manifest_sha256=config.expected_calibration_approval_sha256,
+        schema="dialect-revision-coauthor-approval-v6",
+        decision_digests=decision_digests,
+    )
+    monkeypatch.setattr(runner, "_fit_policy_record", lambda _policy: {})
+    record = postprocess._build_authority_record(  # noqa: SLF001
+        config,
+        completion={"grid": {"task_count": 96}},
+        fit_policy=SimpleNamespace(
+            d3=SimpleNamespace(all_three_conjunction_role="secondary"),
+        ),
+        fit_approval=SimpleNamespace(
+            manifest_sha256=config.expected_fit_approval_sha256,
+        ),
+        inspect_approval=SimpleNamespace(
+            manifest_sha256=config.expected_inspect_approval_sha256,
+        ),
+        calibration_approval=calibration,
+        marginal_validity=postprocess.MarginalValidityEvidence("inconclusive"),
+        contract_bytes=(b"{}\n",) * len(postprocess.TCGA_COHORTS),
+    )
+
+    assert record["schema"] == postprocess.POSTPROCESS_AUTHORITY_SCHEMA
+    assert record["contract"] == postprocess.POSTPROCESS_AUTHORITY_CONTRACT
+    assert record["approvals"]["calibration"] == {
+        "path": config.calibration_approval_manifest.as_posix(),
+        "sha256": config.expected_calibration_approval_sha256,
+        "schema": "dialect-revision-coauthor-approval-v6",
+        "authorized_stage": "calibration",
+        "decision_digests": decision_digests,
+    }
+
+
+@pytest.mark.parametrize(
+    "drifted_decision_id",
+    [None, *(f"D{index}" for index in range(1, 7))],
+)
+def test_calibration_stage_authority_requires_exact_d1_through_d6_reauthorization(
+    tmp_path,
+    monkeypatch,
+    drifted_decision_id,
+):
+    config = _config(
+        tmp_path,
+        evidence_sha256="a" * 64,
+        design_path=(tmp_path / "design.json").resolve(),
+    )
+    decision_ids = tuple(f"D{index}" for index in range(1, 7))
+    fit_decisions = {
+        decision_id: SimpleNamespace(marker=f"fit-{decision_id}")
+        for decision_id in decision_ids
+    }
+    calibration_decisions = {
+        decision_id: SimpleNamespace(marker=f"fit-{decision_id}")
+        for decision_id in decision_ids
+    }
+    if drifted_decision_id is not None:
+        calibration_decisions[drifted_decision_id] = SimpleNamespace(
+            marker=f"drifted-{drifted_decision_id}",
+        )
+    calibration = SimpleNamespace(
+        schema="dialect-revision-coauthor-approval-v6",
+        allowed_stages=("calibration",),
+        stage_bindings={
+            "calibration": {
+                "canonical_input_manifest_sha256": (
+                    config.expected_canonical_input_sha256
+                ),
+                "provider_input_manifest_sha256": (
+                    config.expected_provider_input_manifest_sha256
+                ),
+                "upstream_result_manifest_sha256": (
+                    config.expected_sealed_completion_sha256
+                ),
+            },
+        },
+        decisions=calibration_decisions,
+        decision_digests=dict.fromkeys(decision_ids, "9" * 64),
+    )
+    monkeypatch.setattr(
+        postprocess,
+        "validate_revision_approval",
+        lambda *_args, **_kwargs: calibration,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_decision_reauthorization_record",
+        lambda decision: decision.marker,
+    )
+
+    fit_approval = SimpleNamespace(decisions=fit_decisions)
+    if drifted_decision_id is None:
+        assert (
+            postprocess._validate_calibration_approval(  # noqa: SLF001
+                config,
+                fit_approval=fit_approval,
+            )
+            is calibration
+        )
+    else:
+        with pytest.raises(
+            postprocess.D5DerivationError,
+            match=rf"signed {drifted_decision_id}",
+        ):
+            postprocess._validate_calibration_approval(  # noqa: SLF001
+                config,
+                fit_approval=fit_approval,
+            )
 
 
 def test_fit_authority_alone_cannot_open_rows_without_inspect_authority(

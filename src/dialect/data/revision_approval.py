@@ -45,9 +45,16 @@ STAGE_SCOPED_APPROVAL_SCHEMA: Final = "dialect-revision-coauthor-approval-v5"
 STAGE_SCOPED_EVIDENCE_LINE_SCHEMA: Final = "DIALECT-REVISION-DECISION-V5"
 """ASCII TSV prefix for singleton-stage decision attestations."""
 
-APPROVAL_SCHEMAS: Final[tuple[str, str]] = (
+STAGE_SCOPED_APPROVAL_SCHEMA_V6: Final = "dialect-revision-coauthor-approval-v6"
+"""Singleton-stage schema with the strengthened calibration decision set."""
+
+STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6: Final = "DIALECT-REVISION-DECISION-V6"
+"""ASCII TSV prefix for strengthened singleton-stage decision attestations."""
+
+APPROVAL_SCHEMAS: Final[tuple[str, ...]] = (
     APPROVAL_SCHEMA,
     STAGE_SCOPED_APPROVAL_SCHEMA,
+    STAGE_SCOPED_APPROVAL_SCHEMA_V6,
 )
 """Supported approval schemas, oldest first."""
 
@@ -100,7 +107,38 @@ STAGE_MINIMUM_DECISIONS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType
         RELEASE_STAGE: DECISION_IDS,
     },
 )
-"""Minimum signed decisions required before each result-bearing stage."""
+"""Historical v4/v5 minimum decisions for each result-bearing stage."""
+
+STAGE_MINIMUM_DECISIONS_V6: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        **STAGE_MINIMUM_DECISIONS,
+        CALIBRATION_STAGE: tuple(f"D{index}" for index in range(1, 7)),
+    },
+)
+"""Stage minima for v6, with calibration strengthened to exact D1-D6."""
+
+_STAGE_MINIMUM_DECISIONS_BY_SCHEMA: Final[
+    Mapping[str, Mapping[str, tuple[str, ...]]]
+] = MappingProxyType(
+    {
+        APPROVAL_SCHEMA: STAGE_MINIMUM_DECISIONS,
+        STAGE_SCOPED_APPROVAL_SCHEMA: STAGE_MINIMUM_DECISIONS,
+        STAGE_SCOPED_APPROVAL_SCHEMA_V6: STAGE_MINIMUM_DECISIONS_V6,
+    },
+)
+_EVIDENCE_LINE_SCHEMA_BY_APPROVAL_SCHEMA: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        APPROVAL_SCHEMA: EVIDENCE_LINE_SCHEMA,
+        STAGE_SCOPED_APPROVAL_SCHEMA: STAGE_SCOPED_EVIDENCE_LINE_SCHEMA,
+        STAGE_SCOPED_APPROVAL_SCHEMA_V6: STAGE_SCOPED_EVIDENCE_LINE_SCHEMA_V6,
+    },
+)
+_STAGE_SCOPED_APPROVAL_SCHEMAS: Final[frozenset[str]] = frozenset(
+    {
+        STAGE_SCOPED_APPROVAL_SCHEMA,
+        STAGE_SCOPED_APPROVAL_SCHEMA_V6,
+    },
+)
 
 DECISION_ALLOWED_STAGES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
@@ -112,7 +150,11 @@ DECISION_ALLOWED_STAGES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType
         for decision_id in DECISION_IDS
     },
 )
-"""Exact stage authority that each decision record must declare."""
+"""Historical v4 decision-stage matrix.
+
+Stage-scoped v5/v6 decisions instead declare their manifest's exact singleton stage;
+the schema-specific minimum-decision map determines which decisions it contains.
+"""
 
 STAGE_BINDING_KEYS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
@@ -313,12 +355,25 @@ class _EvidenceMarker:
 
 
 def _evidence_line_schema(approval_schema: str) -> str:
-    if approval_schema == APPROVAL_SCHEMA:
-        return EVIDENCE_LINE_SCHEMA
-    if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA:
-        return STAGE_SCOPED_EVIDENCE_LINE_SCHEMA
-    msg = f"Unsupported approval schema: {approval_schema!r}."
-    raise RevisionApprovalError(msg)
+    try:
+        return _EVIDENCE_LINE_SCHEMA_BY_APPROVAL_SCHEMA[approval_schema]
+    except KeyError as error:
+        msg = f"Unsupported approval schema: {approval_schema!r}."
+        raise RevisionApprovalError(msg) from error
+
+
+def _stage_minimum_decisions(
+    approval_schema: str,
+) -> Mapping[str, tuple[str, ...]]:
+    try:
+        return _STAGE_MINIMUM_DECISIONS_BY_SCHEMA[approval_schema]
+    except KeyError as error:
+        msg = f"Unsupported approval schema: {approval_schema!r}."
+        raise RevisionApprovalError(msg) from error
+
+
+def _is_stage_scoped_schema(approval_schema: str) -> bool:
+    return approval_schema in _STAGE_SCOPED_APPROVAL_SCHEMAS
 
 
 def _decision_ids_for_schema(
@@ -327,16 +382,16 @@ def _decision_ids_for_schema(
 ) -> tuple[str, ...]:
     if approval_schema == APPROVAL_SCHEMA:
         return DECISION_IDS
-    if approval_schema != STAGE_SCOPED_APPROVAL_SCHEMA:
-        msg = f"Unsupported approval schema: {approval_schema!r}."
-        raise RevisionApprovalError(msg)
+    stage_minimum_decisions = _stage_minimum_decisions(approval_schema)
     if len(allowed_stages) != 1:
+        version = "v5" if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA else "v6"
         msg = (
-            "Stage-scoped approval schema v5 requires exactly one allowed stage; "
+            f"Stage-scoped approval schema {version} requires exactly one "
+            "allowed stage; "
             f"observed {list(allowed_stages)}."
         )
         raise RevisionApprovalError(msg)
-    return STAGE_MINIMUM_DECISIONS[allowed_stages[0]]
+    return stage_minimum_decisions[allowed_stages[0]]
 
 
 def compute_decision_authority_sha256(
@@ -390,8 +445,9 @@ def canonical_decision_evidence_line(
 
     Under historical v4, a separate coauthor email or machine record may contain
     prose and multiple such lines, with markers in canonical approver/D1-D10
-    order.  Under stage-scoped v5, each coauthor machine record must instead be
-    exactly the complete ordered minimum-decision lines plus one trailing LF.
+    order.  Under stage-scoped v5/v6, each coauthor machine record must instead
+    be exactly the complete ordered schema-specific minimum-decision lines plus
+    one trailing LF.
 
     Args:
         decision: Exact authority fields, optionally as a full decision object.
@@ -490,6 +546,7 @@ def validate_revision_approval(
     if schema not in APPROVAL_SCHEMAS:
         msg = f"Unsupported approval schema: {schema!r}."
         raise RevisionApprovalError(msg)
+    stage_minimum_decisions = _stage_minimum_decisions(schema)
 
     allowed_stages = _parse_stage_list(
         manifest["allowed_stages"],
@@ -521,11 +578,12 @@ def validate_revision_approval(
         source_notice,
         parsed_decisions,
     )
-    if schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+    if _is_stage_scoped_schema(schema):
         _require_stage_scoped_evidence_closure(
             parsed_decisions,
             expected_decision_ids,
             source_notice,
+            evidence_line_schema=_evidence_line_schema(schema),
         )
     materialize_binding = stage_bindings.get(MATERIALIZE_FINAL_INPUTS_STAGE)
     if materialize_binding is not None and (
@@ -545,7 +603,7 @@ def validate_revision_approval(
         for stage in allowed_stages
         if all(
             parsed_decisions[decision_id].disposition == GO_DISPOSITION
-            for decision_id in STAGE_MINIMUM_DECISIONS[stage]
+            for decision_id in stage_minimum_decisions[stage]
         )
     )
     invalid_authorizations = tuple(
@@ -561,7 +619,7 @@ def validate_revision_approval(
         msg = f"Approval manifest does not authorize stage {required_stage!r}."
         raise RevisionApprovalError(msg)
 
-    required_decisions = STAGE_MINIMUM_DECISIONS[required_stage]
+    required_decisions = stage_minimum_decisions[required_stage]
     for decision_id in required_decisions:
         decision = parsed_decisions[decision_id]
         if (
@@ -683,6 +741,8 @@ def _require_stage_scoped_evidence_closure(
     decisions: Mapping[str, DecisionApproval],
     expected_decision_ids: tuple[str, ...],
     source_notice: SourceNotice,
+    *,
+    evidence_line_schema: str,
 ) -> None:
     """Require one identical complete evidence record per approver across decisions."""
     first_decision = decisions[expected_decision_ids[0]]
@@ -726,7 +786,7 @@ def _require_stage_scoped_evidence_closure(
                 raise RevisionApprovalError(msg)
         expected_lines = [
             _format_evidence_line(
-                evidence_line_schema=STAGE_SCOPED_EVIDENCE_LINE_SCHEMA,
+                evidence_line_schema=evidence_line_schema,
                 approver=approver,
                 decision_id=decision_id,
                 disposition=decisions[decision_id].disposition,
@@ -823,9 +883,7 @@ def _parse_decision(  # noqa: PLR0913
 ) -> DecisionApproval:
     _require_exact_keys(value, set(_DECISION_KEYS), label)
     expected_allowed_stages = (
-        manifest_allowed_stages
-        if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA
-        else None
+        manifest_allowed_stages if _is_stage_scoped_schema(approval_schema) else None
     )
     authority = _parse_decision_authority(
         value,
@@ -867,7 +925,7 @@ def _parse_decision(  # noqa: PLR0913
             evidence_line_schema=_evidence_line_schema(approval_schema),
             exact_evidence_decisions=(
                 expected_decision_ids
-                if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA
+                if _is_stage_scoped_schema(approval_schema)
                 else None
             ),
         ),
@@ -912,7 +970,7 @@ def _parse_public_decision_authority(
         _require_exact_keys(decision, expected, "decision")
     _evidence_line_schema(approval_schema)
     expected_allowed_stages: tuple[str, ...] | None = None
-    if approval_schema == STAGE_SCOPED_APPROVAL_SCHEMA:
+    if _is_stage_scoped_schema(approval_schema):
         raw_manifest_stages = _parse_stage_list(
             decision.get("manifest_allowed_stages"),
             "decision.manifest_allowed_stages",

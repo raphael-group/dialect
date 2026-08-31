@@ -64,6 +64,8 @@ from dialect.data.revision_approval import (
     FIT_SEALED_TCGA_K500_STAGE,
     INSPECT_TCGA_K500_STAGE,
     MATERIALIZE_FINAL_INPUTS_STAGE,
+    STAGE_MINIMUM_DECISIONS_V6,
+    STAGE_SCOPED_APPROVAL_SCHEMA_V6,
     RevisionApproval,
     validate_revision_approval,
 )
@@ -112,11 +114,16 @@ RELEASE_SCHEMA: Final = "dialect-tcga-k500-d5-postprocess-release-v1"
 RELEASE_CONTRACT: Final = "sealed-whole-grid-no-replace-publication-v1"
 
 MARGINAL_VALIDITY_EVIDENCE_SCHEMA: Final = (
-    "dialect-tcga-k500-marginal-validity-evidence-v1"
+    "dialect-tcga-k500-marginal-validity-evidence-v2"
 )
 MARGINAL_VALIDITY_EVIDENCE_CONTRACT: Final = (
-    "signed-d6-complete-family-validity-gate-v1"
+    "signed-d1-d6-complete-family-validity-gate-v2"
 )
+POSTPROCESS_AUTHORITY_SCHEMA: Final = "dialect-tcga-k500-postprocess-authority-v2"
+POSTPROCESS_AUTHORITY_CONTRACT: Final = (
+    "pinned-roots-sealed-grid-signed-d1-d6-evidence-v2"
+)
+CALIBRATION_DECISION_IDS: Final = STAGE_MINIMUM_DECISIONS_V6[CALIBRATION_STAGE]
 
 MARGINAL_VALIDITY_CERTIFIED: Final = "certified"
 MARGINAL_VALIDITY_BLOCKING: Final = frozenset(
@@ -715,13 +722,19 @@ def _validate_calibration_approval(
         "upstream_result_manifest_sha256": (config.expected_sealed_completion_sha256),
     }
     if (
-        approval.allowed_stages != (CALIBRATION_STAGE,)
+        approval.schema != STAGE_SCOPED_APPROVAL_SCHEMA_V6
+        or approval.allowed_stages != (CALIBRATION_STAGE,)
         or set(approval.stage_bindings) != {CALIBRATION_STAGE}
         or dict(approval.stage_bindings[CALIBRATION_STAGE]) != expected_binding
+        or tuple(approval.decisions) != CALIBRATION_DECISION_IDS
+        or tuple(approval.decision_digests) != CALIBRATION_DECISION_IDS
     ):
-        msg = "Calibration approval does not exclusively bind the sealed K=500 run."
+        msg = (
+            "Calibration approval must be an exact singleton stage-scoped v6 "
+            "D1-D6 authority bound to the sealed K=500 run."
+        )
         raise D5DerivationError(msg)
-    for decision_id in ("D4", "D5", "D6"):
+    for decision_id in CALIBRATION_DECISION_IDS:
         if runner._decision_reauthorization_record(  # noqa: SLF001
             fit_approval.decisions[decision_id],
         ) != runner._decision_reauthorization_record(  # noqa: SLF001
@@ -831,10 +844,18 @@ def _validate_calibration_evidence(
     upstream = artifact.get("upstream")
     expected_calibration_authority = {
         "approval_manifest_sha256": calibration_approval.manifest_sha256,
+        "approval_schema": calibration_approval.schema,
         "authorized_stage": CALIBRATION_STAGE,
-        "calibration_d6_decision_digest": calibration_approval.decision_digests["D6"],
+        "calibration_decision_digests": {
+            decision_id: calibration_approval.decision_digests[decision_id]
+            for decision_id in CALIBRATION_DECISION_IDS
+        },
         "compute_authority": compute,
         "design_authority": design,
+        "fit_decision_digests": {
+            decision_id: fit_approval.decision_digests[decision_id]
+            for decision_id in CALIBRATION_DECISION_IDS
+        },
         "fit_d6_artifact_sha256": fit_policy.receipts["D6"].canonical_artifact_sha256,
         "fit_d6_decision_digest": fit_policy.receipts["D6"].decision_digest,
         "fit_d6_payload_sha256": fit_policy.receipts["D6"].payload_sha256,
@@ -929,8 +950,8 @@ def _build_authority_record(  # noqa: PLR0913
     contract_bytes: tuple[bytes, ...],
 ) -> dict[str, object]:
     return {
-        "schema": "dialect-tcga-k500-postprocess-authority-v1",
-        "contract": "pinned-roots-sealed-grid-signed-d3-d6-evidence-v1",
+        "schema": POSTPROCESS_AUTHORITY_SCHEMA,
+        "contract": POSTPROCESS_AUTHORITY_CONTRACT,
         "analysis": "tcga-revision-k500",
         "top_k": TOP_K,
         "cohorts": list(TCGA_COHORTS),
@@ -964,7 +985,9 @@ def _build_authority_record(  # noqa: PLR0913
                 else {
                     "path": config.calibration_approval_manifest.as_posix(),
                     "sha256": calibration_approval.manifest_sha256,
+                    "schema": calibration_approval.schema,
                     "authorized_stage": CALIBRATION_STAGE,
+                    "decision_digests": dict(calibration_approval.decision_digests),
                 }
             ),
         },
@@ -1037,7 +1060,8 @@ def _require_validated_authority(authority: ValidatedPostprocessAuthority) -> No
     }
     if (
         set(record) != expected_record_keys
-        or record.get("schema") != "dialect-tcga-k500-postprocess-authority-v1"
+        or record.get("schema") != POSTPROCESS_AUTHORITY_SCHEMA
+        or record.get("contract") != POSTPROCESS_AUTHORITY_CONTRACT
         or record.get("analysis") != "tcga-revision-k500"
         or record.get("top_k") != TOP_K
         or record.get("cohorts") != list(TCGA_COHORTS)
@@ -1048,7 +1072,7 @@ def _require_validated_authority(authority: ValidatedPostprocessAuthority) -> No
         )
         or record.get("d3_conjunction_role") != CONJUNCTION_SECONDARY
     ):
-        msg = "Production authority record is not the validated D3-D6 K=500 record."
+        msg = "Production authority record is not the validated D1-D6 K=500 record."
         raise D5DerivationError(msg)
     _validate_signed_hierarchy(authority.fit_policy.d3)
     _validate_policy(authority.fit_policy.d5)
