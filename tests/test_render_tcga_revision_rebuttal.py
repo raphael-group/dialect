@@ -1974,15 +1974,17 @@ def test_full_synthetic_build_and_independent_replay(
         assert "/Users/" not in json.dumps(manifest, sort_keys=True)
         assert manifest["claims"]["human_visual_approval"] == "required-separately"
         assert manifest["integration"] == {
-            "four_role_derivation_adapter_protocol": "not-implemented",
+            "four_role_derivation_adapter_protocol": (
+                "renderer-fd-stdout-derive-mode-implemented"
+            ),
             "schema_compatibility_with_derivation_closure": False,
             "rebuttal_role_gate": "not-cleared-by-this-renderer",
             "promotion_gate": "not-cleared-by-this-renderer",
             "future_seam": (
-                "reviewed native thin-arm64 adapter streams this renderer's "
-                "deterministic PDF bytes into the fixed four-role derivation "
-                "closure; downstream promotion separately binds derivation, "
-                "machine replay, and authenticated page-complete visual approval"
+                "reviewed native thin-arm64 launcher invokes this renderer's "
+                "fixed bundle-FD/stdout mode; downstream promotion separately "
+                "binds derivation, machine replay, and authenticated page-complete "
+                "visual approval"
             ),
         }
 

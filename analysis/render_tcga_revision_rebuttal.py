@@ -17,16 +17,21 @@ document machine-closure runner.  Python stdlib/dylibs and native dylib closure
 remain explicitly unattested, and machine checks do not replace page-complete
 human visual review.
 
-This Python CLI is intentionally not the fixed native adapter protocol consumed
-by the four-role derivation closure.  A separately reviewed thin-arm64 adapter
-must stream these deterministic bytes into that closure, and a later promotion
-closure must bind derivation, native replay, and authenticated visual approval.
+The CLI also accepts the fixed four-role derivation argument shape.  That mode
+reads one canonical bundle only from an inherited read-only descriptor,
+regenerates the PDF through this same production path, requires the exact
+expected renderer manifest and PDF hashes, and emits only PDF bytes on stdout.
+A separately reviewed thin-arm64 launcher and authority receipt are still
+required before the four-role closure can treat this as a real producer.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import ctypes
+import fcntl
 import hashlib
 import html
 import io
@@ -57,6 +62,12 @@ SCHEMA: Final = "dialect-revision-rebuttal-render-v1"
 CONTRACT: Final = "descriptor-rooted-reportlab-invariant-double-build-v1"
 TEMPLATE_SCHEMA: Final = "dialect-revision-rebuttal-template-v1"
 CONFIG_SCHEMA: Final = "dialect-revision-rebuttal-config-v1"
+DERIVATION_BUNDLE_SCHEMA: Final = "dialect-revision-rebuttal-derivation-bundle-v1"
+DERIVATION_BUNDLE_CONTRACT: Final = (
+    "canonical-inputs-pinned-renderer-fresh-pdf-derivation-v1"
+)
+DERIVATION_PROTOCOL: Final = "dialect-pdf-derivation-fd-protocol-v1"
+DERIVATION_ROLE: Final = "rebuttal"
 MANIFEST_MEMBER: Final = "render-receipt.json"
 PDF_MEMBER: Final = "response-to-reviewers.pdf"
 SOURCE_MEMBER: Final = "source.canonical.md"
@@ -77,6 +88,7 @@ MAX_SOURCE_BYTES: Final = 4 * 1024 * 1024
 MAX_PRIVACY_CLASSIFIER_BYTES: Final = 16 * 1024 * 1024
 MAX_JSON_BYTES: Final = 128 * 1024
 MAX_MANIFEST_BYTES: Final = 4 * 1024 * 1024
+MAX_DERIVATION_BUNDLE_BYTES: Final = 8 * 1024 * 1024
 MAX_FONT_BYTES: Final = 32 * 1024 * 1024
 MAX_MACHINE_RUNNER_BYTES: Final = 8 * 1024 * 1024
 MAX_PDF_BYTES: Final = 32 * 1024 * 1024
@@ -99,6 +111,44 @@ TOOL_TIMEOUT_SECONDS: Final = 120.0
 MAX_FDS: Final = 40
 READ_CHUNK_BYTES: Final = 64 * 1024
 REPORTLAB_INVARIANT_EPOCH: Final = 946684800  # 2000-01-01 00:00:00 UTC
+
+DERIVATION_LOCATORS: Final = {
+    "renderer": "current-renderer",
+    "machine_runner": "renderer-sibling-machine-runner",
+    "runtime": "invoking-python",
+    "reportlab": "invoking-python-reportlab",
+    "regular_font": "system-arial-unicode",
+    "bold_font": "system-arial-bold",
+    "pdfinfo": "homebrew-pdfinfo",
+    "pdffonts": "homebrew-pdffonts",
+    "pdftotext": "homebrew-pdftotext",
+}
+DERIVATION_FIXED_LOCATOR_PATHS: Final = {
+    "system-arial-unicode": Path(
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+    ),
+    "system-arial-bold": Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    "homebrew-pdfinfo": Path("/opt/homebrew/bin/pdfinfo"),
+    "homebrew-pdffonts": Path("/opt/homebrew/bin/pdffonts"),
+    "homebrew-pdftotext": Path("/opt/homebrew/bin/pdftotext"),
+}
+DERIVATION_NON_INFERENCE: Final = {
+    "adapter_source_review": "not-inferred",
+    "ambient_same_uid_filesystem_containment": "not-provided",
+    "decoded_canonical_input_private_paths": (
+        "rejected-as-utf8-text-without-recursive-decoding"
+    ),
+    "child_tool_and_dylib_closure": "not-attested",
+    "coauthor_or_submission_approval": "not-inferred",
+    "human_visual_approval": "required-separately",
+    "journal_acceptance_or_upload": "not-inferred",
+    "loaded_python_code_identity": "path-bytes-pinned-after-bootstrap-only",
+    "native_adapter_authority": "not-provided-by-this-bundle",
+    "pre_rendered_pdf_member": "absent",
+    "producer_pdf_input": "none",
+    "recursive_content_classification": "not-provided",
+    "scientific_accuracy": "not-inferred",
+}
 
 SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
 TOKEN_RE: Final = re.compile(r"[a-z0-9][a-z0-9._-]{2,127}")
@@ -398,6 +448,419 @@ def _expect_string(value: object, *, context: str, maximum: int = 500) -> str:
         _fail(f"{context} must be a nonempty canonical single-line string")
     _validate_unicode(value, context=context)
     return value
+
+
+def _expect_bounded_int(
+    value: object,
+    *,
+    context: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not minimum <= value <= maximum
+    ):
+        _fail(f"{context} must be an integer in [{minimum}, {maximum}]")
+    return value
+
+
+def _decode_canonical_base64(
+    value: object,
+    *,
+    context: str,
+    maximum: int,
+) -> bytes:
+    encoded = _expect_string(
+        value,
+        context=f"{context}.base64",
+        maximum=((maximum + 2) // 3) * 4,
+    )
+    try:
+        raw = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error) as error:
+        _fail(f"{context}.base64 is not strict base64: {error}")
+    if len(raw) > maximum:
+        _fail(f"{context} exceeds its decoded byte limit")
+    if base64.b64encode(raw).decode("ascii") != encoded:
+        _fail(f"{context}.base64 is not canonical")
+    return raw
+
+
+def _normalize_derivation_input(
+    value: object,
+    *,
+    member: str,
+    maximum: int,
+) -> tuple[dict[str, object], bytes]:
+    context = f"derivation bundle input {member}"
+    record = _expect_keys(
+        value,
+        {"member", "encoding", "bytes", "sha256", "base64"},
+        context=context,
+    )
+    if record["member"] != member or record["encoding"] != "base64":
+        _fail(f"{context} member or encoding is invalid")
+    raw = _decode_canonical_base64(record["base64"], context=context, maximum=maximum)
+    _reject_private_paths_in_canonical_member(raw, member=member)
+    size = _expect_bounded_int(
+        record["bytes"],
+        context=f"{context}.bytes",
+        minimum=1,
+        maximum=maximum,
+    )
+    digest = _expect_sha256(record["sha256"], context=f"{context}.sha256")
+    if len(raw) != size or _sha256(raw) != digest:
+        _fail(f"{context} does not match its size and SHA-256 anchors")
+    return (
+        {
+            "member": member,
+            "encoding": "base64",
+            "bytes": size,
+            "sha256": digest,
+            "base64": base64.b64encode(raw).decode("ascii"),
+        },
+        raw,
+    )
+
+
+def _normalize_derivation_file_anchor(
+    value: object,
+    *,
+    context: str,
+    locator: str,
+    maximum: int,
+    member: str | None = None,
+) -> dict[str, object]:
+    keys = {"locator", "bytes", "sha256"}
+    if member is not None:
+        keys.add("member")
+    record = _expect_keys(value, keys, context=context)
+    if record["locator"] != locator:
+        _fail(f"{context}.locator is invalid")
+    if member is not None and record["member"] != member:
+        _fail(f"{context}.member is invalid")
+    size = _expect_bounded_int(
+        record["bytes"],
+        context=f"{context}.bytes",
+        minimum=1,
+        maximum=maximum,
+    )
+    digest = _expect_sha256(record["sha256"], context=f"{context}.sha256")
+    normalized: dict[str, object] = {
+        "locator": locator,
+        "bytes": size,
+        "sha256": digest,
+    }
+    if member is not None:
+        normalized["member"] = member
+    return normalized
+
+
+def _normalize_derivation_bundle(value: object) -> dict[str, object]:
+    """Validate one canonical rebuttal source bundle with no PDF input member."""
+    record = _expect_keys(
+        value,
+        {
+            "schema",
+            "contract",
+            "release_id",
+            "role",
+            "producer_protocol",
+            "producer_arguments",
+            "canonical_inputs",
+            "dependencies",
+            "expected_output",
+            "non_inference",
+        },
+        context="derivation bundle",
+    )
+    if (
+        record["schema"] != DERIVATION_BUNDLE_SCHEMA
+        or record["contract"] != DERIVATION_BUNDLE_CONTRACT
+        or record["role"] != DERIVATION_ROLE
+        or record["producer_protocol"] != DERIVATION_PROTOCOL
+    ):
+        _fail("derivation bundle schema, contract, role, or protocol is invalid")
+    release_id = _expect_token(record["release_id"], context="bundle.release_id")
+    expected_arguments = [
+        "--dialect-derivation-protocol",
+        DERIVATION_PROTOCOL,
+        "--pdf-id",
+        DERIVATION_ROLE,
+        "--source-fd",
+        "{source_fd}",
+        "--pdf-output",
+        "stdout",
+    ]
+    if record["producer_arguments"] != expected_arguments:
+        _fail("derivation bundle producer_arguments drifted")
+
+    raw_inputs = record["canonical_inputs"]
+    if not isinstance(raw_inputs, list) or len(raw_inputs) != 3:
+        _fail("derivation bundle canonical_inputs must contain exactly three members")
+    normalized_inputs: list[dict[str, object]] = []
+    decoded: dict[str, bytes] = {}
+    for index, (member, maximum) in enumerate(
+        (
+            (SOURCE_MEMBER, MAX_SOURCE_BYTES),
+            (TEMPLATE_MEMBER, MAX_JSON_BYTES),
+            (CONFIG_MEMBER, MAX_JSON_BYTES),
+        ),
+    ):
+        normalized, raw = _normalize_derivation_input(
+            raw_inputs[index],
+            member=member,
+            maximum=maximum,
+        )
+        normalized_inputs.append(normalized)
+        decoded[member] = raw
+    source = decoded[SOURCE_MEMBER]
+    template_raw = decoded[TEMPLATE_MEMBER]
+    config_raw = decoded[CONFIG_MEMBER]
+    if _canonicalize_markdown(source) != source:
+        _fail("bundle Markdown input is not canonical")
+    template = _normalize_template(
+        _json_without_duplicates(template_raw, context="bundle template")
+    )
+    config = _normalize_config(
+        _json_without_duplicates(config_raw, context="bundle config")
+    )
+    if _canonical_json(template) != template_raw:
+        _fail("bundle template input is not canonical JSON")
+    if _canonical_json(config) != config_raw:
+        _fail("bundle config input is not canonical JSON")
+    if config["release_id"] != release_id:
+        _fail("bundle config release_id does not match the bundle")
+    audit = _parse_markdown(source)
+    _validate_title_binding(audit, config)
+
+    dependencies = _expect_keys(
+        record["dependencies"],
+        {"renderer", "machine_runner", "runtime", "tools", "fonts", "reportlab"},
+        context="bundle.dependencies",
+    )
+    renderer_anchor = _normalize_derivation_file_anchor(
+        dependencies["renderer"],
+        context="bundle.dependencies.renderer",
+        locator=DERIVATION_LOCATORS["renderer"],
+        maximum=MAX_SOURCE_BYTES,
+        member="analysis/render_tcga_revision_rebuttal.py",
+    )
+    runner_anchor = _normalize_derivation_file_anchor(
+        dependencies["machine_runner"],
+        context="bundle.dependencies.machine_runner",
+        locator=DERIVATION_LOCATORS["machine_runner"],
+        maximum=MAX_MACHINE_RUNNER_BYTES,
+        member=MACHINE_RUNNER_MEMBER,
+    )
+    runtime = _expect_keys(
+        dependencies["runtime"],
+        {"locator", "python_tag", "bytes", "sha256"},
+        context="bundle.dependencies.runtime",
+    )
+    if runtime["locator"] != DERIVATION_LOCATORS["runtime"]:
+        _fail("bundle.dependencies.runtime.locator is invalid")
+    python_tag = _expect_string(
+        runtime["python_tag"],
+        context="bundle.dependencies.runtime.python_tag",
+        maximum=8,
+    )
+    if re.fullmatch(r"3\.[0-9]{1,2}", python_tag) is None:
+        _fail("bundle.dependencies.runtime.python_tag is invalid")
+    runtime_anchor = {
+        "locator": DERIVATION_LOCATORS["runtime"],
+        "python_tag": python_tag,
+        "bytes": _expect_bounded_int(
+            runtime["bytes"],
+            context="bundle.dependencies.runtime.bytes",
+            minimum=1,
+            maximum=128 * 1024 * 1024,
+        ),
+        "sha256": _expect_sha256(
+            runtime["sha256"], context="bundle.dependencies.runtime.sha256"
+        ),
+    }
+
+    tools = dependencies["tools"]
+    if not isinstance(tools, list) or len(tools) != len(TOOL_ORDER) - 1:
+        _fail("bundle.dependencies.tools has the wrong cardinality")
+    normalized_tools: list[dict[str, object]] = []
+    for index, name in enumerate(TOOL_ORDER[1:]):
+        context = f"bundle.dependencies.tools[{index}]"
+        item = _expect_keys(
+            tools[index], {"name", "locator", "bytes", "sha256"}, context=context
+        )
+        if item["name"] != name:
+            _fail(f"{context}.name is not in fixed tool order")
+        anchor = _normalize_derivation_file_anchor(
+            {key: item[key] for key in ("locator", "bytes", "sha256")},
+            context=context,
+            locator=DERIVATION_LOCATORS[name],
+            maximum=128 * 1024 * 1024,
+        )
+        normalized_tools.append({"name": name, **anchor})
+
+    fonts = dependencies["fonts"]
+    if not isinstance(fonts, list) or len(fonts) != 2:
+        _fail("bundle.dependencies.fonts must contain two roles")
+    normalized_fonts: list[dict[str, object]] = []
+    for index, role in enumerate(("regular", "bold")):
+        context = f"bundle.dependencies.fonts[{index}]"
+        item = _expect_keys(
+            fonts[index],
+            {"role", "locator", "bytes", "sha256", "postscript_name"},
+            context=context,
+        )
+        if item["role"] != role:
+            _fail(f"{context}.role is not in fixed font order")
+        anchor = _normalize_derivation_file_anchor(
+            {key: item[key] for key in ("locator", "bytes", "sha256")},
+            context=context,
+            locator=DERIVATION_LOCATORS[f"{role}_font"],
+            maximum=MAX_FONT_BYTES,
+        )
+        postscript_name = _expect_string(
+            item["postscript_name"],
+            context=f"{context}.postscript_name",
+            maximum=127,
+        )
+        _reject_private_paths(postscript_name, context=f"{context}.postscript_name")
+        normalized_fonts.append(
+            {"role": role, **anchor, "postscript_name": postscript_name}
+        )
+    if normalized_fonts[0]["sha256"] == normalized_fonts[1]["sha256"]:
+        _fail("bundle font roles must bind distinct bytes")
+
+    reportlab = _expect_keys(
+        dependencies["reportlab"],
+        {
+            "locator",
+            "tree_sha256",
+            "file_count",
+            "directory_count",
+            "entry_count",
+            "total_bytes",
+            "bundle_sha256",
+            "bundle_bytes",
+        },
+        context="bundle.dependencies.reportlab",
+    )
+    if reportlab["locator"] != DERIVATION_LOCATORS["reportlab"]:
+        _fail("bundle.dependencies.reportlab.locator is invalid")
+    normalized_reportlab = {
+        "locator": DERIVATION_LOCATORS["reportlab"],
+        "tree_sha256": _expect_sha256(
+            reportlab["tree_sha256"],
+            context="bundle.dependencies.reportlab.tree_sha256",
+        ),
+        "file_count": _expect_bounded_int(
+            reportlab["file_count"],
+            context="bundle.dependencies.reportlab.file_count",
+            minimum=1,
+            maximum=MAX_REPORTLAB_FILES,
+        ),
+        "directory_count": _expect_bounded_int(
+            reportlab["directory_count"],
+            context="bundle.dependencies.reportlab.directory_count",
+            minimum=1,
+            maximum=MAX_REPORTLAB_DIRECTORIES,
+        ),
+        "entry_count": _expect_bounded_int(
+            reportlab["entry_count"],
+            context="bundle.dependencies.reportlab.entry_count",
+            minimum=1,
+            maximum=MAX_REPORTLAB_ENTRIES,
+        ),
+        "total_bytes": _expect_bounded_int(
+            reportlab["total_bytes"],
+            context="bundle.dependencies.reportlab.total_bytes",
+            minimum=1,
+            maximum=MAX_REPORTLAB_BYTES,
+        ),
+        "bundle_sha256": _expect_sha256(
+            reportlab["bundle_sha256"],
+            context="bundle.dependencies.reportlab.bundle_sha256",
+        ),
+        "bundle_bytes": _expect_bounded_int(
+            reportlab["bundle_bytes"],
+            context="bundle.dependencies.reportlab.bundle_bytes",
+            minimum=1,
+            maximum=MAX_REPORTLAB_BUNDLE_BYTES,
+        ),
+    }
+    if normalized_reportlab["entry_count"] < normalized_reportlab["file_count"]:
+        _fail("bundle ReportLab entry count is smaller than its file count")
+
+    expected_output = _expect_keys(
+        record["expected_output"],
+        {"renderer_manifest", "pdf"},
+        context="bundle.expected_output",
+    )
+    expected_manifest = _expect_keys(
+        expected_output["renderer_manifest"],
+        {"member", "bytes", "sha256"},
+        context="bundle.expected_output.renderer_manifest",
+    )
+    if expected_manifest["member"] != MANIFEST_MEMBER:
+        _fail("bundle expected renderer manifest member is invalid")
+    normalized_manifest = {
+        "member": MANIFEST_MEMBER,
+        "bytes": _expect_bounded_int(
+            expected_manifest["bytes"],
+            context="bundle.expected_output.renderer_manifest.bytes",
+            minimum=1,
+            maximum=MAX_MANIFEST_BYTES,
+        ),
+        "sha256": _expect_sha256(
+            expected_manifest["sha256"],
+            context="bundle.expected_output.renderer_manifest.sha256",
+        ),
+    }
+    expected_pdf = _expect_keys(
+        expected_output["pdf"],
+        {"member", "bytes", "sha256"},
+        context="bundle.expected_output.pdf",
+    )
+    if expected_pdf["member"] != PDF_MEMBER:
+        _fail("bundle expected PDF member is invalid")
+    normalized_pdf = {
+        "member": PDF_MEMBER,
+        "bytes": _expect_bounded_int(
+            expected_pdf["bytes"],
+            context="bundle.expected_output.pdf.bytes",
+            minimum=len(PDF_SIGNATURE) + len(PDF_EOF),
+            maximum=MAX_PDF_BYTES,
+        ),
+        "sha256": _expect_sha256(
+            expected_pdf["sha256"], context="bundle.expected_output.pdf.sha256"
+        ),
+    }
+    if record["non_inference"] != DERIVATION_NON_INFERENCE:
+        _fail("derivation bundle non-inference limits drifted")
+    return {
+        "schema": DERIVATION_BUNDLE_SCHEMA,
+        "contract": DERIVATION_BUNDLE_CONTRACT,
+        "release_id": release_id,
+        "role": DERIVATION_ROLE,
+        "producer_protocol": DERIVATION_PROTOCOL,
+        "producer_arguments": expected_arguments,
+        "canonical_inputs": normalized_inputs,
+        "dependencies": {
+            "renderer": renderer_anchor,
+            "machine_runner": runner_anchor,
+            "runtime": runtime_anchor,
+            "tools": normalized_tools,
+            "fonts": normalized_fonts,
+            "reportlab": normalized_reportlab,
+        },
+        "expected_output": {
+            "renderer_manifest": normalized_manifest,
+            "pdf": normalized_pdf,
+        },
+        "non_inference": dict(DERIVATION_NON_INFERENCE),
+    }
 
 
 def _expect_keys(
@@ -710,6 +1173,12 @@ def _reject_private_paths(value: str, *, context: str) -> None:
     )
     if any(pattern.search(classifier) is not None for pattern in private_patterns):
         _fail(f"{context} contains a private absolute, home, file, or traversal path")
+
+
+def _reject_private_paths_in_canonical_member(raw: bytes, *, member: str) -> None:
+    """Scan one decoded canonical member as UTF-8 text without recursive decoding."""
+    text = _decode_utf8(raw, context=f"decoded canonical input {member}")
+    _reject_private_paths(text, context=f"decoded canonical input {member}")
 
 
 def _reject_unresolved_or_unsafe(markdown: str) -> None:
@@ -2380,6 +2849,102 @@ def _pin_inputs(
         _raise_machine_failure("cannot pin renderer inputs", error)
 
 
+def _resolve_fixed_derivation_locator(locator: str) -> Path:
+    if locator not in DERIVATION_FIXED_LOCATOR_PATHS:
+        _fail(f"unknown fixed derivation locator {locator!r}")
+    try:
+        return DERIVATION_FIXED_LOCATOR_PATHS[locator].resolve(strict=True)
+    except OSError as error:
+        _fail(f"cannot resolve fixed derivation locator {locator!r}: {error}")
+
+
+def _derive_reportlab_path(runtime: Path, python_tag: str) -> Path:
+    candidate = (
+        runtime.parent.parent
+        / "lib"
+        / f"python{python_tag}"
+        / "site-packages"
+        / "reportlab"
+    ).absolute()
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        _fail(f"cannot resolve invoking-Python ReportLab locator: {error}")
+    if resolved != candidate:
+        _fail("invoking-Python ReportLab locator is not canonical")
+    return resolved
+
+
+def _pin_derivation_dependencies(
+    bundle: Mapping[str, object],
+) -> tuple[dict[str, object], Path]:
+    dependencies = bundle["dependencies"]
+    runtime_record = dependencies["runtime"]
+    python_tag = str(runtime_record["python_tag"])
+    running_tag = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if python_tag != running_tag:
+        _fail("derivation bundle Python tag does not match the invoking runtime")
+    try:
+        runtime = Path(sys.executable).resolve(strict=True)
+    except OSError as error:
+        _fail(f"cannot resolve the invoking Python runtime: {error}")
+    reportlab_root = _derive_reportlab_path(runtime, python_tag)
+    fonts = {str(item["role"]): item for item in dependencies["fonts"]}
+    tools = {str(item["name"]): item for item in dependencies["tools"]}
+    tool_paths = {
+        "python": runtime,
+        **{
+            name: _resolve_fixed_derivation_locator(str(tools[name]["locator"]))
+            for name in TOOL_ORDER[1:]
+        },
+    }
+    specifications = (
+        (
+            "regular_font",
+            _resolve_fixed_derivation_locator(str(fonts["regular"]["locator"])),
+            MAX_FONT_BYTES,
+        ),
+        (
+            "bold_font",
+            _resolve_fixed_derivation_locator(str(fonts["bold"]["locator"])),
+            MAX_FONT_BYTES,
+        ),
+        ("builder", _builder_path(), MAX_SOURCE_BYTES),
+    )
+    pins: dict[str, object] = {}
+    try:
+        authority = _load_machine_authority(
+            _machine_runner_path(),
+            expected_sha256=str(dependencies["machine_runner"]["sha256"]),
+        )
+        pins["machine_runner"] = authority
+        machine = authority.module
+        for name, path, maximum in specifications:
+            _revalidate_pinned_file(authority, context="machine runner")
+            pins[name] = machine._pin_file(
+                path, maximum=maximum, context=name.replace("_", " ")
+            )
+            _revalidate_pinned_file(authority, context="machine runner")
+        for name in TOOL_ORDER:
+            _revalidate_pinned_file(authority, context="machine runner")
+            pins[f"tool:{name}"] = machine._pin_file(
+                tool_paths[name],
+                maximum=128 * 1024 * 1024,
+                context=f"{name} executable",
+            )
+            _revalidate_pinned_file(authority, context="machine runner")
+        identities: dict[tuple[int, int], str] = {}
+        for name, pin in pins.items():
+            identity = (pin.device, pin.inode)
+            if identity in identities:
+                _fail(f"{name} aliases {identities[identity]}")
+            identities[identity] = name
+        return pins, reportlab_root
+    except BaseException as error:  # noqa: BLE001 - close every acquired pin.
+        _close_pins(pins, primary_error=error)
+        _raise_machine_failure("cannot pin derivation dependencies", error)
+
+
 def _close_pins(
     pins: Mapping[str, object],
     *,
@@ -2660,7 +3225,10 @@ def _snapshot_payload(
 
 def _revalidate_all(pins: Mapping[str, object]) -> None:
     for name, pin in pins.items():
-        _revalidate_pinned_file(pin, context=name)
+        if isinstance(pin, _Snapshot):
+            _revalidate_snapshot(pin, context=name)
+        else:
+            _revalidate_pinned_file(pin, context=name)
 
 
 def _run_tool(
@@ -3450,15 +4018,17 @@ def _produce(
             "submission_status": "not_attested",
         },
         "integration": {
-            "four_role_derivation_adapter_protocol": "not-implemented",
+            "four_role_derivation_adapter_protocol": (
+                "renderer-fd-stdout-derive-mode-implemented"
+            ),
             "schema_compatibility_with_derivation_closure": False,
             "rebuttal_role_gate": "not-cleared-by-this-renderer",
             "promotion_gate": "not-cleared-by-this-renderer",
             "future_seam": (
-                "reviewed native thin-arm64 adapter streams this renderer's "
-                "deterministic PDF bytes into the fixed four-role derivation "
-                "closure; downstream promotion separately binds derivation, "
-                "machine replay, and authenticated page-complete visual approval"
+                "reviewed native thin-arm64 launcher invokes this renderer's "
+                "fixed bundle-FD/stdout mode; downstream promotion separately "
+                "binds derivation, machine replay, and authenticated page-complete "
+                "visual approval"
             ),
         },
     }
@@ -4027,6 +4597,235 @@ def _canonical_inputs(snapshots: Mapping[str, _Snapshot]) -> dict[str, bytes]:
     }
 
 
+def _read_derivation_bundle_fd(descriptor: int) -> tuple[bytes, dict[str, object]]:
+    if descriptor <= 2:
+        _fail("derivation bundle must arrive on an inherited non-stdio descriptor")
+    try:
+        flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+        before = os.fstat(descriptor)
+    except OSError as error:
+        _fail(f"cannot inspect inherited derivation-bundle descriptor: {error}")
+    if flags & os.O_ACCMODE != os.O_RDONLY:
+        _fail("inherited derivation-bundle descriptor must be read-only")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) & 0o022
+        or not 1 <= before.st_size <= MAX_DERIVATION_BUNDLE_BYTES
+    ):
+        _fail("inherited derivation bundle is not a bounded private regular file")
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        stat.S_IMODE(before.st_mode),
+    )
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < before.st_size:
+        try:
+            chunk = os.pread(
+                descriptor,
+                min(READ_CHUNK_BYTES, before.st_size - offset),
+                offset,
+            )
+        except OSError as error:
+            _fail(f"cannot read inherited derivation bundle: {error}")
+        if not chunk:
+            _fail("inherited derivation bundle ended before its declared size")
+        chunks.append(chunk)
+        offset += len(chunk)
+    try:
+        after = os.fstat(descriptor)
+    except OSError as error:
+        _fail(f"cannot revalidate inherited derivation bundle: {error}")
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        stat.S_IMODE(after.st_mode),
+    ) != identity:
+        _fail("inherited derivation bundle changed while it was read")
+    raw = b"".join(chunks)
+    parsed = _json_without_duplicates(raw, context="derivation bundle")
+    normalized = _normalize_derivation_bundle(parsed)
+    if _canonical_json(normalized) != raw:
+        _fail("derivation bundle is not exact canonical JSON")
+    return raw, normalized
+
+
+def _bundle_input_bytes(bundle: Mapping[str, object]) -> dict[str, bytes]:
+    return {
+        str(item["member"]): _decode_canonical_base64(
+            item["base64"],
+            context=f"derivation bundle input {item['member']}",
+            maximum={
+                SOURCE_MEMBER: MAX_SOURCE_BYTES,
+                TEMPLATE_MEMBER: MAX_JSON_BYTES,
+                CONFIG_MEMBER: MAX_JSON_BYTES,
+            }[str(item["member"])],
+        )
+        for item in bundle["canonical_inputs"]
+    }
+
+
+def _validate_derivation_dependency_anchors(
+    pins: Mapping[str, object],
+    reportlab_bundle: _ReportLabBundle,
+    bundle: Mapping[str, object],
+) -> None:
+    dependencies = bundle["dependencies"]
+    inputs = {str(item["member"]): item for item in bundle["canonical_inputs"]}
+    fonts = {str(item["role"]): item for item in dependencies["fonts"]}
+    tools = {str(item["name"]): item for item in dependencies["tools"]}
+    _validate_expected_hashes(
+        pins,
+        expected_source_sha256=str(inputs[SOURCE_MEMBER]["sha256"]),
+        expected_template_sha256=str(inputs[TEMPLATE_MEMBER]["sha256"]),
+        expected_config_sha256=str(inputs[CONFIG_MEMBER]["sha256"]),
+        expected_regular_font_sha256=str(fonts["regular"]["sha256"]),
+        expected_bold_font_sha256=str(fonts["bold"]["sha256"]),
+        expected_machine_runner_sha256=str(dependencies["machine_runner"]["sha256"]),
+        expected_builder_sha256=str(dependencies["renderer"]["sha256"]),
+        expected_tool_sha256={
+            "python": str(dependencies["runtime"]["sha256"]),
+            **{name: str(tools[name]["sha256"]) for name in TOOL_ORDER[1:]},
+        },
+    )
+    size_expectations = {
+        "builder": int(dependencies["renderer"]["bytes"]),
+        "machine_runner": int(dependencies["machine_runner"]["bytes"]),
+        "regular_font": int(fonts["regular"]["bytes"]),
+        "bold_font": int(fonts["bold"]["bytes"]),
+        "tool:python": int(dependencies["runtime"]["bytes"]),
+        **{f"tool:{name}": int(tools[name]["bytes"]) for name in TOOL_ORDER[1:]},
+    }
+    for name, expected_size in size_expectations.items():
+        if pins[name].size != expected_size:
+            _fail(f"{name} does not match its bundle byte-size anchor")
+    observed_font_names = _validate_font_roles(
+        _pinned_bytes(
+            pins["regular_font"],
+            maximum=MAX_FONT_BYTES,
+            context="regular font",
+        ),
+        _pinned_bytes(
+            pins["bold_font"],
+            maximum=MAX_FONT_BYTES,
+            context="bold font",
+        ),
+    )
+    declared_font_names = tuple(
+        str(fonts[role]["postscript_name"]) for role in ("regular", "bold")
+    )
+    if declared_font_names != observed_font_names:
+        _fail("bundle font PostScript names differ from the pinned TTF roles")
+    reportlab = dependencies["reportlab"]
+    observed_reportlab = {
+        "tree_sha256": reportlab_bundle.tree_sha256,
+        "file_count": reportlab_bundle.file_count,
+        "directory_count": reportlab_bundle.directory_count,
+        "entry_count": reportlab_bundle.entry_count,
+        "total_bytes": reportlab_bundle.total_bytes,
+        "bundle_sha256": _sha256(reportlab_bundle.raw),
+        "bundle_bytes": len(reportlab_bundle.raw),
+    }
+    expected_reportlab = {
+        key: reportlab[key]
+        for key in (
+            "tree_sha256",
+            "file_count",
+            "directory_count",
+            "entry_count",
+            "total_bytes",
+            "bundle_sha256",
+            "bundle_bytes",
+        )
+    }
+    if observed_reportlab != expected_reportlab:
+        _fail("ReportLab dependency differs from its complete bundle anchor")
+
+
+def derive_rebuttal_pdf_from_bundle_fd(descriptor: int) -> bytes:
+    """Regenerate one exact PDF from a canonical inherited source bundle."""
+    _, bundle = _read_derivation_bundle_fd(descriptor)
+    dependency_pins: dict[str, object] = {}
+    snapshots: dict[str, _Snapshot] = {}
+    failure: BaseException | None = None
+    pdf_raw: bytes | None = None
+    try:
+        dependency_pins, reportlab_root = _pin_derivation_dependencies(bundle)
+        raw_inputs = _bundle_input_bytes(bundle)
+        snapshots["source"] = _snapshot_bytes(
+            raw_inputs[SOURCE_MEMBER], context="source"
+        )
+        snapshots["template"] = _snapshot_bytes(
+            raw_inputs[TEMPLATE_MEMBER], context="template"
+        )
+        snapshots["config"] = _snapshot_bytes(
+            raw_inputs[CONFIG_MEMBER], context="config"
+        )
+        for name, maximum in (
+            ("regular_font", MAX_FONT_BYTES),
+            ("bold_font", MAX_FONT_BYTES),
+            ("builder", MAX_SOURCE_BYTES),
+        ):
+            snapshots[name] = _snapshot_bytes(
+                _pinned_bytes(dependency_pins[name], maximum=maximum, context=name),
+                context=name,
+            )
+        pins = {
+            **dependency_pins,
+            "source": snapshots["source"],
+            "template": snapshots["template"],
+            "config": snapshots["config"],
+        }
+        reportlab_bundle = _inventory_reportlab(reportlab_root)
+        _validate_derivation_dependency_anchors(pins, reportlab_bundle, bundle)
+        production = _produce(
+            pins,
+            snapshots,
+            reportlab_bundle,
+            expected_reportlab_tree_sha256=str(
+                bundle["dependencies"]["reportlab"]["tree_sha256"]
+            ),
+            release_id=str(bundle["release_id"]),
+        )
+        expected_manifest = bundle["expected_output"]["renderer_manifest"]
+        expected_pdf = bundle["expected_output"]["pdf"]
+        if (
+            len(production.manifest_raw) != expected_manifest["bytes"]
+            or _sha256(production.manifest_raw) != expected_manifest["sha256"]
+        ):
+            _fail("fresh renderer manifest differs from the bundle expectation")
+        if (
+            len(production.pdf_raw) != expected_pdf["bytes"]
+            or _sha256(production.pdf_raw) != expected_pdf["sha256"]
+        ):
+            _fail("fresh renderer PDF differs from the bundle expectation")
+        _revalidate_all(pins)
+        _revalidate_snapshots(snapshots)
+        pdf_raw = production.pdf_raw
+    except BaseException as error:  # noqa: BLE001 - preserve primary failure.
+        failure = error
+    try:
+        _close_snapshots(snapshots, primary_error=failure)
+    except BaseException as error:  # noqa: BLE001 - combine cleanup failure.
+        failure = error
+    try:
+        _close_pins(dependency_pins, primary_error=failure)
+    except BaseException as error:  # noqa: BLE001 - combine cleanup failure.
+        failure = error
+    if failure is not None:
+        raise failure
+    if pdf_raw is None:  # pragma: no cover - exhaustiveness
+        _fail("derivation completed without PDF bytes")
+    return pdf_raw
+
+
 def _receipt(
     root: Path, production: _Production, *, replay_root: Path | None
 ) -> RebuttalRenderReceipt:
@@ -4345,11 +5144,35 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _derivation_cli(arguments: Sequence[str]) -> int:
+    expected_prefix = [
+        "--dialect-derivation-protocol",
+        DERIVATION_PROTOCOL,
+        "--pdf-id",
+        DERIVATION_ROLE,
+        "--source-fd",
+    ]
+    expected_suffix = ["--pdf-output", "stdout"]
+    if (
+        len(arguments) != 8
+        or list(arguments[:5]) != expected_prefix
+        or list(arguments[6:]) != expected_suffix
+        or re.fullmatch(r"(?:[3-9]|[1-9][0-9]+)", arguments[5]) is None
+    ):
+        _fail("fixed rebuttal derivation argument protocol is invalid")
+    descriptor = int(arguments[5])
+    pdf_raw = derive_rebuttal_pdf_from_bundle_fd(descriptor)
+    _write_all(1, pdf_raw, context="derived PDF stdout")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run dependency-anchor, build, validate, or internal-render mode."""
     arguments = list(argv) if argv is not None else sys.argv[1:]
     if arguments and arguments[0] == "--internal-render":
         return _internal_render(arguments[1:])
+    if arguments and arguments[0] == "--dialect-derivation-protocol":
+        return _derivation_cli(arguments)
     parsed = _parser().parse_args(arguments)
     if parsed.command == "dependency-digest":
         print(
