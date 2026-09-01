@@ -22,6 +22,8 @@ from analysis import build_tcga_revision_public_release as public_release
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
@@ -29,6 +31,37 @@ def _sha256(raw: bytes) -> str:
 
 def _canonical(value: object) -> bytes:
     return public_release._canonical_json(value) + b"\n"  # noqa: SLF001
+
+
+def _current_cbase_record() -> dict[str, object]:
+    return json.loads((_REPO_ROOT / public_release.CBASE_RECORD_MEMBER).read_bytes())
+
+
+def _current_cbase_payload_hashes() -> dict[str, str]:
+    return {
+        member: _sha256((_REPO_ROOT / member).read_bytes())
+        for member in public_release.CBASE_RELEASE_MEMBERS
+    }
+
+
+def _validate_current_cbase_record(record: Mapping[str, object]) -> None:
+    public_release._validate_cbase_release_boundary(  # noqa: SLF001
+        record,
+        dialect_license_sha256=_sha256((_REPO_ROOT / "LICENSE").read_bytes()),
+        release_member_sha256=_current_cbase_payload_hashes(),
+        archive_members=public_release.CBASE_RELEASE_MEMBERS,
+    )
+
+
+def _current_dependency_inventory_sha256() -> str:
+    dependency_root = _REPO_ROOT / "provenance" / "dependencies"
+    inventory = []
+    for member in public_release.DEPENDENCY_METADATA_MEMBERS:
+        raw = (dependency_root / member).read_bytes()
+        inventory.append(
+            {"member": member, "bytes": len(raw), "sha256": _sha256(raw)},
+        )
+    return _sha256(public_release._canonical_json(inventory))  # noqa: SLF001
 
 
 class _AdversarialScandir:
@@ -117,6 +150,16 @@ def _release_parts(
     )
     plan = _minimal_plan(anchors)
     plan_raw = _canonical(plan)
+    boundary_payloads = {
+        "LICENSE": (_REPO_ROOT / "LICENSE").read_bytes(),
+        public_release.CBASE_RECORD_MEMBER: (
+            _REPO_ROOT / public_release.CBASE_RECORD_MEMBER
+        ).read_bytes(),
+        **{
+            member: (_REPO_ROOT / member).read_bytes()
+            for member in public_release.CBASE_RELEASE_MEMBERS
+        },
+    }
     payloads = {
         public_release.BUILDER_MEMBER: b"synthetic public-release builder\n",
         public_release.PUBLIC_PLAN_MEMBER: plan_raw,
@@ -127,6 +170,7 @@ def _release_parts(
             source_manifest_raw
         ),
         "source-data/opaque.bin": b"\x00opaque synthetic fixture\xff",
+        **boundary_payloads,
         **(extra_payloads or {}),
     }
     entries: dict[str, public_release._ArchiveEntry] = {
@@ -138,6 +182,34 @@ def _release_parts(
         )
         for member, raw in payloads.items()
     }
+    release_b = str(plan["release"]["release_commit_b"])
+    entries["LICENSE"] = public_release._MemoryEntry(  # noqa: SLF001
+        member="LICENSE",
+        raw=payloads["LICENSE"],
+        role="release-code",
+        origin={"kind": "git-blob", "commit": release_b, "path": "LICENSE"},
+    )
+    entries[public_release.CBASE_RECORD_MEMBER] = public_release._MemoryEntry(  # noqa: SLF001
+        member=public_release.CBASE_RECORD_MEMBER,
+        raw=payloads[public_release.CBASE_RECORD_MEMBER],
+        role="dependency-provenance",
+        origin={
+            "kind": "dependency-ledger",
+            "member": f"{public_release.INCLUDED_DEPENDENCY_ID}.json",
+        },
+    )
+    for member in public_release.CBASE_RELEASE_MEMBERS:
+        entries[member] = public_release._MemoryEntry(  # noqa: SLF001
+            member=member,
+            raw=payloads[member],
+            role="redistributable-dependency-code",
+            origin={
+                "kind": "dependency-record",
+                "dependency_id": public_release.INCLUDED_DEPENDENCY_ID,
+                "commit": release_b,
+                "path": member,
+            },
+        )
     plan_file = SimpleNamespace(sha256=_sha256(plan_raw), size_bytes=len(plan_raw))
     source_receipt = SimpleNamespace(
         source_data_root="/synthetic/source-data",
@@ -346,6 +418,218 @@ def _checksums(
     ).encode("ascii")
 
 
+def test_current_cbase_release_boundary_is_exact() -> None:
+    _validate_current_cbase_record(_current_cbase_record())
+
+
+def test_current_dependency_ledger_returns_exact_cbase_release_bytes() -> None:
+    release_b = (
+        subprocess.run(
+            ["/usr/bin/git", "rev-parse", "HEAD"],
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+        .stdout.decode("ascii")
+        .strip()
+    )
+    patch_record = json.loads(
+        (
+            _REPO_ROOT
+            / "provenance/dependencies"
+            / f"{public_release.RESTRICTED_EXECUTION_DEPENDENCY_ID}.json"
+        ).read_bytes(),
+    )
+    patch_identity = patch_record["identity"]
+    restricted = [
+        {
+            "path": public_release.RESTRICTED_EXECUTION_PATH,
+            "dependency_id": public_release.RESTRICTED_EXECUTION_DEPENDENCY_ID,
+            "bytes": patch_identity["patch_bytes"],
+            "sha256": patch_identity["patch_sha256"],
+            "verified_at_source_a_and_release_b": True,
+            "included_in_public_release": False,
+        },
+    ]
+    repository = public_release._pin_root(  # noqa: SLF001
+        _REPO_ROOT,
+        context="current repository",
+    )
+    dependency_root = public_release._pin_root(  # noqa: SLF001
+        _REPO_ROOT / "provenance/dependencies",
+        context="current dependency ledger",
+    )
+    git_executable = public_release._pin_absolute_file(  # noqa: SLF001
+        public_release.GIT_EXECUTABLE,
+        context="Git executable",
+        maximum=public_release.MAX_GIT_EXECUTABLE_BYTES,
+        require_single_link=False,
+    )
+    pins: tuple[public_release._PinnedFile, ...] = ()
+    try:
+        pins, entries, cbase_bytes, _excluded_hashes, boundaries = (
+            public_release._validate_dependency_ledger(  # noqa: SLF001
+                dependency_root,
+                repository,
+                git_executable,
+                release_b,
+                _current_dependency_inventory_sha256(),
+                restricted,
+            )
+        )
+        assert set(cbase_bytes) == set(public_release.CBASE_RELEASE_MEMBERS)
+        assert {
+            member: _sha256(raw) for member, raw in cbase_bytes.items()
+        } == _current_cbase_payload_hashes()
+        assert public_release.CBASE_RECORD_MEMBER in {entry.member for entry in entries}
+        cbase_boundary = next(
+            record
+            for record in boundaries
+            if record["dependency_id"] == public_release.INCLUDED_DEPENDENCY_ID
+        )
+        assert cbase_boundary == {
+            "dependency_id": public_release.INCLUDED_DEPENDENCY_ID,
+            "license_id": public_release.CBASE_COMPOSITE_LICENSE_ID,
+            "license_status": "permitted",
+            "redistribution": "include",
+            "included_in_public_release": True,
+            "unresolved": [],
+        }
+    finally:
+        for pin in pins:
+            pin.close()
+        git_executable.close()
+        dependency_root.close()
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "match"),
+    [
+        ("dependency_id", "different-dependency", "top-level"),
+        ("dependency_class", "data", "top-level"),
+        ("license_id", "BSD-3-Clause", "top-level"),
+        ("license_status", "unknown", "top-level"),
+        ("redistribution", "exclude", "top-level"),
+        ("included_in_public_release", False, "top-level"),
+        ("unresolved", ["pending"], "unresolved"),
+        ("source_artifacts", [{"role": "archive"}], "source artifacts"),
+        ("scope", "CBaSE archive is included.", "exclusion scope"),
+    ],
+)
+def test_cbase_release_boundary_rejects_top_level_mutations(
+    field: str,
+    replacement: object,
+    match: str,
+) -> None:
+    record = _current_cbase_record()
+    record[field] = replacement
+    with pytest.raises(public_release.PublicReleaseError, match=match):
+        _validate_current_cbase_record(record)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "match"),
+    [
+        ("upstream_license_id", "BSD-3-Clause", "upstream license"),
+        ("dialect_license_id", "MIT", "DIALECT license"),
+        ("official_archive_role", "exact-parent", "comparison-only"),
+        ("dialect_license_file_sha256", "0" * 64, "root LICENSE"),
+    ],
+)
+def test_cbase_release_boundary_rejects_identity_mutations(
+    field: str,
+    replacement: object,
+    match: str,
+) -> None:
+    record = _current_cbase_record()
+    identity = record["identity"]
+    assert isinstance(identity, dict)
+    identity[field] = replacement
+    with pytest.raises(public_release.PublicReleaseError, match=match):
+        _validate_current_cbase_record(record)
+
+
+def test_cbase_release_boundary_rejects_observed_root_license_drift() -> None:
+    with pytest.raises(public_release.PublicReleaseError, match="root LICENSE"):
+        public_release._validate_cbase_release_boundary(  # noqa: SLF001
+            _current_cbase_record(),
+            dialect_license_sha256="0" * 64,
+            release_member_sha256=_current_cbase_payload_hashes(),
+            archive_members=public_release.CBASE_RELEASE_MEMBERS,
+        )
+
+
+def test_cbase_release_boundary_rejects_role_and_license_mutations() -> None:
+    record = _current_cbase_record()
+    identity = record["identity"]
+    assert isinstance(identity, dict)
+    roles = identity["release_file_roles"]
+    assert isinstance(roles, dict)
+    roles["external/CBaSE/NOTICE"] = "upstream-source"
+    with pytest.raises(public_release.PublicReleaseError, match="roles changed"):
+        _validate_current_cbase_record(record)
+
+    record = _current_cbase_record()
+    identity = record["identity"]
+    assert isinstance(identity, dict)
+    licenses = identity["release_file_licenses"]
+    assert isinstance(licenses, dict)
+    licenses["external/CBaSE/cbase_cohort_size.py"] = [
+        public_release.CBASE_UPSTREAM_LICENSE_ID,
+    ]
+    with pytest.raises(public_release.PublicReleaseError, match="licenses changed"):
+        _validate_current_cbase_record(record)
+
+
+def test_cbase_release_boundary_rejects_allowlist_and_payload_drift() -> None:
+    record = _current_cbase_record()
+    identity = record["identity"]
+    assert isinstance(identity, dict)
+    release_files = identity["release_files"]
+    assert isinstance(release_files, dict)
+    release_files.pop("external/CBaSE/NOTICE")
+    with pytest.raises(public_release.PublicReleaseError, match="allowlist"):
+        _validate_current_cbase_record(record)
+
+    payloads = _current_cbase_payload_hashes()
+    payloads["external/CBaSE/NOTICE"] = "0" * 64
+    with pytest.raises(public_release.PublicReleaseError, match="digest differs"):
+        public_release._validate_cbase_release_boundary(  # noqa: SLF001
+            _current_cbase_record(),
+            dialect_license_sha256=_sha256(
+                (_REPO_ROOT / "LICENSE").read_bytes(),
+            ),
+            release_member_sha256=payloads,
+            archive_members=public_release.CBASE_RELEASE_MEMBERS,
+        )
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "external/CBaSE",
+        public_release.CBASE_OFFICIAL_ARCHIVE_PUBLIC_MEMBER,
+        "external/CBaSE/auxiliary/used_genes_new_CBaSE.txt",
+        "external/CBaSE/Auxiliary/secret.bin",
+        "external/CBaSE/CBaSE_v1.2-copy.zip",
+        "external/CBaSE/unlisted.py",
+    ],
+)
+def test_cbase_release_boundary_rejects_archive_and_auxiliary_members(
+    member: str,
+) -> None:
+    with pytest.raises(public_release.PublicReleaseError, match="remain excluded"):
+        public_release._validate_cbase_release_boundary(  # noqa: SLF001
+            _current_cbase_record(),
+            dialect_license_sha256=_sha256(
+                (_REPO_ROOT / "LICENSE").read_bytes(),
+            ),
+            release_member_sha256=_current_cbase_payload_hashes(),
+            archive_members=(*public_release.CBASE_RELEASE_MEMBERS, member),
+        )
+
+
 def test_writer_is_deterministic_canonical_ustar_and_verifies(tmp_path: Path) -> None:
     prepared = _prepared_release()
     first = tmp_path / "first.tar"
@@ -373,6 +657,121 @@ def test_writer_is_deterministic_canonical_ustar_and_verifies(tmp_path: Path) ->
     assert all(info.uid == info.gid == info.mtime == 0 for info in infos)
     assert all(info.uname == info.gname == info.linkname == "" for info in infos)
     assert all(info.isfile() and not info.pax_headers for info in infos)
+
+
+def test_archive_contains_exact_cbase_members_roles_and_license(tmp_path: Path) -> None:
+    prepared = _prepared_release()
+    archive_path = tmp_path / "cbase-boundary.tar"
+    _write_release_archive(archive_path, prepared)
+    _verify(archive_path, prepared.manifest_raw)
+
+    with tarfile.open(archive_path, mode="r:") as archive:
+        names = {info.name for info in archive.getmembers()}
+    assert set(public_release.CBASE_RELEASE_MEMBERS) <= names
+    assert public_release.CBASE_RECORD_MEMBER in names
+    assert "LICENSE" in names
+    assert public_release.CBASE_OFFICIAL_ARCHIVE_PUBLIC_MEMBER not in names
+    assert not any(
+        name.startswith(public_release.CBASE_RELEASE_NAMESPACE)
+        and name not in public_release.CBASE_RELEASE_MEMBERS
+        for name in names
+    )
+
+    manifest = json.loads(prepared.manifest_raw)
+    records = {record["member"]: record for record in manifest["members"]}
+    for member in public_release.CBASE_RELEASE_MEMBERS:
+        assert records[member]["role"] == "redistributable-dependency-code"
+        assert records[member]["origin"] == {
+            "kind": "dependency-record",
+            "dependency_id": public_release.INCLUDED_DEPENDENCY_ID,
+            "commit": "b" * 40,
+            "path": member,
+        }
+
+
+def test_downloaded_verifier_rejects_cbase_member_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    entries, manifest_raw, _checksums_raw = _release_parts()
+
+    def mutate(manifest: dict[str, object]) -> None:
+        records = manifest["members"]
+        assert isinstance(records, list)
+        record = next(
+            value for value in records if value["member"] == "external/CBaSE/NOTICE"
+        )
+        record["role"] = "release-code"
+
+    changed_manifest = _manifest_with(manifest_raw, mutate)
+    changed_checksums = _checksums(entries, changed_manifest)
+    archive_path = tmp_path / "cbase-metadata-drift.tar"
+    _write_raw(
+        archive_path,
+        _raw_release_archive(
+            entries=entries,
+            manifest_raw=changed_manifest,
+            checksums_raw=changed_checksums,
+        ),
+    )
+    with pytest.raises(public_release.PublicReleaseError, match="member metadata"):
+        _verify(archive_path, changed_manifest)
+
+
+def test_downloaded_verifier_rejects_mutated_cbase_provenance(
+    tmp_path: Path,
+) -> None:
+    record = _current_cbase_record()
+    identity = record["identity"]
+    assert isinstance(identity, dict)
+    identity["official_archive_role"] = "exact-parent"
+    prepared = _prepared_release(
+        {public_release.CBASE_RECORD_MEMBER: _canonical(record)},
+    )
+    archive_path = tmp_path / "mutated-cbase-provenance.tar"
+    _write_release_archive(archive_path, prepared)
+    with pytest.raises(public_release.PublicReleaseError, match="comparison-only"):
+        _verify(archive_path, prepared.manifest_raw)
+
+
+@pytest.mark.parametrize(
+    ("member", "match"),
+    [
+        ("LICENSE", "root LICENSE"),
+        ("external/CBaSE/NOTICE", "digest differs"),
+    ],
+)
+def test_downloaded_verifier_rejects_cbase_payload_drift(
+    tmp_path: Path,
+    member: str,
+    match: str,
+) -> None:
+    prepared = _prepared_release({member: b"mutated boundary payload\n"})
+    archive_path = tmp_path / "mutated-cbase-payload.tar"
+    _write_release_archive(archive_path, prepared)
+    with pytest.raises(public_release.PublicReleaseError, match=match):
+        _verify(archive_path, prepared.manifest_raw)
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "external/CBaSE",
+        public_release.CBASE_OFFICIAL_ARCHIVE_PUBLIC_MEMBER,
+        "external/CBaSE/auxiliary/secret.bin",
+        "external/CBaSE/Auxiliary/secret.bin",
+        "external/CBaSE/CBaSE_v1.2-copy.zip",
+        "external/CBaSE/unlisted.py",
+    ],
+)
+def test_downloaded_verifier_rejects_cbase_excluded_payloads(
+    tmp_path: Path,
+    member: str,
+) -> None:
+    prepared = _prepared_release({member: b"must remain excluded\n"})
+    archive_path = tmp_path / "forbidden-cbase-payload.tar"
+    _write_release_archive(archive_path, prepared)
+    with pytest.raises(public_release.PublicReleaseError, match="remain excluded"):
+        _verify(archive_path, prepared.manifest_raw)
 
 
 @pytest.mark.parametrize(

@@ -128,6 +128,7 @@ DEPENDENCY_IDS: Final = (
     "tcga-datahub-64392ef-32-study",
 )
 INCLUDED_DEPENDENCY_ID: Final = "cbase-v1.2-dialect-fork"
+CBASE_RECORD_MEMBER: Final = "provenance/dependencies/cbase-v1.2-dialect-fork.json"
 DEPENDENCY_METADATA_MEMBERS: Final = tuple(
     sorted(
         (
@@ -143,6 +144,45 @@ CBASE_RELEASE_MEMBERS: Final = (
     "external/CBaSE/NOTICE",
     "external/CBaSE/cbase_cohort_size.py",
 )
+CBASE_RELEASE_FILE_ROLES: Final[dict[str, str]] = {
+    "external/CBaSE/CBaSE_params_v1.2.py": (
+        "historical-upstream-derived-fork-with-dialect-modifications"
+    ),
+    "external/CBaSE/CBaSE_qvals_v1.2.py": (
+        "historical-upstream-derived-fork-with-dialect-modifications"
+    ),
+    "external/CBaSE/NOTICE": "dialect-authored-provenance-notice",
+    "external/CBaSE/cbase_cohort_size.py": "dialect-authored-helper",
+}
+CBASE_RELEASE_FILE_LICENSES: Final[dict[str, tuple[str, ...]]] = {
+    "external/CBaSE/CBaSE_params_v1.2.py": (
+        "LicenseRef-CBaSE-Public-Domain",
+        "BSD-3-Clause",
+    ),
+    "external/CBaSE/CBaSE_qvals_v1.2.py": (
+        "LicenseRef-CBaSE-Public-Domain",
+        "BSD-3-Clause",
+    ),
+    "external/CBaSE/NOTICE": ("BSD-3-Clause",),
+    "external/CBaSE/cbase_cohort_size.py": ("BSD-3-Clause",),
+}
+CBASE_UPSTREAM_LICENSE_ID: Final = "LicenseRef-CBaSE-Public-Domain"
+CBASE_DIALECT_LICENSE_ID: Final = "BSD-3-Clause"
+CBASE_COMPOSITE_LICENSE_ID: Final = "LicenseRef-CBaSE-Public-Domain AND BSD-3-Clause"
+CBASE_DIALECT_LICENSE_SHA256: Final = (
+    "3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16"
+)
+CBASE_OFFICIAL_ARCHIVE_ROLE: Final = (
+    "current-v1.2-comparison-reference-not-exact-parent"
+)
+CBASE_SCOPE: Final = (
+    "Two historical CBaSE v1.2-derived scripts with preserved Public Domain "
+    "headers and BSD-3-Clause DIALECT modifications, plus a BSD-3-Clause "
+    "DIALECT helper and provenance notice; the current official archive and "
+    "auxiliary data are excluded."
+)
+CBASE_RELEASE_NAMESPACE: Final = "external/CBaSE/"
+CBASE_OFFICIAL_ARCHIVE_PUBLIC_MEMBER: Final = "external/CBaSE/CBaSE_v1.2.zip"
 
 ARCHIVE_MANIFEST_MEMBER: Final = "release_manifest.json"
 ARCHIVE_CHECKSUM_MEMBER: Final = "SHA256SUMS"
@@ -1790,6 +1830,122 @@ def _require_exact_root_inventory(
     _revalidate_root(root, context=f"{context} root after inventory scan")
 
 
+def _validate_cbase_release_boundary(
+    record: Mapping[str, object],
+    *,
+    dialect_license_sha256: str,
+    release_member_sha256: Mapping[str, object],
+    archive_members: Sequence[str],
+) -> None:
+    """Close the exact mixed-license CBaSE public-release boundary."""
+    if (
+        record.get("dependency_id") != INCLUDED_DEPENDENCY_ID
+        or record.get("dependency_class") != "cbase_source"
+        or record.get("license_id") != CBASE_COMPOSITE_LICENSE_ID
+        or record.get("license_status") != "permitted"
+        or record.get("redistribution") != "include"
+        or record.get("included_in_public_release") is not True
+    ):
+        raise PublicReleaseError("CBaSE top-level release boundary is invalid")
+    unresolved = _expect_sequence(
+        record.get("unresolved"),
+        context="CBaSE unresolved gates",
+    )
+    if unresolved:
+        raise PublicReleaseError("CBaSE release boundary has unresolved gates")
+    source_artifacts = _expect_sequence(
+        record.get("source_artifacts"),
+        context="CBaSE source artifacts",
+    )
+    if source_artifacts:
+        raise PublicReleaseError(
+            "CBaSE official archive or auxiliary source artifacts cannot be released",
+        )
+    if record.get("scope") != CBASE_SCOPE:
+        raise PublicReleaseError("CBaSE archive and auxiliary exclusion scope changed")
+
+    identity = _expect_mapping(record.get("identity"), context="CBaSE identity")
+    if identity.get("upstream_license_id") != CBASE_UPSTREAM_LICENSE_ID:
+        raise PublicReleaseError("CBaSE upstream license identity changed")
+    if identity.get("dialect_license_id") != CBASE_DIALECT_LICENSE_ID:
+        raise PublicReleaseError("CBaSE DIALECT license identity changed")
+    if identity.get("official_archive_role") != CBASE_OFFICIAL_ARCHIVE_ROLE:
+        raise PublicReleaseError(
+            "CBaSE official archive is not comparison-only provenance",
+        )
+
+    declared_license_sha256 = _expect_sha256(
+        identity.get("dialect_license_file_sha256"),
+        context="CBaSE DIALECT license",
+    )
+    observed_license_sha256 = _expect_sha256(
+        dialect_license_sha256,
+        context="release-B DIALECT license",
+    )
+    if (
+        declared_license_sha256 != CBASE_DIALECT_LICENSE_SHA256
+        or observed_license_sha256 != CBASE_DIALECT_LICENSE_SHA256
+    ):
+        raise PublicReleaseError("root LICENSE does not match the CBaSE boundary")
+
+    release_files = _expect_mapping(
+        identity.get("release_files"),
+        context="CBaSE release_files",
+    )
+    if set(release_files) != set(CBASE_RELEASE_MEMBERS):
+        raise PublicReleaseError("CBaSE release file allowlist is not exact")
+    if set(release_member_sha256) != set(CBASE_RELEASE_MEMBERS):
+        raise PublicReleaseError("CBaSE archive payload allowlist is not exact")
+    for member in CBASE_RELEASE_MEMBERS:
+        declared = _expect_sha256(
+            release_files[member],
+            context=f"CBaSE release file {member}",
+        )
+        observed = _expect_sha256(
+            release_member_sha256[member],
+            context=f"CBaSE archive payload {member}",
+        )
+        if declared != observed:
+            raise PublicReleaseError(f"CBaSE release file digest differs: {member}")
+
+    roles = _expect_mapping(
+        identity.get("release_file_roles"),
+        context="CBaSE release file roles",
+    )
+    if dict(roles) != CBASE_RELEASE_FILE_ROLES:
+        raise PublicReleaseError("CBaSE release file roles changed")
+    raw_licenses = _expect_mapping(
+        identity.get("release_file_licenses"),
+        context="CBaSE release file licenses",
+    )
+    if set(raw_licenses) != set(CBASE_RELEASE_MEMBERS):
+        raise PublicReleaseError("CBaSE release file license allowlist is not exact")
+    licenses: dict[str, tuple[str, ...]] = {}
+    for member in CBASE_RELEASE_MEMBERS:
+        values = _expect_sequence(
+            raw_licenses[member],
+            context=f"CBaSE release file licenses {member}",
+        )
+        licenses[member] = tuple(
+            _expect_string(value, context=f"CBaSE license {member}") for value in values
+        )
+    if licenses != CBASE_RELEASE_FILE_LICENSES:
+        raise PublicReleaseError("CBaSE release file licenses changed")
+
+    for raw_member in archive_members:
+        member = _canonical_member(raw_member, context="CBaSE archive member")
+        if (
+            _enters_namespace(
+                member,
+                (CBASE_RELEASE_NAMESPACE,),
+            )
+            and member not in CBASE_RELEASE_MEMBERS
+        ):
+            raise PublicReleaseError(
+                f"unexpected CBaSE namespace member must remain excluded: {member}",
+            )
+
+
 def _validate_dependency_ledger(  # noqa: PLR0913
     dependency_root: _PinnedRoot,
     repository_root: _PinnedRoot,
@@ -1911,40 +2067,28 @@ def _validate_dependency_ledger(  # noqa: PLR0913
         )
 
         cbase = records[INCLUDED_DEPENDENCY_ID]
-        identity = _expect_mapping(cbase.get("identity"), context="CBaSE identity")
-        release_files = _expect_mapping(
-            identity.get("release_files"),
-            context="CBaSE release_files",
-        )
-        if set(release_files) != set(CBASE_RELEASE_MEMBERS):
-            raise PublicReleaseError("CBaSE release file allowlist is not exact")
         cbase_bytes: dict[str, bytes] = {}
         for member in CBASE_RELEASE_MEMBERS:
-            expected_digest = _expect_sha256(
-                release_files[member],
-                context=f"CBaSE release file {member}",
-            )
-            raw = _git_commit_member(
+            cbase_bytes[member] = _git_commit_member(
                 repository_root,
                 git_executable,
                 release_b,
                 member,
             )
-            if _sha256(raw) != expected_digest:
-                raise PublicReleaseError(f"CBaSE release file digest differs: {member}")
-            cbase_bytes[member] = raw
-        license_digest = _expect_sha256(
-            identity.get("dialect_license_file_sha256"),
-            context="CBaSE DIALECT license",
-        )
         license_raw = _git_commit_member(
             repository_root,
             git_executable,
             release_b,
             "LICENSE",
         )
-        if _sha256(license_raw) != license_digest:
-            raise PublicReleaseError("root LICENSE does not match CBaSE provenance")
+        _validate_cbase_release_boundary(
+            cbase,
+            dialect_license_sha256=_sha256(license_raw),
+            release_member_sha256={
+                member: _sha256(raw) for member, raw in cbase_bytes.items()
+            },
+            archive_members=tuple(cbase_bytes),
+        )
 
         metadata_entries = tuple(
             _PinnedEntry(
@@ -3653,10 +3797,82 @@ def _parse_checksum_file(raw: bytes) -> list[tuple[str, str]]:
     return records
 
 
+def _validate_cbase_archive_boundary(
+    *,
+    release: Mapping[str, object],
+    manifest_records: Sequence[Mapping[str, object]],
+    actual_records: Mapping[str, Mapping[str, object]],
+    captured_payloads: Mapping[str, bytes],
+) -> None:
+    """Reproduce the CBaSE boundary from a downloaded public archive."""
+    try:
+        cbase_raw = captured_payloads[CBASE_RECORD_MEMBER]
+        license_record = actual_records["LICENSE"]
+        cbase_actual = {
+            member: actual_records[member]["sha256"] for member in CBASE_RELEASE_MEMBERS
+        }
+    except KeyError as error:
+        raise PublicReleaseError(
+            "downloaded archive omits the CBaSE license or provenance boundary",
+        ) from error
+    cbase = _parse_json(cbase_raw, context=CBASE_RECORD_MEMBER)
+    _validate_cbase_release_boundary(
+        cbase,
+        dialect_license_sha256=_expect_sha256(
+            license_record.get("sha256"),
+            context="downloaded root LICENSE",
+        ),
+        release_member_sha256=cbase_actual,
+        archive_members=tuple(actual_records),
+    )
+
+    records_by_member = {str(record["member"]): record for record in manifest_records}
+    release_b = _expect_git_sha(
+        release.get("release_commit_b"),
+        context="downloaded release commit B",
+    )
+    expected_dependency_origin = {
+        "kind": "dependency-record",
+        "dependency_id": INCLUDED_DEPENDENCY_ID,
+        "commit": release_b,
+    }
+    for member in CBASE_RELEASE_MEMBERS:
+        record = records_by_member.get(member)
+        if record is None:
+            raise PublicReleaseError("downloaded archive omits a CBaSE release member")
+        expected_origin = {**expected_dependency_origin, "path": member}
+        if (
+            record.get("role") != "redistributable-dependency-code"
+            or record.get("origin") != expected_origin
+        ):
+            raise PublicReleaseError(
+                f"downloaded CBaSE member metadata is invalid: {member}",
+            )
+
+    provenance_record = records_by_member.get(CBASE_RECORD_MEMBER)
+    if provenance_record is None or (
+        provenance_record.get("role") != "dependency-provenance"
+        or provenance_record.get("origin")
+        != {
+            "kind": "dependency-ledger",
+            "member": f"{INCLUDED_DEPENDENCY_ID}.json",
+        }
+    ):
+        raise PublicReleaseError("downloaded CBaSE provenance metadata is invalid")
+    license_manifest_record = records_by_member.get("LICENSE")
+    if license_manifest_record is None or (
+        license_manifest_record.get("role") != "release-code"
+        or license_manifest_record.get("origin")
+        != {"kind": "git-blob", "commit": release_b, "path": "LICENSE"}
+    ):
+        raise PublicReleaseError("downloaded root LICENSE metadata is invalid")
+
+
 def _validate_release_manifest(
     raw: bytes,
     *,
     actual_records: Mapping[str, Mapping[str, object]],
+    captured_payloads: Mapping[str, bytes],
 ) -> dict[str, object]:
     manifest = _parse_canonical(raw, context=ARCHIVE_MANIFEST_MEMBER)
     expected_keys = {
@@ -3787,6 +4003,12 @@ def _validate_release_manifest(
             raise PublicReleaseError(
                 "manifest payload record contradicts archive bytes",
             )
+    _validate_cbase_archive_boundary(
+        release=release,
+        manifest_records=normalized_records,
+        actual_records=actual_records,
+        captured_payloads=captured_payloads,
+    )
 
     def require_bound_member(
         member: str,
@@ -3972,6 +4194,9 @@ def _verify_archive_descriptor(
     _revalidate_file(pinned, context="downloaded public archive before TAR parsing")
     records: dict[str, dict[str, object]] = {}
     metadata: dict[str, bytes] = {}
+    captured_members = frozenset(
+        {ARCHIVE_MANIFEST_MEMBER, ARCHIVE_CHECKSUM_MEMBER, CBASE_RECORD_MEMBER},
+    )
     names: list[str] = []
     offset = 0
     zero = b"\0" * TAR_BLOCK_BYTES
@@ -4033,7 +4258,7 @@ def _verify_archive_descriptor(
         if names and member <= names[-1]:
             raise PublicReleaseError("archive members are not ASCII sorted")
         names.append(member)
-        capture = member in {ARCHIVE_MANIFEST_MEMBER, ARCHIVE_CHECKSUM_MEMBER}
+        capture = member in captured_members
         if capture and info.size > MAX_ARCHIVE_METADATA_MEMBER_BYTES:
             raise PublicReleaseError("archive metadata member is too large")
         digest, raw = _hash_archive_payload(
@@ -4073,8 +4298,10 @@ def _verify_archive_descriptor(
         )
         if tail != b"\0" * len(tail):
             raise PublicReleaseError("archive has nonzero bytes after its end markers")
-    if set(metadata) != {ARCHIVE_MANIFEST_MEMBER, ARCHIVE_CHECKSUM_MEMBER}:
-        raise PublicReleaseError("archive omits canonical manifest or checksums")
+    if set(metadata) != captured_members:
+        raise PublicReleaseError(
+            "archive omits canonical manifest, checksums, or CBaSE provenance",
+        )
     if records[ARCHIVE_MANIFEST_MEMBER]["sha256"] != manifest_digest:
         raise PublicReleaseError(
             "release manifest fails its independent SHA-256 anchor",
@@ -4082,6 +4309,7 @@ def _verify_archive_descriptor(
     manifest = _validate_release_manifest(
         metadata[ARCHIVE_MANIFEST_MEMBER],
         actual_records=records,
+        captured_payloads=metadata,
     )
     checksum_records = _parse_checksum_file(metadata[ARCHIVE_CHECKSUM_MEMBER])
     checksum_names = {member for _, member in checksum_records}
