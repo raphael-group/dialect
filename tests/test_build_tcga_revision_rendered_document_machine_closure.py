@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -798,6 +799,259 @@ def test_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
+def test_successful_parent_cannot_leave_same_process_group_descendant(
+    tmp_path: Path,
+) -> None:
+    executable = Path(sys.executable).resolve()
+    pin = closure._pin_file(
+        executable,
+        maximum=128 * 1024 * 1024,
+        context="synthetic Python executable",
+    )
+    marker = tmp_path / "successful-parent-descendant-survived"
+    descendant = (
+        "import pathlib,time;time.sleep(0.35);"
+        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+    )
+    parent = (
+        "import subprocess,sys;"
+        "subprocess.Popen([sys.executable,'-c',"
+        f"{descendant!r}],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,"
+        "stderr=subprocess.DEVNULL,close_fds=True)"
+    )
+    try:
+        return_code, stdout, stderr, _ = closure._run_bounded(
+            pin,
+            ["-c", parent],
+            timeout=5,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            budget=closure._ProcessBudget(),
+            before=lambda: None,
+            after=lambda: None,
+        )
+    finally:
+        pin.close()
+    assert return_code == 0
+    assert stdout == b""
+    assert stderr == b""
+    time.sleep(0.5)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("members", [(), (4242, 4343)])
+def test_process_group_gate_rejects_missing_or_extra_members(
+    monkeypatch: pytest.MonkeyPatch,
+    members: tuple[int, ...],
+) -> None:
+    monkeypatch.setattr(closure, "_darwin_process_group_members", lambda _pgid: members)
+    with pytest.raises(
+        closure.MachineClosureError,
+        match="not the retained leader alone",
+    ):
+        closure._require_process_group_leader_only(
+            4242,
+            deadline=time.monotonic() + 1,
+            wait_for_signaled_members=False,
+        )
+
+
+def test_process_group_gate_rejects_membership_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = iter(((4242,), (4242, 4343)))
+    monkeypatch.setattr(
+        closure,
+        "_darwin_process_group_members",
+        lambda _pgid: next(observed),
+    )
+    with pytest.raises(
+        closure.MachineClosureError,
+        match="changed before parent reap",
+    ):
+        closure._require_process_group_leader_only(
+            4242,
+            deadline=time.monotonic() + 1,
+            wait_for_signaled_members=False,
+        )
+
+
+def test_process_group_gate_waits_only_after_successful_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = iter(((4242, 4343), (4242,), (4242,)))
+    sleeps: list[float] = []
+    monkeypatch.setattr(closure.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(
+        closure,
+        "_darwin_process_group_members",
+        lambda _pgid: next(observed),
+    )
+    monkeypatch.setattr(closure.time, "sleep", sleeps.append)
+    closure._terminate_owned_process_group(4242)
+    assert sleeps == [0.005]
+
+
+def test_process_group_gate_never_waits_after_signal_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        closure.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("signal denied")),
+    )
+    monkeypatch.setattr(
+        closure,
+        "_darwin_process_group_members",
+        lambda _pgid: (4242, 4343),
+    )
+    monkeypatch.setattr(
+        closure.time,
+        "sleep",
+        lambda _seconds: pytest.fail("signal denial must not enter a bounded wait"),
+    )
+    with pytest.raises(
+        closure.MachineClosureError,
+        match="not the retained leader alone",
+    ):
+        closure._terminate_owned_process_group(4242)
+
+
+@pytest.mark.parametrize("members", [(4242, 0), (4242, -1), (4242, 4242)])
+def test_process_group_enumeration_rejects_malformed_members(
+    monkeypatch: pytest.MonkeyPatch,
+    members: tuple[int, ...],
+) -> None:
+    class FakeProcList:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            _process_group: int,
+            buffer: object,
+            _buffer_bytes: int,
+        ) -> int:
+            for index, process_id in enumerate(members):
+                buffer[index] = process_id
+            return len(members)
+
+    fake_proc_list = FakeProcList()
+    fake_library = SimpleNamespace(proc_listpgrppids=fake_proc_list)
+    monkeypatch.setattr(closure, "_darwin_library", lambda: fake_library)
+    with pytest.raises(
+        closure.MachineClosureError,
+        match="invalid or duplicate PIDs",
+    ):
+        closure._darwin_process_group_members(4242)
+
+
+def test_process_group_enumeration_rejects_possible_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcList:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            return closure.MAX_PROCESS_GROUP_MEMBERS
+
+    fake_proc_list = FakeProcList()
+    fake_library = SimpleNamespace(proc_listpgrppids=fake_proc_list)
+    monkeypatch.setattr(closure, "_darwin_library", lambda: fake_library)
+    with pytest.raises(
+        closure.MachineClosureError,
+        match="exceeds its member bound",
+    ):
+        closure._darwin_process_group_members(4242)
+
+
+@pytest.mark.parametrize(
+    ("inherited", "binding", "stdout_descriptor", "stderr_descriptor"),
+    [
+        ((9,), (9, 3), 10, 11),
+        ((9, 9), None, 10, 11),
+        ((), (9, 1), 10, 11),
+        ((), (9, 3), 3, 11),
+        ((), (9, 3), 9, 11),
+    ],
+)
+def test_exact_fd_binding_rejects_ambiguous_descriptor_roles(
+    inherited: tuple[int, ...],
+    binding: tuple[int, int] | None,
+    stdout_descriptor: int,
+    stderr_descriptor: int,
+) -> None:
+    tool = SimpleNamespace(path=Path("/synthetic/tool"))
+    with pytest.raises(closure.MachineClosureError, match="ambiguous"):
+        closure._spawn_suspended_darwin(
+            tool,
+            [],
+            inherited_fds=inherited,
+            inherited_fd_binding=binding,
+            stdout_descriptor=stdout_descriptor,
+            stderr_descriptor=stderr_descriptor,
+        )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires Darwin attestation")
+def test_exact_fd3_binding_uses_outer_nonblocking_source_pin(tmp_path: Path) -> None:
+    executable = Path(sys.executable).resolve()
+    source_path = tmp_path / "opaque-source.bundle"
+    source_raw = b"opaque fixed-fd source bytes\n"
+    source_path.write_bytes(source_raw)
+    source_path.chmod(0o400)
+    tool = closure._pin_file(
+        executable,
+        maximum=128 * 1024 * 1024,
+        context="synthetic Python executable",
+    )
+    source = closure._pin_file(
+        source_path,
+        maximum=1024,
+        context="opaque v2 source bundle",
+    )
+    protocol_arguments = [
+        "--dialect-derivation-protocol",
+        "dialect-pdf-derivation-fd-protocol-v1",
+        "--pdf-id",
+        "rebuttal",
+        "--source-fd",
+        "3",
+        "--pdf-output",
+        "stdout",
+    ]
+    program = (
+        "import os,sys;"
+        f"assert sys.argv[1:] == {protocol_arguments!r};"
+        "os.write(1,os.read(3,4096))"
+    )
+
+    def guard() -> None:
+        closure._revalidate_file(source, context="opaque v2 source bundle")
+        os.lseek(source.descriptor, 0, os.SEEK_SET)
+
+    try:
+        assert fcntl.fcntl(source.descriptor, fcntl.F_GETFL) & os.O_NONBLOCK
+        return_code, stdout, stderr, _ = closure._run_bounded(
+            tool,
+            ["-I", "-S", "-B", "-c", program, *protocol_arguments],
+            inherited_fd_binding=(source.descriptor, 3),
+            timeout=5,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            budget=closure._ProcessBudget(),
+            before=guard,
+            after=guard,
+        )
+    finally:
+        source.close()
+        tool.close()
+    assert return_code == 0
+    assert stdout == source_raw
+    assert stderr == b""
+
+
 def test_transient_tool_path_swap_is_killed_before_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -948,14 +1202,22 @@ def test_attestation_records_same_vnode_cs_kill_fail_stop_scope(
     assert record["other_same_vnode_mutations"] == "not_attested"
 
 
-def test_noncanonical_or_early_terminal_suspension_is_rejected_without_rereap(
+def test_noncanonical_or_early_terminal_suspension_is_observed_unreaped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(closure.os, "waitpid", lambda _pid, _flags: (123, 0x117F))
+    monkeypatch.setattr(
+        closure,
+        "_waitid_unreaped",
+        lambda *_args, **_kwargs: (closure.DARWIN_CLD_STOPPED, 17),
+    )
     with pytest.raises(closure.MachineClosureError, match="not suspended"):
         closure._wait_for_suspension(123, deadline=time.monotonic() + 1)
 
-    monkeypatch.setattr(closure.os, "waitpid", lambda _pid, _flags: (123, 0))
+    monkeypatch.setattr(
+        closure,
+        "_waitid_unreaped",
+        lambda *_args, **_kwargs: (closure.DARWIN_CLD_EXITED, 0),
+    )
     status, reaped = closure._wait_for_suspension(
         123,
         deadline=time.monotonic() + 1,
@@ -1043,7 +1305,7 @@ def test_early_terminal_runner_marks_child_reaped_and_preserves_primary_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pin = SimpleNamespace(path=Path("/synthetic/tool"))
-    cleanup: list[bool] = []
+    cleanup: list[tuple[bool, bool]] = []
     events: list[str] = []
     monkeypatch.setattr(
         closure,
@@ -1055,7 +1317,9 @@ def test_early_terminal_runner_marks_child_reaped_and_preserves_primary_error(
     monkeypatch.setattr(
         closure,
         "_kill_and_reap",
-        lambda _pid, *, already_reaped=False: cleanup.append(already_reaped),
+        lambda _pid, *, already_reaped=False, group_terminated=False: cleanup.append(
+            (already_reaped, group_terminated),
+        ),
     )
     with pytest.raises(closure.MachineClosureError, match="terminated before"):
         closure._run_bounded(
@@ -1068,7 +1332,7 @@ def test_early_terminal_runner_marks_child_reaped_and_preserves_primary_error(
             before=lambda: events.append("before"),
             after=lambda: events.append("after"),
         )
-    assert cleanup == [True]
+    assert cleanup == [(False, False)]
     assert events == ["before", "before", "after"]
 
 
@@ -1092,7 +1356,42 @@ def test_already_reaped_cleanup_never_signals_a_stale_process_identifier(
             "already-reaped process was reaped again",
         ),
     )
-    assert closure._kill_and_reap(123, already_reaped=True) is None
+    assert (
+        closure._kill_and_reap(
+            123,
+            already_reaped=True,
+            group_terminated=True,
+        )
+        is None
+    )
+    with pytest.raises(closure.MachineClosureError, match="unsafe cleanup state"):
+        closure._kill_and_reap(123, already_reaped=True, group_terminated=False)
+
+
+def test_cleanup_retries_group_proof_before_reaping_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    def terminate(_process_id: int) -> None:
+        events.append("group")
+        if events == ["group"]:
+            raise closure.MachineClosureError("synthetic first group proof failure")
+
+    monkeypatch.setattr(closure, "_terminate_owned_process_group", terminate)
+    monkeypatch.setattr(
+        closure.os,
+        "kill",
+        lambda *_args: events.append("direct"),
+    )
+    monkeypatch.setattr(
+        closure,
+        "_reap_process",
+        lambda *_args, **_kwargs: events.append("reap") or 9,
+    )
+    with pytest.raises(closure.MachineClosureError, match="successful contained retry"):
+        closure._kill_and_reap(123)
+    assert events == ["group", "direct", "group", "reap"]
 
 
 def test_runner_marks_child_reaped_before_a_failing_after_hook(
@@ -1106,7 +1405,7 @@ def test_runner_marks_child_reaped_before_a_failing_after_hook(
     )
     events: list[str] = []
     original_reap = closure._reap_process
-    cleanup: list[bool] = []
+    cleanup: list[tuple[bool, bool]] = []
 
     def reap(process_id: int, *, deadline: float) -> int:
         events.append("reap")
@@ -1121,7 +1420,9 @@ def test_runner_marks_child_reaped_before_a_failing_after_hook(
     monkeypatch.setattr(
         closure,
         "_kill_and_reap",
-        lambda _pid, *, already_reaped=False: cleanup.append(already_reaped),
+        lambda _pid, *, already_reaped=False, group_terminated=False: cleanup.append(
+            (already_reaped, group_terminated),
+        ),
     )
     try:
         with pytest.raises(KeyboardInterrupt, match="post-run interruption"):
@@ -1138,7 +1439,7 @@ def test_runner_marks_child_reaped_before_a_failing_after_hook(
     finally:
         pin.close()
     assert events == ["reap", "after"]
-    assert cleanup == [True]
+    assert cleanup == [(True, True)]
 
 
 def test_spawn_state_destroy_attempts_every_cleanup_after_baseexception() -> None:
@@ -1191,11 +1492,13 @@ def test_selector_baseexception_is_reported_after_all_runner_cleanup(
     )
     monkeypatch.setattr(closure, "_spawn_suspended_darwin", lambda *_a, **_k: 123)
     monkeypatch.setattr(closure, "_wait_for_suspension", lambda *_a, **_k: (0, True))
-    cleanup: list[bool] = []
+    cleanup: list[tuple[bool, bool]] = []
     monkeypatch.setattr(
         closure,
         "_kill_and_reap",
-        lambda _pid, *, already_reaped=False: cleanup.append(already_reaped),
+        lambda _pid, *, already_reaped=False, group_terminated=False: cleanup.append(
+            (already_reaped, group_terminated),
+        ),
     )
     events: list[str] = []
     with pytest.raises(
@@ -1213,7 +1516,7 @@ def test_selector_baseexception_is_reported_after_all_runner_cleanup(
             after=lambda: events.append("after"),
         )
     assert selector_instance.close_calls == 2
-    assert cleanup == [True]
+    assert cleanup == [(False, False)]
     assert events == ["before", "before", "after"]
 
 

@@ -68,6 +68,15 @@ POSIX_SPAWN_CLOEXEC_DEFAULT: Final = 0x4000
 DARWIN_SPAWN_FLAGS: Final = (
     POSIX_SPAWN_START_SUSPENDED | POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT
 )
+DARWIN_P_PID: Final = 1
+DARWIN_WNOHANG: Final = 0x00000001
+DARWIN_WEXITED: Final = 0x00000004
+DARWIN_WSTOPPED: Final = 0x00000008
+DARWIN_WNOWAIT: Final = 0x00000020
+DARWIN_CLD_EXITED: Final = 1
+DARWIN_CLD_KILLED: Final = 2
+DARWIN_CLD_DUMPED: Final = 3
+DARWIN_CLD_STOPPED: Final = 5
 PROC_PIDREGIONPATHINFO: Final = 8
 PROC_REGIONWITHPATHINFO_SIZE: Final = 1272
 PROC_REGIONINFO_SIZE: Final = 96
@@ -94,6 +103,7 @@ CSMAGIC_EMBEDDED_SIGNATURE: Final = 0xFADE0CC0
 CSSLOT_CODEDIRECTORY: Final = 0
 MAX_MACH_LOAD_COMMANDS: Final = 4096
 MAX_CODE_SIGNATURE_BLOBS: Final = 64
+MAX_PROCESS_GROUP_MEMBERS: Final = 4096
 ATTESTATION_TIMEOUT_SECONDS: Final = 5.0
 
 MAX_PDF_BYTES: Final = 128 * 1024 * 1024
@@ -272,6 +282,21 @@ class _ProcRegionWithPathInfo(ctypes.Structure):
     _fields_ = [
         ("prp_prinfo", _ProcRegionInfo),
         ("prp_vip", _VnodeInfoPath),
+    ]
+
+
+class _DarwinSigInfo(ctypes.Structure):
+    _fields_ = [
+        ("si_signo", ctypes.c_int),
+        ("si_errno", ctypes.c_int),
+        ("si_code", ctypes.c_int),
+        ("si_pid", ctypes.c_int),
+        ("si_uid", ctypes.c_uint),
+        ("si_status", ctypes.c_int),
+        ("si_addr", ctypes.c_void_p),
+        ("si_value", ctypes.c_void_p),
+        ("si_band", ctypes.c_long),
+        ("reserved", ctypes.c_ulong * 7),
     ]
 
 
@@ -1398,6 +1423,7 @@ def _spawn_suspended_darwin(
     arguments: Sequence[str],
     *,
     inherited_fds: Sequence[int],
+    inherited_fd_binding: tuple[int, int] | None = None,
     stdout_descriptor: int,
     stderr_descriptor: int,
 ) -> int:
@@ -1405,14 +1431,32 @@ def _spawn_suspended_darwin(
     if not tool.path.is_absolute():
         _fail("Poppler executable path must be absolute")
     inherited = tuple(inherited_fds)
+    bindings = () if inherited_fd_binding is None else (inherited_fd_binding,)
+    binding_sources = tuple(source for source, _target in bindings)
+    binding_targets = tuple(target for _source, target in bindings)
+    output_descriptors = {stdout_descriptor, stderr_descriptor}
     if (
         len(inherited) != len(set(inherited))
         or any(descriptor <= 2 for descriptor in inherited)
+        or len(binding_sources) != len(set(binding_sources))
+        or len(binding_targets) != len(set(binding_targets))
+        or any(source <= 2 or target <= 2 for source, target in bindings)
+        or set(inherited) & set(binding_sources)
+        or set(inherited) & set(binding_targets)
+        or output_descriptors & set(inherited)
+        or output_descriptors & set(binding_sources)
+        or output_descriptors & set(binding_targets)
+        or stdout_descriptor == stderr_descriptor
         or stdout_descriptor <= 2
         or stderr_descriptor <= 2
     ):
         _fail("spawn descriptor contract is ambiguous")
-    for descriptor in (*inherited, stdout_descriptor, stderr_descriptor):
+    for descriptor in (
+        *inherited,
+        *binding_sources,
+        stdout_descriptor,
+        stderr_descriptor,
+    ):
         try:
             os.fstat(descriptor)
         except OSError as error:  # noqa: PERF203 - exact descriptor diagnostics.
@@ -1491,6 +1535,22 @@ def _spawn_suspended_darwin(
                 ),
                 context="cannot inherit an exact child descriptor",
             )
+        for source, target in bindings:
+            if source == target:
+                status = library.posix_spawn_file_actions_addinherit_np(
+                    ctypes.byref(actions),
+                    source,
+                )
+            else:
+                status = library.posix_spawn_file_actions_adddup2(
+                    ctypes.byref(actions),
+                    source,
+                    target,
+                )
+            _spawn_call(
+                status,
+                context="cannot bind an exact child descriptor number",
+            )
         _spawn_call(
             library.posix_spawn(
                 ctypes.byref(spawned),
@@ -1536,26 +1596,79 @@ def _spawn_suspended_darwin(
     return process_id
 
 
-def _wait_for_suspension(process_id: int, *, deadline: float) -> tuple[int, bool]:
+def _waitid_unreaped(
+    process_id: int,
+    *,
+    options: int,
+    deadline: float,
+    context: str,
+) -> tuple[int, int]:
+    """Observe one child state while retaining its PID against reuse."""
+    if sys.platform != "darwin":
+        _fail("unreaped child-state observation requires Darwin")
+    layout = {
+        "size": ctypes.sizeof(_DarwinSigInfo),
+        "pid_offset": _DarwinSigInfo.si_pid.offset,
+        "status_offset": _DarwinSigInfo.si_status.offset,
+    }
+    if layout != {"size": 104, "pid_offset": 12, "status_offset": 20}:
+        _fail(f"Darwin siginfo ABI layout is unsupported: {layout}")
+    library = _darwin_library()
+    library.waitid.argtypes = [
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.POINTER(_DarwinSigInfo),
+        ctypes.c_int,
+    ]
+    library.waitid.restype = ctypes.c_int
     while True:
-        try:
-            waited, status = os.waitpid(
-                process_id,
-                os.WUNTRACED | os.WNOHANG,
-            )
-        except OSError as error:
-            _fail(f"cannot verify suspended child state: {error}")
-        if waited == process_id:
-            if status == 0x7F and os.WIFSTOPPED(status) and os.WSTOPSIG(status) == 0:
-                return status, False
-            if os.WIFEXITED(status) or os.WIFSIGNALED(status):
-                return status, True
-            _fail(f"child was not suspended before attestation (status {status})")
-        if waited != 0:
-            _fail("waitpid returned an unrelated process during attestation")
+        info = _DarwinSigInfo()
+        ctypes.set_errno(0)
+        result = library.waitid(
+            DARWIN_P_PID,
+            process_id,
+            ctypes.byref(info),
+            options | DARWIN_WNOHANG | DARWIN_WNOWAIT,
+        )
+        if result != 0:
+            error_number = ctypes.get_errno()
+            if error_number == errno.EINTR:
+                continue
+            _fail(f"{context}: {os.strerror(error_number)} (errno {error_number})")
+        if info.si_pid == process_id:
+            if info.si_signo != signal.SIGCHLD:
+                _fail(f"{context}: waitid returned a non-SIGCHLD event")
+            return info.si_code, info.si_status
+        if info.si_pid != 0:
+            _fail(f"{context}: waitid returned an unrelated process")
         if time.monotonic() >= deadline:
-            _fail("timed out while verifying suspended child state")
+            _fail(f"{context}: timed out")
         time.sleep(0.005)
+
+
+def _wait_for_suspension(process_id: int, *, deadline: float) -> tuple[int, bool]:
+    code, status = _waitid_unreaped(
+        process_id,
+        options=DARWIN_WSTOPPED | DARWIN_WEXITED,
+        deadline=deadline,
+        context="cannot verify suspended child state",
+    )
+    if code == DARWIN_CLD_STOPPED and status == 0:
+        return 0x7F, False
+    if code in {DARWIN_CLD_EXITED, DARWIN_CLD_KILLED, DARWIN_CLD_DUMPED}:
+        return status, True
+    _fail(f"child was not suspended before attestation (code {code}, status {status})")
+
+
+def _observe_terminal_unreaped(process_id: int, *, deadline: float) -> None:
+    code, status = _waitid_unreaped(
+        process_id,
+        options=DARWIN_WEXITED,
+        deadline=deadline,
+        context="cannot observe bounded child terminal state without reaping",
+    )
+    if code not in {DARWIN_CLD_EXITED, DARWIN_CLD_KILLED, DARWIN_CLD_DUMPED}:
+        _fail(f"bounded child terminal waitid event is invalid ({code}, {status})")
 
 
 def _main_executable_mapping(process_id: int, tool: _PinnedFile) -> dict[str, object]:
@@ -1696,31 +1809,124 @@ def _reap_process(process_id: int, *, deadline: float) -> int:
         time.sleep(0.005)
 
 
-def _kill_and_reap(process_id: int, *, already_reaped: bool = False) -> int | None:
-    if already_reaped:
-        return None
-    kill_error: OSError | None = None
+def _terminate_owned_process_group(process_id: int) -> None:
+    """Kill and drain a child-owned group while its leader PID cannot be reused."""
+    process_group_signaled = False
     try:
         os.killpg(process_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        process_group_signaled = True
+    except (PermissionError, ProcessLookupError):
+        # Darwin may deny or report no signal target for a group whose only
+        # member is the terminal zombie leader.  The WNOWAIT-held leader still
+        # owns the PID/PGID, so an exact enumeration can distinguish that state
+        # from an uncontained descendant without risking a reused identifier.
+        process_group_signaled = False
     except OSError as error:
-        kill_error = error
-        try:
-            os.kill(process_id, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as direct_error:
+        _fail(f"cannot terminate bounded child process group: {error}")
+    _require_process_group_leader_only(
+        process_id,
+        deadline=time.monotonic() + ATTESTATION_TIMEOUT_SECONDS,
+        wait_for_signaled_members=process_group_signaled,
+    )
+
+
+def _darwin_process_group_members(process_id: int) -> tuple[int, ...]:
+    if sys.platform != "darwin":
+        _fail("process-group member enumeration requires Darwin")
+    library = _darwin_library()
+    library.proc_listpgrppids.argtypes = [
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    library.proc_listpgrppids.restype = ctypes.c_int
+    pids = (ctypes.c_int * MAX_PROCESS_GROUP_MEMBERS)()
+    ctypes.set_errno(0)
+    count = library.proc_listpgrppids(
+        process_id,
+        pids,
+        ctypes.sizeof(pids),
+    )
+    if count < 0:
+        error_number = ctypes.get_errno()
+        _fail(
+            "cannot enumerate bounded child process group: "
+            f"{os.strerror(error_number)} (errno {error_number})",
+        )
+    if count >= MAX_PROCESS_GROUP_MEMBERS:
+        _fail("bounded child process group exceeds its member bound")
+    members = tuple(pids[:count])
+    if any(member <= 0 for member in members) or len(set(members)) != len(members):
+        _fail("bounded child process group contains invalid or duplicate PIDs")
+    return tuple(sorted(members))
+
+
+def _require_process_group_leader_only(
+    process_id: int,
+    *,
+    deadline: float,
+    wait_for_signaled_members: bool,
+) -> None:
+    """Require the WNOWAIT-held leader to be the only exact PGID member twice."""
+    while True:
+        members = _darwin_process_group_members(process_id)
+        if members == (process_id,):
+            break
+        if not wait_for_signaled_members or time.monotonic() >= deadline:
             _fail(
-                "cannot terminate bounded child process group or child: "
-                f"{kill_error}; {direct_error}",
+                "bounded child process group is not the retained leader alone "
+                f"(members {members})",
+            )
+        time.sleep(0.005)
+    if _darwin_process_group_members(process_id) != (process_id,):
+        _fail("bounded child process group membership changed before parent reap")
+
+
+def _kill_and_reap(
+    process_id: int,
+    *,
+    already_reaped: bool = False,
+    group_terminated: bool = False,
+) -> int | None:
+    if already_reaped:
+        if not group_terminated:
+            _fail(
+                "unsafe cleanup state: child was reaped before its owned process "
+                "group was terminated",
+            )
+        return None
+    termination_errors: list[str] = []
+    if not group_terminated:
+        for attempt in range(2):
+            try:
+                _terminate_owned_process_group(process_id)
+                group_terminated = True
+                break
+            except MachineClosureError as error:
+                termination_errors.append(str(error))
+                if attempt == 0:
+                    try:
+                        os.kill(process_id, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except OSError as direct_error:
+                        termination_errors.append(
+                            f"cannot directly terminate bounded child: {direct_error}",
+                        )
+        if not group_terminated:
+            _fail(
+                "process-group termination failed twice; retained the leader "
+                "unreaped to prevent PID/PGID reuse: " + "; ".join(termination_errors),
             )
     status = _reap_process(
         process_id,
         deadline=time.monotonic() + ATTESTATION_TIMEOUT_SECONDS,
     )
-    if kill_error is not None:
-        _fail(f"process-group termination failed before direct kill: {kill_error}")
+    if termination_errors:
+        _fail(
+            "process-group termination failed before a successful contained retry: "
+            + "; ".join(termination_errors),
+        )
     return status
 
 
@@ -1744,6 +1950,7 @@ def _run_bounded(
     arguments: Sequence[str],
     *,
     inherited_fds: Sequence[int] = (),
+    inherited_fd_binding: tuple[int, int] | None = None,
     timeout: float,
     stdout_limit: int,
     stderr_limit: int,
@@ -1756,6 +1963,7 @@ def _run_bounded(
     before_completed = False
     process_id: int | None = None
     process_reaped = False
+    process_group_terminated = False
     completed = False
     stdout_read = stdout_write = stderr_read = stderr_write = -1
     selector = selectors.DefaultSelector()
@@ -1774,6 +1982,7 @@ def _run_bounded(
             tool,
             arguments,
             inherited_fds=inherited_fds,
+            inherited_fd_binding=inherited_fd_binding,
             stdout_descriptor=stdout_write,
             stderr_descriptor=stderr_write,
         )
@@ -1781,11 +1990,11 @@ def _run_bounded(
         stdout_write = -1
         os.close(stderr_write)
         stderr_write = -1
-        suspended_status, process_reaped = _wait_for_suspension(
+        suspended_status, terminal_observed = _wait_for_suspension(
             process_id,
             deadline=deadline,
         )
-        if process_reaped:
+        if terminal_observed:
             _fail(
                 "child terminated before suspended attestation "
                 f"(status {suspended_status})",
@@ -1824,6 +2033,9 @@ def _run_bounded(
                     _fail(f"child {name} exceeds the {limit}-byte limit")
         stdout = bytes(streams[stdout_read][1])
         stderr = bytes(streams[stderr_read][1])
+        _observe_terminal_unreaped(process_id, deadline=deadline)
+        _terminate_owned_process_group(process_id)
+        process_group_terminated = True
         terminal_status = _reap_process(process_id, deadline=deadline)
         process_reaped = True
         return_code = _wait_return_code(terminal_status)
@@ -1836,7 +2048,11 @@ def _run_bounded(
         cleanup_errors: list[BaseException] = []
         if process_id is not None and not completed:
             try:
-                _kill_and_reap(process_id, already_reaped=process_reaped)
+                _kill_and_reap(
+                    process_id,
+                    already_reaped=process_reaped,
+                    group_terminated=process_group_terminated,
+                )
             except BaseException as error:  # noqa: BLE001 - cleanup ownership.
                 cleanup_errors.append(error)
         try:
