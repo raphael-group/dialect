@@ -38,15 +38,16 @@ REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v3"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
-BURDEN_LOG10_MAX: Final = 6.0
+BURDEN_COUNT_MAX: Final = 1_000_000.0
+BURDEN_LOG1P_MAX: Final = float(np.log1p(BURDEN_COUNT_MAX))
 BURDEN_BIN_COUNT: Final = 24
 BURDEN_BIN_COLUMNS: Final = (
     "cohort",
     "provider",
-    "observed_log10_plus_one_lower",
-    "observed_log10_plus_one_upper",
-    "expected_log10_plus_one_lower",
-    "expected_log10_plus_one_upper",
+    "observed_log1p_bin_lower",
+    "observed_log1p_bin_upper",
+    "expected_log1p_bin_lower",
+    "expected_log1p_bin_upper",
     "tumor_count",
 )
 PROVIDER_LABELS: Final = {
@@ -701,15 +702,15 @@ def _aggregate_burden_bins(
     ):
         msg = f"Invalid burden values for aggregate Figure 6 bins: {provider}"
         raise ValueError(msg)
-    observed_log = np.log10(observed_values + 1.0)
-    expected_log = np.log10(expected_values + 1.0)
+    observed_log = np.log1p(observed_values)
+    expected_log = np.log1p(expected_values)
     if (
-        (observed_log > BURDEN_LOG10_MAX).any()
-        or (expected_log > BURDEN_LOG10_MAX).any()
+        (observed_log > BURDEN_LOG1P_MAX).any()
+        or (expected_log > BURDEN_LOG1P_MAX).any()
     ):
         msg = "Figure 6 burden exceeds the frozen aggregate-bin domain."
         raise ValueError(msg)
-    edges = np.linspace(0.0, BURDEN_LOG10_MAX, BURDEN_BIN_COUNT + 1)
+    edges = np.linspace(0.0, BURDEN_LOG1P_MAX, BURDEN_BIN_COUNT + 1)
     histogram, observed_edges, expected_edges = np.histogram2d(
         observed_log,
         expected_log,
@@ -721,10 +722,10 @@ def _aggregate_burden_bins(
             {
                 "cohort": FOCAL_BURDEN_COHORT,
                 "provider": provider,
-                "observed_log10_plus_one_lower": observed_edges[observed_index],
-                "observed_log10_plus_one_upper": observed_edges[observed_index + 1],
-                "expected_log10_plus_one_lower": expected_edges[expected_index],
-                "expected_log10_plus_one_upper": expected_edges[expected_index + 1],
+                "observed_log1p_bin_lower": observed_edges[observed_index],
+                "observed_log1p_bin_upper": observed_edges[observed_index + 1],
+                "expected_log1p_bin_lower": expected_edges[expected_index],
+                "expected_log1p_bin_upper": expected_edges[expected_index + 1],
                 "tumor_count": int(histogram[observed_index, expected_index]),
             },
         )
@@ -779,19 +780,19 @@ def _plot_figure6(  # noqa: PLR0913
     ax = axes[0, 0]
     for provider in core.BMRS:
         selected_bins = burden_bins.loc[burden_bins["provider"].eq(provider)]
-        observed = 10 ** (
+        observed = np.exp(
             (
-                selected_bins["observed_log10_plus_one_lower"]
-                + selected_bins["observed_log10_plus_one_upper"]
+                selected_bins["observed_log1p_bin_lower"]
+                + selected_bins["observed_log1p_bin_upper"]
             )
-            / 2
+            / 2,
         )
-        expected = 10 ** (
+        expected = np.exp(
             (
-                selected_bins["expected_log10_plus_one_lower"]
-                + selected_bins["expected_log10_plus_one_upper"]
+                selected_bins["expected_log1p_bin_lower"]
+                + selected_bins["expected_log1p_bin_upper"]
             )
-            / 2
+            / 2,
         )
         counts = selected_bins["tumor_count"].to_numpy(dtype=float)
         ax.scatter(
@@ -1209,15 +1210,15 @@ def validate_report(  # noqa: PLR0913
             for provider in core.BMRS
         )
         or not (
-            figure_burden["observed_log10_plus_one_lower"]
-            < figure_burden["observed_log10_plus_one_upper"]
+            figure_burden["observed_log1p_bin_lower"]
+            < figure_burden["observed_log1p_bin_upper"]
         ).all()
         or not (
-            figure_burden["expected_log10_plus_one_lower"]
-            < figure_burden["expected_log10_plus_one_upper"]
+            figure_burden["expected_log1p_bin_lower"]
+            < figure_burden["expected_log1p_bin_upper"]
         ).all()
-        or (figure_burden["observed_log10_plus_one_upper"] > BURDEN_LOG10_MAX).any()
-        or (figure_burden["expected_log10_plus_one_upper"] > BURDEN_LOG10_MAX).any()
+        or (figure_burden["observed_log1p_bin_upper"] > BURDEN_LOG1P_MAX).any()
+        or (figure_burden["expected_log1p_bin_upper"] > BURDEN_LOG1P_MAX).any()
         or any(
             token in column.casefold()
             for column in figure_burden.columns

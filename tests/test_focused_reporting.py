@@ -405,10 +405,10 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         {
             "cohort": [reporting.FOCAL_BURDEN_COHORT] * len(reporting.core.BMRS),
             "provider": list(reporting.core.BMRS),
-            "observed_log10_plus_one_lower": [0.0] * len(reporting.core.BMRS),
-            "observed_log10_plus_one_upper": [0.25] * len(reporting.core.BMRS),
-            "expected_log10_plus_one_lower": [0.0] * len(reporting.core.BMRS),
-            "expected_log10_plus_one_upper": [0.25] * len(reporting.core.BMRS),
+            "observed_log1p_bin_lower": [0.0] * len(reporting.core.BMRS),
+            "observed_log1p_bin_upper": [0.25] * len(reporting.core.BMRS),
+            "expected_log1p_bin_lower": [0.0] * len(reporting.core.BMRS),
+            "expected_log1p_bin_upper": [0.25] * len(reporting.core.BMRS),
             "tumor_count": [focal_tumors] * len(reporting.core.BMRS),
         },
     ).to_csv(root / "figure6_burden_bins.csv", index=False)
