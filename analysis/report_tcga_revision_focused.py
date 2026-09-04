@@ -50,6 +50,63 @@ BURDEN_BIN_COLUMNS: Final = (
     "expected_log1p_bin_upper",
     "tumor_count",
 )
+COHORT_BURDEN_HISTOGRAM_COLUMNS: Final = (
+    "cohort",
+    "total_nonsynonymous_snv_events",
+    "tumor_count",
+)
+BURDEN_SUMMARY_COLUMNS: Final = (
+    "tumors",
+    "burden_median",
+    "burden_q25",
+    "burden_q75",
+    "burden_p90",
+    "burden_p95",
+    "burden_max",
+    "high_burden_fraction",
+)
+BURDEN_SOURCE_POLICY: Final = (
+    "cohort-burden-histogram-and-fixed-aggregate-figure-bins-only"
+)
+OVERLAP_COLUMNS: Final = (
+    "cohort",
+    "direction",
+    "adjustment",
+    "q_threshold",
+    "mutsig_primary_rejection_count",
+    "cbase_descriptive_crossing_count",
+    "dig_descriptive_crossing_count",
+    "mutsig_rejection_cbase_concordant_crossing_count",
+    "mutsig_rejection_cbase_discordant_crossing_count",
+    "mutsig_rejection_dig_concordant_crossing_count",
+    "mutsig_rejection_dig_discordant_crossing_count",
+)
+RUNTIME_COLUMNS: Final = (
+    "cohort",
+    "provider",
+    "pairwise_rows",
+    "elapsed_seconds",
+    "user_cpu_seconds",
+    "system_cpu_seconds",
+    "peak_rss_bytes",
+)
+FIT_DIAGNOSTIC_COLUMNS: Final = (
+    "scope",
+    "pairwise_rows",
+    "converged_rows",
+    "nonconverged_rows",
+    "iterations_min",
+    "iterations_median",
+    "iterations_p95",
+    "iterations_max",
+    "minimum_last_ll_gain",
+    "maximum_last_ll_gain",
+    "maximum_fixed_point_residual",
+    "maximum_kkt_residual",
+    "full_affine_rank_rows",
+    "rank_deficient_rows",
+    "rank_not_certified_underflow_rows",
+)
 PROVIDER_LABELS: Final = {
     "cbase": "CBaSE",
     "dig": "DIG",
@@ -82,6 +139,10 @@ def _canonical_json(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _csv_bytes(frame: pd.DataFrame) -> bytes:
+    return frame.to_csv(index=False, lineterminator="\n").encode("utf-8")
 
 
 def _sha256(path: Path) -> str:
@@ -130,7 +191,8 @@ def _load_rule(
     if (
         rule.get("schema_version") != SCHEMA_VERSION
         or rule.get("contract") != rule_module.RULE_CONTRACT
-        or rule.get("scope") != "one-identical-rule-across-all-32-cancer-types"
+        or rule.get("scope")
+        != "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
         or rule.get("primary_provider") != "mutsig"
         or rule.get("continuity_provider") != "cbase"
         or rule.get("supplementary_providers") != ["dig"]
@@ -146,6 +208,8 @@ def _load_rule(
         or float(primary_q) != 0.01
         or float(sensitivity_q) != 0.01
         or rule.get("threshold_comparison") != "inclusive-less-than-or-equal"
+        or rule.get("direction")
+        != "primary-provider-rho-sign-after-nondirectional-rejection"
         or rule.get("direction_unavailable")
         != "retain-nondirectional-rejection-exclude-from-me-co-lists"
         or rule.get("thresholds_selected_from_observed_pairs") is not False
@@ -303,6 +367,82 @@ def _decision_prefix(provider: str, analysis: str) -> str:
     raise ValueError(msg)
 
 
+def summary_columns() -> tuple[str, ...]:
+    """Return the exact public cohort-summary schema."""
+    columns = [
+        "cohort",
+        "primary_adjustment",
+        "primary_q_threshold",
+        "sensitivity_adjustment",
+        "sensitivity_q_threshold",
+        "tumors",
+        "selected_features",
+        "tested_pairs",
+        "same_base_pairs_excluded",
+        "unfiltered_pair_count",
+        "burden_median",
+        "burden_q25",
+        "burden_q75",
+        "burden_p90",
+        "burden_p95",
+        "burden_max",
+        "high_burden_fraction",
+    ]
+    for provider in core.BMRS:
+        for label in ("primary", "sensitivity"):
+            prefix = _decision_prefix(provider, label)
+            columns.extend(
+                [
+                    f"{prefix}_total",
+                    f"{prefix}_me",
+                    f"{prefix}_co",
+                    f"{prefix}_direction_unavailable",
+                ],
+            )
+    return tuple(columns)
+
+
+def top_primary_columns() -> tuple[str, ...]:
+    """Return the exact public top-pair schema."""
+    columns = [
+        "cohort",
+        "primary_adjustment",
+        "primary_q_threshold",
+        "direction",
+        *postprocess.result_columns(),
+    ]
+    for provider in core.BMRS:
+        prefix = _decision_prefix(provider, "primary")
+        columns.extend(
+            [
+                prefix,
+                f"{prefix}_direction_concordant",
+                f"{prefix}_direction_discordant",
+                f"{prefix}_direction_unavailable",
+            ],
+        )
+    columns.extend(
+        [
+            "descriptive_direction_concordant_provider_count",
+            "descriptive_direction_discordant_provider_count",
+        ],
+    )
+    return tuple(columns)
+
+
+def report_csv_columns() -> dict[str, tuple[str, ...]]:
+    """Return every exact CSV schema allowed in the public report."""
+    return {
+        "cohort_burden_histogram.csv": COHORT_BURDEN_HISTOGRAM_COLUMNS,
+        "figure6_burden_bins.csv": BURDEN_BIN_COLUMNS,
+        "table_s5.csv": summary_columns(),
+        "provider_overlap.csv": OVERLAP_COLUMNS,
+        "top_primary_pairs.csv": top_primary_columns(),
+        "runtime_summary.csv": RUNTIME_COLUMNS,
+        "fit_diagnostics_summary.csv": FIT_DIAGNOSTIC_COLUMNS,
+    }
+
+
 def _calibration_gate_maxima(calibration_table: pd.DataFrame) -> pd.DataFrame:
     """Return each cohort's worst pair-resolved primary-gate endpoint."""
     required = {
@@ -405,12 +545,191 @@ def _burden_values(
     }
 
 
+def _cohort_burden_histogram(
+    values: Mapping[str, np.ndarray],
+    cohorts: Sequence[str],
+) -> pd.DataFrame:
+    """Aggregate integer tumor burdens without retaining a sample axis."""
+    if set(values) != set(cohorts):
+        msg = "Cannot build an exact cohort burden histogram."
+        raise ValueError(msg)
+    rows: list[dict[str, int | str]] = []
+    for cohort in cohorts:
+        burdens = np.asarray(values[cohort])
+        if (
+            burdens.ndim != 1
+            or len(burdens) == 0
+            or not np.issubdtype(burdens.dtype, np.number)
+            or not np.isfinite(burdens).all()
+            or (burdens < 0).any()
+            or not np.equal(burdens, np.floor(burdens)).all()
+        ):
+            msg = f"Invalid burdens for aggregate cohort histogram: {cohort}"
+            raise ValueError(msg)
+        burden_bins, tumor_counts = np.unique(
+            burdens.astype(np.int64),
+            return_counts=True,
+        )
+        rows.extend(
+            {
+                "cohort": cohort,
+                "total_nonsynonymous_snv_events": int(burden),
+                "tumor_count": int(tumor_count),
+            }
+            for burden, tumor_count in zip(
+                burden_bins,
+                tumor_counts,
+                strict=True,
+            )
+        )
+    return pd.DataFrame(rows, columns=COHORT_BURDEN_HISTOGRAM_COLUMNS)
+
+
+def _burden_values_from_histogram(
+    histogram: pd.DataFrame,
+    cohorts: Sequence[str],
+) -> dict[str, np.ndarray]:
+    """Reconstruct each cohort's burden multiset from its aggregate histogram."""
+    if (
+        tuple(histogram.columns) != COHORT_BURDEN_HISTOGRAM_COLUMNS
+        or histogram.empty
+        or histogram.isna().any().any()
+        or not pd.api.types.is_integer_dtype(
+            histogram["total_nonsynonymous_snv_events"],
+        )
+        or not pd.api.types.is_integer_dtype(histogram["tumor_count"])
+    ):
+        msg = "Aggregate cohort burden histogram violates its exact schema."
+        raise ValueError(msg)
+    burden_bins = histogram["total_nonsynonymous_snv_events"].to_numpy(
+        dtype=np.int64,
+    )
+    tumor_counts = histogram["tumor_count"].to_numpy(dtype=np.int64)
+    cohort_axis = histogram["cohort"].tolist()
+    observed_blocks = [
+        cohort
+        for index, cohort in enumerate(cohort_axis)
+        if index == 0 or cohort != cohort_axis[index - 1]
+    ]
+    if (
+        observed_blocks != list(cohorts)
+        or (burden_bins < 0).any()
+        or (tumor_counts < 1).any()
+        or int(tumor_counts.sum()) != EXPECTED_TUMOR_COUNT
+    ):
+        msg = "Aggregate cohort burden histogram has invalid coordinates or counts."
+        raise ValueError(msg)
+    values: dict[str, np.ndarray] = {}
+    for cohort in cohorts:
+        selected = histogram["cohort"].eq(cohort).to_numpy()
+        selected_bins = burden_bins[selected]
+        selected_counts = tumor_counts[selected]
+        if len(selected_bins) == 0 or not (np.diff(selected_bins) > 0).all():
+            msg = f"Aggregate burden bins are not strictly ordered: {cohort}"
+            raise ValueError(msg)
+        values[cohort] = np.repeat(selected_bins, selected_counts).astype(float)
+    return values
+
+
+def _burden_summary_fields(
+    burdens: np.ndarray,
+    high_burden_threshold: float,
+) -> dict[str, int | float]:
+    """Compute every Table S5 burden field from one cohort burden multiset."""
+    return {
+        "tumors": len(burdens),
+        "burden_median": float(np.median(burdens)),
+        "burden_q25": float(np.quantile(burdens, 0.25)),
+        "burden_q75": float(np.quantile(burdens, 0.75)),
+        "burden_p90": float(np.quantile(burdens, 0.90)),
+        "burden_p95": float(np.quantile(burdens, 0.95)),
+        "burden_max": float(np.max(burdens)),
+        "high_burden_fraction": float((burdens >= high_burden_threshold).mean()),
+    }
+
+
+def _validate_burden_histogram_summary(
+    histogram: pd.DataFrame,
+    summary: pd.DataFrame,
+    manifest_threshold: object,
+) -> float:
+    """Bind every reported burden statistic to the public aggregate histogram."""
+    cohorts = tuple(TCGA_COHORTS)
+    values = _burden_values_from_histogram(histogram, cohorts)
+    threshold = _high_burden_threshold(values)
+    if (
+        not isinstance(manifest_threshold, (int, float))
+        or isinstance(manifest_threshold, bool)
+        or not math.isfinite(float(manifest_threshold))
+        or float(manifest_threshold) != threshold
+        or summary["cohort"].tolist() != list(cohorts)
+    ):
+        msg = "Aggregate burden histogram does not reproduce the manifest threshold."
+        raise ValueError(msg)
+    expected = pd.DataFrame(
+        [
+            {
+                "cohort": cohort,
+                **_burden_summary_fields(values[cohort], threshold),
+            }
+            for cohort in cohorts
+        ],
+    )
+    expected_values = expected.loc[:, BURDEN_SUMMARY_COLUMNS].to_numpy(dtype=float)
+    reported_values = summary.loc[:, BURDEN_SUMMARY_COLUMNS].to_numpy(dtype=float)
+    if not np.array_equal(reported_values, expected_values):
+        msg = "Table S5 burden summary differs from its aggregate histogram."
+        raise ValueError(msg)
+    return threshold
+
+
 def _high_burden_threshold(values: Mapping[str, np.ndarray]) -> float:
     pooled = np.concatenate(tuple(values.values()))
     if len(pooled) != EXPECTED_TUMOR_COUNT or not np.isfinite(pooled).all():
         msg = "Cannot define the pooled high-burden threshold."
         raise ValueError(msg)
     return float(np.quantile(pooled, HIGH_BURDEN_QUANTILE, method="higher"))
+
+
+def _cohort_pair_counts(run_root: Path, cohort: str) -> dict[str, int]:
+    """Read and reconcile aggregate pair counts from one frozen cohort contract."""
+    path = run_root / "contracts" / f"{cohort}.json"
+    if not path.is_file() or path.is_symlink():
+        msg = f"Focused cohort contract is missing or unsafe: {path}"
+        raise ValueError(msg)
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(contract, dict):
+        msg = f"Focused cohort contract must be a JSON object: {cohort}"
+        raise TypeError(msg)
+    features = contract.get("features")
+    pair_policy = contract.get("pair_policy")
+    if (
+        contract.get("cohort") != cohort
+        or contract.get("top_k") != 500
+        or not isinstance(features, list)
+        or len(features) != 500
+        or len(set(features)) != len(features)
+        or not all(isinstance(feature, str) and feature for feature in features)
+        or not isinstance(pair_policy, dict)
+    ):
+        msg = f"Focused cohort contract has invalid pair coordinates: {cohort}"
+        raise ValueError(msg)
+    expected = core._pair_contract(features)  # noqa: SLF001
+    if any(pair_policy.get(key) != value for key, value in expected.items()):
+        msg = f"Focused cohort pair counts do not reconcile: {cohort}"
+        raise ValueError(msg)
+    tested = expected["row_count"]
+    excluded = expected["same_base_pairs_excluded"]
+    unfiltered = expected["unfiltered_row_count"]
+    if tested + excluded != unfiltered or unfiltered != math.comb(len(features), 2):
+        msg = f"Focused cohort pair universe is inconsistent: {cohort}"
+        raise ValueError(msg)
+    return {
+        "selected_features": len(features),
+        "tested_pairs": tested,
+        "same_base_pairs_excluded": excluded,
+        "unfiltered_pair_count": unfiltered,
+    }
 
 
 def _cohort_summary_row(  # noqa: PLR0913
@@ -423,23 +742,34 @@ def _cohort_summary_row(  # noqa: PLR0913
     primary_q: float,
     sensitivity_adjustment: str,
     sensitivity_q: float,
+    pair_counts: Mapping[str, int],
 ) -> dict[str, int | float | str]:
+    expected_pair_keys = {
+        "selected_features",
+        "tested_pairs",
+        "same_base_pairs_excluded",
+        "unfiltered_pair_count",
+    }
+    if (
+        set(pair_counts) != expected_pair_keys
+        or not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in pair_counts.values()
+        )
+        or pair_counts["tested_pairs"] != len(frame)
+        or pair_counts["tested_pairs"] + pair_counts["same_base_pairs_excluded"]
+        != pair_counts["unfiltered_pair_count"]
+    ):
+        msg = f"Reported pair counts do not match the fitted family: {cohort}"
+        raise ValueError(msg)
     row: dict[str, int | float | str] = {
         "cohort": cohort,
         "primary_adjustment": ADJUSTMENT_LABELS[primary_adjustment],
         "primary_q_threshold": primary_q,
         "sensitivity_adjustment": ADJUSTMENT_LABELS[sensitivity_adjustment],
         "sensitivity_q_threshold": sensitivity_q,
-        "tumors": len(burdens),
-        "selected_features": 500,
-        "tested_pairs": len(frame),
-        "burden_median": float(np.median(burdens)),
-        "burden_q25": float(np.quantile(burdens, 0.25)),
-        "burden_q75": float(np.quantile(burdens, 0.75)),
-        "burden_p90": float(np.quantile(burdens, 0.90)),
-        "burden_p95": float(np.quantile(burdens, 0.95)),
-        "burden_max": float(np.max(burdens)),
-        "high_burden_fraction": float((burdens >= high_burden_threshold).mean()),
+        **pair_counts,
+        **_burden_summary_fields(burdens, high_burden_threshold),
     }
     for provider in core.BMRS:
         directions = frame[f"{provider}_direction"].astype("string")
@@ -1132,6 +1462,177 @@ def _plot_figure6(  # noqa: PLR0913
         raise RuntimeError(msg)
 
 
+def _report_csv_frames(
+    *,
+    run_root: Path,
+    provider_root: Path,
+    postprocess_root: Path,
+    rule: Mapping[str, Any],
+) -> tuple[dict[str, pd.DataFrame], float]:
+    """Recompute every public report CSV from its receipt-bound source."""
+    cohorts = tuple(TCGA_COHORTS)
+    raw_burdens = _burden_values(provider_root, cohorts)
+    burden_histogram = _cohort_burden_histogram(raw_burdens, cohorts)
+    burdens = _burden_values_from_histogram(burden_histogram, cohorts)
+    burden_threshold = _high_burden_threshold(burdens)
+    primary_adjustment = str(rule["primary_adjustment"])
+    sensitivity_adjustment = str(rule["sensitivity_adjustment"])
+    primary_q = float(rule["primary_q_threshold"])
+    sensitivity_q = float(rule["sensitivity_q_threshold"])
+    summary_rows = []
+    overlap_rows = []
+    top_frames = []
+    for cohort in cohorts:
+        frame = _read_inference(postprocess_root, cohort)
+        pair_counts = _cohort_pair_counts(run_root, cohort)
+        summary_rows.append(
+            _cohort_summary_row(
+                cohort=cohort,
+                frame=frame,
+                burdens=burdens[cohort],
+                high_burden_threshold=burden_threshold,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+                sensitivity_adjustment=sensitivity_adjustment,
+                sensitivity_q=sensitivity_q,
+                pair_counts=pair_counts,
+            ),
+        )
+        overlap_rows.extend(
+            _overlap_rows(
+                frame,
+                cohort=cohort,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+            ),
+        )
+        top_frames.append(
+            _top_primary_pairs(
+                frame,
+                cohort=cohort,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+            ),
+        )
+    top_pairs = pd.concat(top_frames, ignore_index=True)
+    if tuple(top_pairs.columns) != top_primary_columns():
+        msg = "Generated top-pair table violates its frozen public schema."
+        raise RuntimeError(msg)
+    frames = {
+        "cohort_burden_histogram.csv": burden_histogram,
+        "figure6_burden_bins.csv": _figure6_burden_bins(run_root),
+        "table_s5.csv": pd.DataFrame(summary_rows, columns=summary_columns()),
+        "provider_overlap.csv": pd.DataFrame(overlap_rows, columns=OVERLAP_COLUMNS),
+        "top_primary_pairs.csv": top_pairs,
+        "runtime_summary.csv": pd.DataFrame(
+            _runtime_rows(run_root, cohorts),
+            columns=RUNTIME_COLUMNS,
+        ),
+        "fit_diagnostics_summary.csv": pd.DataFrame(
+            _fit_diagnostic_rows(run_root, cohorts),
+            columns=FIT_DIAGNOSTIC_COLUMNS,
+        ),
+    }
+    expected_schemas = report_csv_columns()
+    if any(
+        tuple(frame.columns) != expected_schemas[name]
+        for name, frame in frames.items()
+    ):
+        msg = "Generated report CSV violates its exact public schema."
+        raise RuntimeError(msg)
+    return frames, burden_threshold
+
+
+def _table_s5_tex(
+    summary: pd.DataFrame,
+    *,
+    primary_adjustment: str,
+    primary_q: float,
+    sensitivity_adjustment: str,
+    sensitivity_q: float,
+) -> str:
+    """Render the deterministic Table S5 LaTeX source."""
+    burden_columns = [
+        "cohort",
+        "tumors",
+        "selected_features",
+        "tested_pairs",
+        "same_base_pairs_excluded",
+        "unfiltered_pair_count",
+        "burden_median",
+        "burden_q25",
+        "burden_q75",
+        "burden_p95",
+        "burden_max",
+        "high_burden_fraction",
+    ]
+    burden_labels = [
+        "Cohort",
+        "Tumors",
+        "Selected features",
+        "Tested pairs",
+        "Same-base pairs excluded",
+        "Unfiltered pairs",
+        "Median",
+        "Q25",
+        "Q75",
+        "P95",
+        "Max",
+        "High fraction",
+    ]
+    burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
+    primary_label = _threshold_label(primary_adjustment, primary_q)
+    sensitivity_label = _threshold_label(sensitivity_adjustment, sensitivity_q)
+    call_rows = [
+        {
+            "Cohort": row["cohort"],
+            "Background": PROVIDER_LABELS[provider],
+            "Primary-rule interpretation": (
+                "primary MutSig rejection"
+                if provider == "mutsig"
+                else "descriptive threshold crossing"
+            ),
+            f"{primary_label} decisions total": row[
+                f"{_decision_prefix(provider, 'primary')}_total"
+            ],
+            f"{primary_label} decisions ME": row[
+                f"{_decision_prefix(provider, 'primary')}_me"
+            ],
+            f"{primary_label} decisions CO": row[
+                f"{_decision_prefix(provider, 'primary')}_co"
+            ],
+            f"{primary_label} decisions direction unavailable": row[
+                f"{_decision_prefix(provider, 'primary')}_direction_unavailable"
+            ],
+            f"{sensitivity_label} sensitivity crossings total": row[
+                f"{_decision_prefix(provider, 'sensitivity')}_total"
+            ],
+            f"{sensitivity_label} sensitivity crossings ME": row[
+                f"{_decision_prefix(provider, 'sensitivity')}_me"
+            ],
+            f"{sensitivity_label} sensitivity crossings CO": row[
+                f"{_decision_prefix(provider, 'sensitivity')}_co"
+            ],
+            f"{sensitivity_label} sensitivity crossings direction unavailable": row[
+                f"{_decision_prefix(provider, 'sensitivity')}_direction_unavailable"
+            ],
+        }
+        for row in summary.to_dict(orient="records")
+        for provider in core.BMRS
+    ]
+    call_table = pd.DataFrame(call_rows)
+    return (
+        "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
+        + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
+        + "\n\\medskip\n"
+        + (
+            "\\textbf{B. Primary MutSig rejections and descriptive background "
+            "crossings by fitted direction}\\par\n"
+        )
+        + call_table.to_latex(index=False, escape=True, longtable=True)
+    )
+
+
 def validate_report(  # noqa: PLR0913
     output_root: Path,
     *,
@@ -1152,7 +1653,7 @@ def validate_report(  # noqa: PLR0913
     if not all(path is not None for path in external_inputs):
         msg = "All external reporting inputs are required before report access."
         raise ValueError(msg)
-    _require_reportable_rule(
+    rule = _require_reportable_rule(
         calibration_root=calibration_root,
         postprocess_root=postprocess_root,
         rule_path=rule_path,
@@ -1163,6 +1664,7 @@ def validate_report(  # noqa: PLR0913
     manifest_path = output_root / "report_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_outputs = {
+        "cohort_burden_histogram.csv",
         "figure6_burden_bins.csv",
         "table_s5.csv",
         "provider_overlap.csv",
@@ -1191,8 +1693,7 @@ def validate_report(  # noqa: PLR0913
         or manifest.get("probability_representation")
         != postprocess.PROBABILITY_REPRESENTATION
         or manifest.get("sample_level_rows_included") is not False
-        or manifest.get("burden_source_policy")
-        != "fixed-aggregate-bins-and-cohort-summaries-only"
+        or manifest.get("burden_source_policy") != BURDEN_SOURCE_POLICY
         or set(manifest.get("inputs", {}))
         != {
             "run_completion",
@@ -1203,6 +1704,8 @@ def validate_report(  # noqa: PLR0913
         }
         or manifest.get("high_burden_definition", {}).get("pooled_tumor_count")
         != EXPECTED_TUMOR_COUNT
+        or manifest.get("high_burden_definition", {}).get("source")
+        != "cohort_burden_histogram.csv"
         or set(records) != expected_outputs
         or {path.name for path in output_root.iterdir()}
         != {*expected_outputs, "report_manifest.json"}
@@ -1255,24 +1758,85 @@ def validate_report(  # noqa: PLR0913
     if manifest["inputs"]["reporting_rule"] != expected_rule:
         msg = "Focused report is bound to a different reporting rule."
         raise ValueError(msg)
+    burden_histogram = pd.read_csv(output_root / "cohort_burden_histogram.csv")
     summary = pd.read_csv(output_root / "table_s5.csv")
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
+    top_pairs = pd.read_csv(output_root / "top_primary_pairs.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
     fit_diagnostics = pd.read_csv(output_root / "fit_diagnostics_summary.csv")
     figure_burden = pd.read_csv(output_root / "figure6_burden_bins.csv")
-    expected_overlap_columns = [
-        "cohort",
-        "direction",
-        "adjustment",
-        "q_threshold",
-        "mutsig_primary_rejection_count",
-        "cbase_descriptive_crossing_count",
-        "dig_descriptive_crossing_count",
-        "mutsig_rejection_cbase_concordant_crossing_count",
-        "mutsig_rejection_cbase_discordant_crossing_count",
-        "mutsig_rejection_dig_concordant_crossing_count",
-        "mutsig_rejection_dig_discordant_crossing_count",
-    ]
+    frames = {
+        "cohort_burden_histogram.csv": burden_histogram,
+        "figure6_burden_bins.csv": figure_burden,
+        "table_s5.csv": summary,
+        "provider_overlap.csv": overlap,
+        "top_primary_pairs.csv": top_pairs,
+        "runtime_summary.csv": runtime,
+        "fit_diagnostics_summary.csv": fit_diagnostics,
+    }
+    expected_schemas = report_csv_columns()
+    if any(
+        tuple(frame.columns) != expected_schemas[name]
+        for name, frame in frames.items()
+    ):
+        msg = "Focused reporting CSV violates its exact public schema."
+        raise ValueError(msg)
+    histogram_burden_threshold = _validate_burden_histogram_summary(
+        burden_histogram,
+        summary,
+        manifest.get("high_burden_definition", {}).get("threshold"),
+    )
+    expected_frames, expected_burden_threshold = _report_csv_frames(
+        run_root=run_root,
+        provider_root=provider_root,
+        postprocess_root=postprocess_root,
+        rule=rule,
+    )
+    if any(
+        (output_root / name).read_bytes() != _csv_bytes(expected)
+        for name, expected in expected_frames.items()
+    ):
+        msg = "Focused reporting CSV differs from exact source recomputation."
+        raise ValueError(msg)
+    expected_table_tex = _table_s5_tex(
+        expected_frames["table_s5.csv"],
+        primary_adjustment=str(rule["primary_adjustment"]),
+        primary_q=float(rule["primary_q_threshold"]),
+        sensitivity_adjustment=str(rule["sensitivity_adjustment"]),
+        sensitivity_q=float(rule["sensitivity_q_threshold"]),
+    ).encode()
+    if (output_root / "table_s5.tex").read_bytes() != expected_table_tex:
+        msg = "Focused Table S5 LaTeX differs from exact source recomputation."
+        raise ValueError(msg)
+    with tempfile.TemporaryDirectory(
+        prefix="dialect-report-verify-",
+        dir=output_root.parent,
+    ) as temporary:
+        expected_figure = Path(temporary) / "figure6.pdf"
+        calibration_table = pd.read_csv(
+            calibration_root / calibration.SUMMARY_TABLE_NAME,
+            float_precision="round_trip",
+        )
+        _plot_figure6(
+            burden_bins=expected_frames["figure6_burden_bins.csv"],
+            summary=expected_frames["table_s5.csv"],
+            overlap=expected_frames["provider_overlap.csv"],
+            calibration_table=calibration_table,
+            primary_adjustment=str(rule["primary_adjustment"]),
+            primary_q=float(rule["primary_q_threshold"]),
+            output=expected_figure,
+        )
+        if (output_root / "figure6.pdf").read_bytes() != expected_figure.read_bytes():
+            msg = "Focused Figure 6 PDF differs from exact source recomputation."
+            raise ValueError(msg)
+    if (
+        manifest.get("high_burden_definition", {}).get("threshold")
+        != expected_burden_threshold
+        or histogram_burden_threshold != expected_burden_threshold
+    ):
+        msg = "Focused high-burden threshold differs from source recomputation."
+        raise ValueError(msg)
+    expected_overlap_columns = list(OVERLAP_COLUMNS)
     overlap_count_columns = expected_overlap_columns[4:]
     overlap_schema_valid = overlap.columns.tolist() == expected_overlap_columns
     overlap_counts = (
@@ -1299,6 +1863,88 @@ def validate_report(  # noqa: PLR0913
     expected_focal_tumors = int(
         summary.set_index("cohort").loc[FOCAL_BURDEN_COHORT, "tumors"],
     )
+    expected_pair_counts = pd.DataFrame(
+        [
+            {"cohort": cohort, **_cohort_pair_counts(run_root, cohort)}
+            for cohort in TCGA_COHORTS
+        ],
+    )
+    pair_count_columns = [
+        "selected_features",
+        "tested_pairs",
+        "same_base_pairs_excluded",
+        "unfiltered_pair_count",
+    ]
+    reported_pair_counts = summary.loc[:, pair_count_columns].to_numpy(dtype=float)
+    contract_pair_counts = expected_pair_counts.loc[
+        :,
+        pair_count_columns,
+    ].to_numpy(dtype=float)
+    decision_count_columns = [
+        column
+        for column in summary.columns
+        if column.endswith(("_total", "_me", "_co", "_direction_unavailable"))
+    ]
+    decision_counts = summary.loc[:, decision_count_columns].to_numpy(dtype=float)
+    decision_decompositions_valid = all(
+        np.array_equal(
+            summary[f"{_decision_prefix(provider, label)}_total"].to_numpy(),
+            summary[
+                [
+                    f"{_decision_prefix(provider, label)}_me",
+                    f"{_decision_prefix(provider, label)}_co",
+                    f"{_decision_prefix(provider, label)}_direction_unavailable",
+                ]
+            ].sum(axis=1).to_numpy(),
+        )
+        for provider in core.BMRS
+        for label in ("primary", "sensitivity")
+    )
+    summary_by_cohort = summary.set_index("cohort")
+    overlap_summary_counts_valid = all(
+        int(row.mutsig_primary_rejection_count)
+        == int(
+            summary_by_cohort.loc[
+                row.cohort,
+                f"mutsig_primary_rejection_{row.direction.casefold()}",
+            ],
+        )
+        and int(row.cbase_descriptive_crossing_count)
+        == int(
+            summary_by_cohort.loc[
+                row.cohort,
+                f"cbase_descriptive_primary_rule_crossing_{row.direction.casefold()}",
+            ],
+        )
+        and int(row.dig_descriptive_crossing_count)
+        == int(
+            summary_by_cohort.loc[
+                row.cohort,
+                f"dig_descriptive_primary_rule_crossing_{row.direction.casefold()}",
+            ],
+        )
+        for row in overlap.itertuples(index=False)
+    )
+    runtime_pairs = runtime.pivot_table(
+        index="cohort",
+        columns="provider",
+        values="pairwise_rows",
+        aggfunc="first",
+    ).reindex(index=TCGA_COHORTS, columns=core.BMRS)
+    top_group_sizes = top_pairs.groupby(["cohort", "direction"]).size()
+    top_boolean_columns = [
+        column
+        for column in top_pairs.columns
+        if column.endswith(
+            (
+                "_rejection",
+                "_crossing",
+                "_direction_concordant",
+                "_direction_discordant",
+                "_direction_unavailable",
+            ),
+        )
+    ]
     forbidden_axis_tokens = ("sample", "patient", "cohort_row", "tumor_row")
     if (
         len(summary) != len(TCGA_COHORTS)
@@ -1308,6 +1954,16 @@ def validate_report(  # noqa: PLR0913
         or not summary["sensitivity_adjustment"].eq("BH").all()
         or not summary["sensitivity_q_threshold"].eq(0.01).all()
         or int(summary["tumors"].sum()) != EXPECTED_TUMOR_COUNT
+        or not np.array_equal(reported_pair_counts, contract_pair_counts)
+        or not np.isfinite(decision_counts).all()
+        or (decision_counts < 0).any()
+        or not np.equal(decision_counts, np.floor(decision_counts)).all()
+        or not decision_decompositions_valid
+        or not overlap_summary_counts_valid
+        or (
+            decision_counts
+            > summary["tested_pairs"].to_numpy(dtype=float)[:, np.newaxis]
+        ).any()
         or len(overlap) != len(TCGA_COHORTS) * 2
         or not overlap_schema_valid
         or overlap["cohort"].tolist() != expected_overlap_cohorts
@@ -1328,6 +1984,12 @@ def validate_report(  # noqa: PLR0913
             > overlap["mutsig_primary_rejection_count"]
         ).any()
         or len(runtime) != len(TCGA_COHORTS) * len(core.BMRS)
+        or runtime.duplicated(subset=["cohort", "provider"]).any()
+        or runtime_pairs.isna().any().any()
+        or not np.equal(
+            runtime_pairs.to_numpy(dtype=float),
+            summary["tested_pairs"].to_numpy(dtype=float)[:, np.newaxis],
+        ).all()
         or fit_diagnostics["scope"].tolist() != ["all", *core.BMRS]
         or int(fit_diagnostics.iloc[0]["pairwise_rows"])
         != int(runtime["pairwise_rows"].sum())
@@ -1336,6 +1998,18 @@ def validate_report(  # noqa: PLR0913
         + int(fit_diagnostics.iloc[0]["rank_deficient_rows"])
         + int(fit_diagnostics.iloc[0]["rank_not_certified_underflow_rows"])
         != int(fit_diagnostics.iloc[0]["pairwise_rows"])
+        or not top_pairs["cohort"].isin(TCGA_COHORTS).all()
+        or not top_pairs["direction"].isin(["ME", "CO"]).all()
+        or not top_pairs["primary_adjustment"].eq("BY").all()
+        or not top_pairs["primary_q_threshold"].eq(0.01).all()
+        or top_pairs[["cohort", "gene_a", "gene_b"]].duplicated().any()
+        or not top_pairs["mutsig_primary_rejection"].isin([True]).all()
+        or not top_pairs["mutsig_direction"].eq(top_pairs["direction"]).all()
+        or (top_group_sizes > 10).any()
+        or any(
+            not top_pairs[column].isin([True, False]).all()
+            for column in top_boolean_columns
+        )
         or not figure_burden_schema_valid
         or set(figure_burden["cohort"]) != {FOCAL_BURDEN_COHORT}
         or set(figure_burden["provider"]) != set(core.BMRS)
@@ -1404,51 +2078,19 @@ def build_report(  # noqa: PLR0913
         msg = f"Refusing to overwrite reporting root: {output_root}"
         raise FileExistsError(msg)
 
-    burdens = _burden_values(provider_root, cohorts)
-    burden_threshold = _high_burden_threshold(burdens)
+    outputs, burden_threshold = _report_csv_frames(
+        run_root=run_root,
+        provider_root=provider_root,
+        postprocess_root=postprocess_root,
+        rule=rule,
+    )
     primary_adjustment = str(rule["primary_adjustment"])
     sensitivity_adjustment = str(rule["sensitivity_adjustment"])
     primary_q = float(rule["primary_q_threshold"])
     sensitivity_q = float(rule["sensitivity_q_threshold"])
-    summary_rows = []
-    overlap_rows = []
-    top_frames = []
-    for cohort in cohorts:
-        frame = _read_inference(postprocess_root, cohort)
-        summary_rows.append(
-            _cohort_summary_row(
-                cohort=cohort,
-                frame=frame,
-                burdens=burdens[cohort],
-                high_burden_threshold=burden_threshold,
-                primary_adjustment=primary_adjustment,
-                primary_q=primary_q,
-                sensitivity_adjustment=sensitivity_adjustment,
-                sensitivity_q=sensitivity_q,
-            ),
-        )
-        overlap_rows.extend(
-            _overlap_rows(
-                frame,
-                cohort=cohort,
-                primary_adjustment=primary_adjustment,
-                primary_q=primary_q,
-            ),
-        )
-        top_frames.append(
-            _top_primary_pairs(
-                frame,
-                cohort=cohort,
-                primary_adjustment=primary_adjustment,
-                primary_q=primary_q,
-            ),
-        )
-    summary = pd.DataFrame(summary_rows)
-    overlap = pd.DataFrame(overlap_rows)
-    top_pairs = pd.concat(top_frames, ignore_index=True)
-    runtime = pd.DataFrame(_runtime_rows(run_root, cohorts))
-    fit_diagnostics = pd.DataFrame(_fit_diagnostic_rows(run_root, cohorts))
-    figure6_burden_bins = _figure6_burden_bins(run_root)
+    figure6_burden_bins = outputs["figure6_burden_bins.csv"]
+    summary = outputs["table_s5.csv"]
+    overlap = outputs["provider_overlap.csv"]
     calibration_table = pd.read_csv(
         calibration_root / calibration.SUMMARY_TABLE_NAME,
         float_precision="round_trip",
@@ -1461,97 +2103,19 @@ def build_report(  # noqa: PLR0913
             dir=output_root.parent,
         ),
     )
-    outputs = {
-        "figure6_burden_bins.csv": figure6_burden_bins,
-        "table_s5.csv": summary,
-        "provider_overlap.csv": overlap,
-        "top_primary_pairs.csv": top_pairs,
-        "runtime_summary.csv": runtime,
-        "fit_diagnostics_summary.csv": fit_diagnostics,
-    }
     for name, frame in outputs.items():
         frame.to_csv(staging / name, index=False, lineterminator="\n")
 
-    burden_columns = [
-        "cohort",
-        "tumors",
-        "selected_features",
-        "tested_pairs",
-        "burden_median",
-        "burden_q25",
-        "burden_q75",
-        "burden_p95",
-        "burden_max",
-        "high_burden_fraction",
-    ]
-    burden_labels = [
-        "Cohort",
-        "Tumors",
-        "Selected features",
-        "Pairs",
-        "Median",
-        "Q25",
-        "Q75",
-        "P95",
-        "Max",
-        "High fraction",
-    ]
-    burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
-    primary_label = _threshold_label(primary_adjustment, primary_q)
-    sensitivity_label = _threshold_label(sensitivity_adjustment, sensitivity_q)
-    call_rows = [
-        {
-            "Cohort": row["cohort"],
-            "Background": PROVIDER_LABELS[provider],
-            "Primary-rule interpretation": (
-                "primary MutSig rejection"
-                if provider == "mutsig"
-                else "descriptive threshold crossing"
-            ),
-            f"{primary_label} decisions total": row[
-                f"{_decision_prefix(provider, 'primary')}_total"
-            ],
-            f"{primary_label} decisions ME": row[
-                f"{_decision_prefix(provider, 'primary')}_me"
-            ],
-            f"{primary_label} decisions CO": row[
-                f"{_decision_prefix(provider, 'primary')}_co"
-            ],
-            f"{primary_label} decisions direction unavailable": (
-                row[
-                    f"{_decision_prefix(provider, 'primary')}_direction_unavailable"
-                ]
-            ),
-            f"{sensitivity_label} sensitivity crossings total": (
-                row[f"{_decision_prefix(provider, 'sensitivity')}_total"]
-            ),
-            f"{sensitivity_label} sensitivity crossings ME": (
-                row[f"{_decision_prefix(provider, 'sensitivity')}_me"]
-            ),
-            f"{sensitivity_label} sensitivity crossings CO": (
-                row[f"{_decision_prefix(provider, 'sensitivity')}_co"]
-            ),
-            f"{sensitivity_label} sensitivity crossings direction unavailable": (
-                row[
-                    f"{_decision_prefix(provider, 'sensitivity')}_direction_unavailable"
-                ]
-            ),
-        }
-        for row in summary.to_dict(orient="records")
-        for provider in core.BMRS
-    ]
-    call_table = pd.DataFrame(call_rows)
-    latex = (
-        "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
-        + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
-        + "\n\\medskip\n"
-        + (
-            "\\textbf{B. Primary MutSig rejections and descriptive background "
-            "crossings by fitted direction}\\par\n"
-        )
-        + call_table.to_latex(index=False, escape=True, longtable=True)
+    (staging / "table_s5.tex").write_text(
+        _table_s5_tex(
+            summary,
+            primary_adjustment=primary_adjustment,
+            primary_q=primary_q,
+            sensitivity_adjustment=sensitivity_adjustment,
+            sensitivity_q=sensitivity_q,
+        ),
+        encoding="utf-8",
     )
-    (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
     figure_path = staging / "figure6.pdf"
     _plot_figure6(
         burden_bins=figure6_burden_bins,
@@ -1579,13 +2143,14 @@ def build_report(  # noqa: PLR0913
         "threshold_decision_scale": "natural-log-q-values",
         "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
         "sample_level_rows_included": False,
-        "burden_source_policy": "fixed-aggregate-bins-and-cohort-summaries-only",
+        "burden_source_policy": BURDEN_SOURCE_POLICY,
         "high_burden_definition": {
             "measure": "pre-K total nonsynonymous SNV event count per tumor",
             "reference": "pooled 10,433-tumor 32-cohort analysis population",
             "pooled_tumor_count": EXPECTED_TUMOR_COUNT,
             "quantile": HIGH_BURDEN_QUANTILE,
             "threshold": burden_threshold,
+            "source": "cohort_burden_histogram.csv",
             "comparison": "greater-than-or-equal",
             "interpretation": (
                 "descriptive high-burden fraction, not a clinical hypermutator label"

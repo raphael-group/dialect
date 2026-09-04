@@ -66,6 +66,74 @@ def test_high_burden_threshold_uses_frozen_pooled_population() -> None:
         reporting._high_burden_threshold({"A": np.arange(10)})  # noqa: SLF001
 
 
+def test_cohort_burden_histogram_reconstructs_every_summary_field() -> None:
+    cohorts = tuple(reporting.TCGA_COHORTS)
+    first_count = reporting.EXPECTED_TUMOR_COUNT - len(cohorts) + 1
+    values = {
+        cohorts[0]: np.concatenate(
+            (
+                np.asarray([1.0, 9.0]),
+                np.full(first_count - 2, 7.0),
+            ),
+        ),
+        **{cohort: np.asarray([7.0]) for cohort in cohorts[1:]},
+    }
+    histogram = reporting._cohort_burden_histogram(values, cohorts)  # noqa: SLF001
+    reconstructed = reporting._burden_values_from_histogram(  # noqa: SLF001
+        histogram,
+        cohorts,
+    )
+    threshold = reporting._high_burden_threshold(reconstructed)  # noqa: SLF001
+    summary = pd.DataFrame(
+        [
+            {
+                "cohort": cohort,
+                **reporting._burden_summary_fields(  # noqa: SLF001
+                    reconstructed[cohort],
+                    threshold,
+                ),
+            }
+            for cohort in cohorts
+        ],
+    )
+
+    assert histogram.columns.tolist() == list(
+        reporting.COHORT_BURDEN_HISTOGRAM_COLUMNS,
+    )
+    assert histogram["cohort"].drop_duplicates().tolist() == list(cohorts)
+    assert sum(map(len, reconstructed.values())) == reporting.EXPECTED_TUMOR_COUNT
+    assert reporting._validate_burden_histogram_summary(  # noqa: SLF001
+        histogram,
+        summary,
+        threshold,
+    ) == threshold
+
+    tampered = summary.copy()
+    tampered.loc[0, "burden_p95"] += 1
+    with pytest.raises(ValueError, match="burden summary"):
+        reporting._validate_burden_histogram_summary(  # noqa: SLF001
+            histogram,
+            tampered,
+            threshold,
+        )
+    with pytest.raises(ValueError, match="manifest threshold"):
+        reporting._validate_burden_histogram_summary(  # noqa: SLF001
+            histogram,
+            summary,
+            threshold + 1,
+        )
+
+    disordered = pd.concat(
+        [histogram.iloc[[1, 0]], histogram.iloc[2:]],
+        ignore_index=True,
+    )
+    with pytest.raises(ValueError, match="strictly ordered"):
+        reporting._burden_values_from_histogram(  # noqa: SLF001
+            disordered,
+            cohorts,
+        )
+
+
 def test_cohort_summary_uses_global_rule_for_every_provider() -> None:
     row = reporting._cohort_summary_row(  # noqa: SLF001
         cohort="TEST",
@@ -76,8 +144,15 @@ def test_cohort_summary_uses_global_rule_for_every_provider() -> None:
         primary_q=0.01,
         sensitivity_adjustment="benjamini-hochberg",
         sensitivity_q=0.01,
+        pair_counts={
+            "selected_features": 4,
+            "tested_pairs": 4,
+            "same_base_pairs_excluded": 2,
+            "unfiltered_pair_count": 6,
+        },
     )
     assert row["tested_pairs"] == 4
+    assert row["same_base_pairs_excluded"] == 2
     assert row["high_burden_fraction"] == 0.25
     assert row["mutsig_primary_rejection_total"] == 2
     assert row["mutsig_primary_rejection_me"] == 1
@@ -370,7 +445,7 @@ def test_fit_diagnostics_cover_every_certificate(
     ]
 
 
-def test_report_validator_binds_inventory_and_bytes(
+def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -387,6 +462,22 @@ def test_report_validator_binds_inventory_and_bytes(
         calibration_root,
     ):
         external_root.mkdir()
+    features = [f"G{index}_M" for index in range(500)]
+    pair_policy = reporting.core._pair_contract(features)  # noqa: SLF001
+    contracts_root = run_root / "contracts"
+    contracts_root.mkdir()
+    for cohort in reporting.TCGA_COHORTS:
+        (contracts_root / f"{cohort}.json").write_text(
+            reporting.json.dumps(
+                {
+                    "cohort": cohort,
+                    "top_k": 500,
+                    "features": features,
+                    "pair_policy": pair_policy,
+                },
+            ),
+            encoding="utf-8",
+        )
     external_paths = {
         "run_completion": run_root / "completion_manifest.json",
         "provider_manifest": provider_root / "provider_manifest.json",
@@ -399,12 +490,22 @@ def test_report_validator_binds_inventory_and_bytes(
     }
     for path in external_paths.values():
         path.write_text("{}\n", encoding="utf-8")
+    (calibration_root / reporting.calibration.SUMMARY_TABLE_NAME).write_text(
+        "placeholder\n",
+        encoding="utf-8",
+    )
     rule_path = tmp_path / "reporting_rule.json"
     rule_path.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(
         reporting,
         "_require_reportable_rule",
-        lambda **_kwargs: {"inference_status": "reportable"},
+        lambda **_kwargs: {
+            "inference_status": "reportable",
+            "primary_adjustment": "benjamini-yekutieli",
+            "primary_q_threshold": 0.01,
+            "sensitivity_adjustment": "benjamini-hochberg",
+            "sensitivity_q_threshold": 0.01,
+        },
     )
     monkeypatch.setattr(reporting, "validate_provider_root", lambda *_args: {})
     monkeypatch.setattr(
@@ -413,15 +514,30 @@ def test_report_validator_binds_inventory_and_bytes(
         lambda *_args, **_kwargs: {},
     )
     tumors = [reporting.EXPECTED_TUMOR_COUNT - 31, *([1] * 31)]
+    summary_rows = []
+    for cohort, tumor_count in zip(reporting.TCGA_COHORTS, tumors, strict=True):
+        row = dict.fromkeys(reporting.summary_columns(), 0)
+        row.update(
+            {
+                "cohort": cohort,
+                "primary_adjustment": "BY",
+                "primary_q_threshold": 0.01,
+                "sensitivity_adjustment": "BH",
+                "sensitivity_q_threshold": 0.01,
+                "tumors": tumor_count,
+                "selected_features": 500,
+                "tested_pairs": pair_policy["row_count"],
+                "same_base_pairs_excluded": pair_policy[
+                    "same_base_pairs_excluded"
+                ],
+                "unfiltered_pair_count": pair_policy["unfiltered_row_count"],
+                "high_burden_fraction": 1.0,
+            },
+        )
+        summary_rows.append(row)
     pd.DataFrame(
-        {
-            "cohort": list(reporting.TCGA_COHORTS),
-            "primary_adjustment": ["BY"] * len(reporting.TCGA_COHORTS),
-            "primary_q_threshold": [0.01] * len(reporting.TCGA_COHORTS),
-            "sensitivity_adjustment": ["BH"] * len(reporting.TCGA_COHORTS),
-            "sensitivity_q_threshold": [0.01] * len(reporting.TCGA_COHORTS),
-            "tumors": tumors,
-        },
+        summary_rows,
+        columns=reporting.summary_columns(),
     ).to_csv(root / "table_s5.csv", index=False)
     pd.DataFrame(
         {
@@ -466,31 +582,45 @@ def test_report_validator_binds_inventory_and_bytes(
                 len(reporting.core.BMRS),
                 ),
                 "provider": list(reporting.core.BMRS) * len(reporting.TCGA_COHORTS),
-                "pairwise_rows": np.ones(
+                "pairwise_rows": np.full(
                     len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS),
-                    dtype=int,
+                    pair_policy["row_count"],
+                    dtype=np.int64,
                 ),
+                "elapsed_seconds": 0.0,
+                "user_cpu_seconds": 0.0,
+                "system_cpu_seconds": 0.0,
+                "peak_rss_bytes": 0,
             },
+            columns=reporting.RUNTIME_COLUMNS,
         ).to_csv(root / "runtime_summary.csv", index=False)
-    pairwise_rows = len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS)
+    provider_pairwise_rows = (
+        len(reporting.TCGA_COHORTS) * pair_policy["row_count"]
+    )
+    pairwise_rows = provider_pairwise_rows * len(reporting.core.BMRS)
+    fit_rows = []
+    for scope, row_count in (
+        ("all", pairwise_rows),
+        *((provider, provider_pairwise_rows) for provider in reporting.core.BMRS),
+    ):
+        row = dict.fromkeys(reporting.FIT_DIAGNOSTIC_COLUMNS, 0)
+        row.update(
+            {
+                "scope": scope,
+                "pairwise_rows": row_count,
+                "converged_rows": row_count,
+                "full_affine_rank_rows": row_count,
+            },
+        )
+        fit_rows.append(row)
     pd.DataFrame(
-        {
-            "scope": ["all", *reporting.core.BMRS],
-            "pairwise_rows": [pairwise_rows, *([len(reporting.TCGA_COHORTS)] * 3)],
-            "nonconverged_rows": [0, 0, 0, 0],
-            "full_affine_rank_rows": [
-                pairwise_rows,
-                *([len(reporting.TCGA_COHORTS)] * 3),
-            ],
-            "rank_deficient_rows": [0, 0, 0, 0],
-            "rank_not_certified_underflow_rows": [0, 0, 0, 0],
-        },
+        fit_rows,
+        columns=reporting.FIT_DIAGNOSTIC_COLUMNS,
     ).to_csv(root / "fit_diagnostics_summary.csv", index=False)
-    pd.DataFrame(columns=["cohort", "gene_a", "gene_b"]).to_csv(
+    pd.DataFrame(columns=reporting.top_primary_columns()).to_csv(
         root / "top_primary_pairs.csv",
         index=False,
     )
-    (root / "table_s5.tex").write_text("table\n", encoding="utf-8")
     (root / "figure6.pdf").write_bytes(b"%PDF-synthetic\n")
     focal_index = list(reporting.TCGA_COHORTS).index(reporting.FOCAL_BURDEN_COHORT)
     focal_tumors = tumors[focal_index]
@@ -505,7 +635,43 @@ def test_report_validator_binds_inventory_and_bytes(
             "tumor_count": [focal_tumors] * len(reporting.core.BMRS),
         },
     ).to_csv(root / "figure6_burden_bins.csv", index=False)
+    pd.DataFrame(
+        {
+            "cohort": reporting.TCGA_COHORTS,
+            "total_nonsynonymous_snv_events": np.zeros(
+                len(reporting.TCGA_COHORTS),
+                dtype=np.int64,
+            ),
+            "tumor_count": tumors,
+        },
+        columns=reporting.COHORT_BURDEN_HISTOGRAM_COLUMNS,
+    ).to_csv(root / "cohort_burden_histogram.csv", index=False)
+    expected_frames = {
+        name: pd.read_csv(root / name)
+        for name in reporting.report_csv_columns()
+    }
+    (root / "table_s5.tex").write_text(
+        reporting._table_s5_tex(  # noqa: SLF001
+            expected_frames["table_s5.csv"],
+            primary_adjustment="benjamini-yekutieli",
+            primary_q=0.01,
+            sensitivity_adjustment="benjamini-hochberg",
+            sensitivity_q=0.01,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reporting,
+        "_report_csv_frames",
+        lambda **_kwargs: (expected_frames, 0.0),
+    )
+    monkeypatch.setattr(
+        reporting,
+        "_plot_figure6",
+        lambda *, output, **_kwargs: output.write_bytes(b"%PDF-synthetic\n"),
+    )
     names = {
+        "cohort_burden_histogram.csv",
         "figure6_burden_bins.csv",
         "table_s5.csv",
         "provider_overlap.csv",
@@ -534,7 +700,7 @@ def test_report_validator_binds_inventory_and_bytes(
         "threshold_decision_scale": "natural-log-q-values",
         "probability_representation": reporting.postprocess.PROBABILITY_REPRESENTATION,
         "sample_level_rows_included": False,
-        "burden_source_policy": "fixed-aggregate-bins-and-cohort-summaries-only",
+        "burden_source_policy": reporting.BURDEN_SOURCE_POLICY,
         "inputs": {
             "run_completion": reporting._file_record(  # noqa: SLF001
                 external_paths["run_completion"],
@@ -560,6 +726,8 @@ def test_report_validator_binds_inventory_and_bytes(
         },
         "high_burden_definition": {
             "pooled_tumor_count": reporting.EXPECTED_TUMOR_COUNT,
+            "threshold": 0.0,
+            "source": "cohort_burden_histogram.csv",
         },
         "outputs": {
             name: reporting._file_record(root / name, relative_to=root)  # noqa: SLF001
@@ -582,4 +750,18 @@ def test_report_validator_binds_inventory_and_bytes(
 
     (root / "figure6.pdf").write_bytes(b"%PDF-tampered\n")
     with pytest.raises(ValueError, match="output changed"):
+        reporting.validate_report(root, **validate_kwargs)
+
+    (root / "figure6.pdf").write_bytes(b"%PDF-synthetic\n")
+    leaked = pd.read_csv(root / "table_s5.csv")
+    leaked["barcode"] = "forbidden-row-axis"
+    leaked.to_csv(root / "table_s5.csv", index=False)
+    manifest["outputs"]["table_s5.csv"] = reporting._file_record(  # noqa: SLF001
+        root / "table_s5.csv",
+        relative_to=root,
+    )
+    (root / "report_manifest.json").write_bytes(
+        reporting._canonical_json(manifest) + b"\n",  # noqa: SLF001
+    )
+    with pytest.raises(ValueError, match="exact public schema"):
         reporting.validate_report(root, **validate_kwargs)
