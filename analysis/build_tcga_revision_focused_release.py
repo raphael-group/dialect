@@ -166,6 +166,10 @@ def _result_members(
             "provenance/completion_manifest.json",
             run_root / "completion_manifest.json",
         ),
+        _file_member(
+            "provenance/run_manifest.json",
+            run_root / "run_manifest.json",
+        ),
     ]
     for cohort in TCGA_COHORTS:
         members.extend(
@@ -284,8 +288,9 @@ def _readme(commit: str) -> Member:
         "The archive excludes raw tumor-level inputs, sample identifiers, and the "
         "restricted MutSig source. Derived association tables contain mutation-event "
         "pairs and statistics only. TCGA inputs were reconstructed from the pinned "
-        "cBioPortal DataHub revision recorded by the source configuration and input "
-        "receipts. MutSig2CV v3.11 must be obtained separately and patched with "
+        "cBioPortal DataHub revision recorded by the source configuration and "
+        "production receipts. MutSig2CV v3.11 must be obtained separately and patched "
+        "with "
         "`external/mutsig2cv_octave_dialect.patch`; the repository provenance records "
         "bind the exact base and patch.\n\n"
         "## Reproduction outline\n\n"
