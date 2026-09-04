@@ -73,3 +73,16 @@ def test_document_plan_includes_exact_decision_letter_artifacts(tmp_path: Path) 
     assert {member.name for member in members} == {
         f"documents/{name}" for name in release.REQUIRED_DOCUMENTS
     }
+
+
+def test_release_readme_records_reproduction_and_privacy_boundaries() -> None:
+    content = release._readme("a" * 40).content  # noqa: SLF001
+
+    assert content is not None
+    text = content.decode("utf-8")
+    assert "10,433 participant-unique tumors" in text
+    assert "prepare_tcga_revision_focused inputs" in text
+    assert "run_tcga_revision_focused" in text
+    assert "--verify-archive" in text
+    assert "excludes raw tumor-level inputs" in text
+    assert "restricted MutSig source" in text
