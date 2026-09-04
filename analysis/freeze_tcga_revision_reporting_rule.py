@@ -15,7 +15,7 @@ from analysis.prepare_tcga_revision_focused import CONFIG_PATH, _load_config
 from dialect.data.tcga import TCGA_COHORTS
 
 SCHEMA_VERSION: Final = "1.0.0"
-RULE_CONTRACT: Final = "focused-global-reporting-rule-v2"
+RULE_CONTRACT: Final = "focused-global-reporting-rule-v3"
 RULE_NAME: Final = "reporting_rule.json"
 REPORTABLE_STATUS: Final = "reportable"
 WITHHELD_STATUS: Final = "withheld"
@@ -131,7 +131,14 @@ def freeze_rule(
         raise ValueError(msg)
     expected_summary = {
         "gate_provider": "mutsig",
-        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "gate_endpoint_unit": "cohort-sentinel-pair-alpha",
+        "gate_method": (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        ),
+        "exact_binomial_familywise_error": 0.05,
+        "exact_binomial_endpoint_count": 2_048,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
         "primary_adjustment": "benjamini-yekutieli",
         "primary_q_candidate": 0.01,
         "sensitivity_adjustment": "benjamini-hochberg",
@@ -185,7 +192,11 @@ def freeze_rule(
         ],
         "calibration_gate": {
             "provider": summary.get("gate_provider"),
+            "endpoint_unit": summary.get("gate_endpoint_unit"),
             "method": summary.get("gate_method"),
+            "endpoint_count": summary.get("exact_binomial_endpoint_count"),
+            "familywise_error": summary.get("exact_binomial_familywise_error"),
+            "acceptance_upper_bounds": summary.get("acceptance_upper_bounds"),
             "overall_gate_pass": gate_pass,
         },
         "inference_status": inference_status,

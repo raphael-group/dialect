@@ -2,9 +2,12 @@
 
 The primary gate covers MutSig in all 32 cohorts.  CBaSE and DIG are evaluated in
 five predeclared cohorts as descriptive sensitivity checks only.  Every cell is
-generated from fitted independent DIALECT marginals and measures rejection on 64
-disjoint K=500-axis pairs.  This is finite-scenario evidence, not a proof of uniform
-p-value or false-discovery-rate control.
+generated from fitted independent DIALECT marginals and measures rejection on 32
+disjoint K=500-axis pairs.  Each primary cohort/pair/alpha endpoint receives a
+simultaneous one-sided exact-binomial upper confidence bound.  This is finite-
+scenario evidence, not a proof of uniform p-value or false-discovery-rate control.
+Repeated profile-LRT fits use a bounded batch kernel with unchanged scalar-model
+reconciliation at log-domain, test-decision, and rank-decision boundaries.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import argparse
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 import resource
 import subprocess
@@ -27,10 +31,12 @@ from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2
+from scipy.stats import beta, chi2
+from threadpoolctl import threadpool_limits
 
 from analysis import run_tcga_revision_focused as focused_runner
 from analysis import run_tcga_revision_k500 as core
+from analysis.calibration_batch import fit_gene_pairs_batched
 from dialect.data.tcga import TCGA_COHORTS
 from dialect.models.gene import Gene
 from dialect.models.interaction import Interaction
@@ -40,9 +46,9 @@ if TYPE_CHECKING:
 
 SCHEMA_VERSION: Final = "1.0.0"
 CONFIG_PATH: Final = Path(__file__).with_name("tcga_revision_calibration_config.json")
-RUN_CONTRACT: Final = "focused-parametric-null-calibration-run-v2"
-TASK_CONTRACT: Final = "focused-parametric-null-calibration-cell-v2"
-SUMMARY_CONTRACT: Final = "focused-parametric-null-calibration-summary-v2"
+RUN_CONTRACT: Final = "focused-parametric-null-calibration-run-v3"
+TASK_CONTRACT: Final = "focused-parametric-null-calibration-cell-v3"
+SUMMARY_CONTRACT: Final = "focused-parametric-null-calibration-summary-v3"
 TASK_DATA_NAME: Final = "calibration_arrays.npz"
 TASK_MANIFEST_NAME: Final = "task_manifest.json"
 RUN_MANIFEST_NAME: Final = "run_manifest.json"
@@ -54,6 +60,10 @@ MARGINAL_SCREEN: Final = "marginal_lrt"
 ENDPOINT_ACCEPTED: Final = "pass"
 ENDPOINT_REJECTED: Final = "fail"
 GATE_NOT_APPLICABLE: Final = "not-applicable"
+FIT_KERNEL_CONTRACT: Final = (
+    "bounded-batched-profile-lrt-with-scalar-boundary-reconciliation-v1"
+)
+REPLICATE_CHUNK_RULE: Final = "max(1,min(512,128000//sample-count))"
 THREAD_ENV: Final = {
     "OPENBLAS_NUM_THREADS": "1",
     "OMP_NUM_THREADS": "1",
@@ -67,6 +77,7 @@ SUMMARY_COLUMNS: Final = (
     "provider",
     "role",
     "screen",
+    "sentinel_pair_index",
     "threshold",
     "events",
     "trials",
@@ -74,10 +85,10 @@ SUMMARY_COLUMNS: Final = (
     "reportable_trials",
     "nonreportable_trials",
     "gate_endpoint",
-    "hoeffding_familywise_error",
-    "hoeffding_endpoint_count",
-    "hoeffding_margin",
-    "hoeffding_upper_bound",
+    "exact_binomial_familywise_error",
+    "exact_binomial_endpoint_count",
+    "bonferroni_endpoint_error",
+    "clopper_pearson_upper_bound",
     "acceptance_upper_bound",
     "endpoint_gate_pass",
 )
@@ -114,6 +125,15 @@ def _canonical_json(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _result_blindness_receipt() -> dict[str, Any]:
+    """Disclose integrity hashing without implying pairwise bytes stay unopened."""
+    return {
+        "observed_pair_statistics_parsed_or_inspected": False,
+        "pairwise_files_integrity_hashed": True,
+        "pairwise_hash_use": "run-integrity-validation-only",
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -180,7 +200,7 @@ def _load_config() -> dict[str, Any]:
     resources = config.get("resources", {})
     if (
         config.get("schema_version") != SCHEMA_VERSION
-        or config.get("contract") != "focused-result-blind-null-calibration-v2"
+        or config.get("contract") != "focused-result-blind-null-calibration-v3"
         or primary.get("role") != PRIMARY_ROLE
         or primary.get("cohorts") != list(TCGA_COHORTS)
         or primary.get("providers") != ["mutsig"]
@@ -189,17 +209,26 @@ def _load_config() -> dict[str, Any]:
         != ["CHOL", "LAML", "PAAD", "SKCM", "UCEC"]
         or descriptive.get("providers") != ["cbase", "dig"]
         or marginal.get("pair_selection")
-        != "64-disjoint-pairs-spanning-the-K500-feature-rank-axis"
-        or marginal.get("sentinel_pair_count") != 64
-        or marginal.get("replicates_per_cell") != 1000
+        != "32-disjoint-pairs-spanning-the-K500-feature-rank-axis"
+        or marginal.get("sentinel_pair_count") != 32
+        or marginal.get("replicates_per_cell") != 10_000
+        or marginal.get("replicate_rng")
+        != "sha256-cell-seed-and-sentinel-pair-index-v1"
+        or marginal.get("fit_kernel") != FIT_KERNEL_CONTRACT
+        or marginal.get("replicate_chunk_rule") != REPLICATE_CHUNK_RULE
         or marginal.get("alphas") != [0.01, 0.05]
         or gate.get("provider") != "mutsig"
+        or gate.get("endpoint_unit") != "cohort-sentinel-pair-alpha"
         or gate.get("method")
-        != "simultaneous-one-sided-hoeffding-upper-bound"
+        != (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        )
         or gate.get("familywise_error") != 0.05
-        or gate.get("endpoint_count") != len(TCGA_COHORTS) * 2
+        or gate.get("endpoint_count")
+        != len(TCGA_COHORTS) * int(marginal.get("sentinel_pair_count", 0)) * 2
         or gate.get("acceptance_upper_bounds")
-        != {"0.01": 0.02, "0.05": 0.06}
+        != {"0.01": 0.02, "0.05": 0.07}
         or reporting.get("test") != "chi-square-one-df-profile-lrt"
         or reporting.get("primary_adjustment") != "benjamini-yekutieli"
         or reporting.get("primary_q_threshold") != 0.01
@@ -210,14 +239,18 @@ def _load_config() -> dict[str, Any]:
         != "finite-scenario-stress-not-formal-uniform-FDR-proof"
         or resources
         != {
-            "max_jobs": 3,
-            "max_mutsig_jobs": 1,
-            "threads_per_job": 1,
+            "observed_logical_cpus": 14,
+            "max_outer_cells": 3,
+            "max_mutsig_cells": 1,
+            "mutsig_fit_workers": 5,
+            "descriptive_fit_workers": 1,
+            "max_total_fit_workers": 7,
+            "blas_threads_per_fit_worker": 1,
             "nice_increment": 10,
             "overwrite_outputs": False,
         }
     ):
-        msg = "Focused calibration configuration violates its frozen v2 contract."
+        msg = "Focused calibration configuration violates its frozen v3 contract."
         raise ValueError(msg)
     protocol = _protocol_cells(config)
     if (
@@ -230,9 +263,241 @@ def _load_config() -> dict[str, Any]:
     return config
 
 
+def _frozen_resource_observation(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return the portable frozen half-machine receipt."""
+    resources = config["resources"]
+    logical_cpus = int(resources["observed_logical_cpus"])
+    max_outer_cells = int(resources["max_outer_cells"])
+    max_mutsig_cells = int(resources["max_mutsig_cells"])
+    mutsig_fit_workers = int(resources["mutsig_fit_workers"])
+    descriptive_fit_workers = int(resources["descriptive_fit_workers"])
+    max_total_fit_workers = int(resources["max_total_fit_workers"])
+    half_logical_cpu_limit = logical_cpus // 2
+    scheduled_fit_worker_limit = (
+        max_mutsig_cells * mutsig_fit_workers
+        + (max_outer_cells - max_mutsig_cells) * descriptive_fit_workers
+    )
+    if (
+        logical_cpus < 2
+        or max_outer_cells < 1
+        or not 1 <= max_mutsig_cells <= max_outer_cells
+        or mutsig_fit_workers < 1
+        or descriptive_fit_workers < 1
+        or int(resources["blas_threads_per_fit_worker"]) != 1
+        or scheduled_fit_worker_limit != max_total_fit_workers
+        or max_total_fit_workers > half_logical_cpu_limit
+    ):
+        msg = (
+            "Calibration runtime no longer satisfies the frozen half-machine "
+            "resource contract."
+        )
+        raise RuntimeError(msg)
+    return {
+        "logical_cpus_observed": logical_cpus,
+        "logical_cpu_source": "os.cpu_count()",
+        "half_logical_cpu_limit": half_logical_cpu_limit,
+        "scheduled_fit_worker_limit": scheduled_fit_worker_limit,
+        "half_machine_limit_satisfied": True,
+    }
+
+
+def _preflight_runtime_resources(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Fail closed before execution if this host differs from the frozen host."""
+    observation = _frozen_resource_observation(config)
+    if os.cpu_count() != observation["logical_cpus_observed"]:
+        msg = (
+            "Calibration execution host differs from the frozen 14-logical-CPU "
+            "resource contract."
+        )
+        raise RuntimeError(msg)
+    return observation
+
+
+def _fit_worker_count(config: Mapping[str, Any], provider: str) -> int:
+    """Return the frozen inner fit-worker count for one provider."""
+    key = "mutsig_fit_workers" if provider == "mutsig" else "descriptive_fit_workers"
+    return int(config["resources"][key])
+
+
+def _worker_topology(
+    config: Mapping[str, Any],
+    *,
+    provider: str,
+) -> dict[str, Any]:
+    """Return the exact worker topology used by one calibration cell."""
+    resources = config["resources"]
+    observation = _frozen_resource_observation(config)
+    fit_workers = _fit_worker_count(config, provider)
+    return {
+        **observation,
+        "max_outer_cells": int(resources["max_outer_cells"]),
+        "max_mutsig_cells": int(resources["max_mutsig_cells"]),
+        "fit_workers": fit_workers,
+        "fit_execution": (
+            "spawned-process-pool" if fit_workers > 1 else "task-main-process"
+        ),
+        "max_total_fit_workers": int(resources["max_total_fit_workers"]),
+        "blas_threads_per_fit_worker": int(
+            resources["blas_threads_per_fit_worker"],
+        ),
+        "thread_environment": dict(THREAD_ENV),
+    }
+
+
+def _normalized_peak_rss(
+    native_value: int,
+    *,
+    source: str,
+    semantics: str,
+) -> dict[str, Any]:
+    """Normalize one getrusage RSS value without changing its semantics."""
+    if sys.platform == "darwin":
+        native_unit = "bytes"
+        multiplier = 1
+    elif sys.platform.startswith("linux"):
+        native_unit = "KiB"
+        multiplier = 1024
+    else:
+        msg = f"Unsupported ru_maxrss unit convention on platform {sys.platform!r}."
+        raise RuntimeError(msg)
+    return {
+        "bytes": native_value * multiplier,
+        "native_value": native_value,
+        "native_unit": native_unit,
+        "platform": sys.platform,
+        "source": source,
+        "semantics": semantics,
+    }
+
+
+def _rusage_record(
+    usage: resource.struct_rusage,
+    *,
+    children: bool,
+) -> dict[str, Any]:
+    """Return an honest self or terminated-child getrusage record."""
+    if children:
+        source = "resource.getrusage(resource.RUSAGE_CHILDREN)"
+        semantics = "maximum-over-terminated-children-not-additive"
+    else:
+        source = "resource.getrusage(resource.RUSAGE_SELF)"
+        semantics = "task-process-maximum-resident-set-size"
+    return {
+        "user_cpu_seconds": float(usage.ru_utime),
+        "system_cpu_seconds": float(usage.ru_stime),
+        "peak_rss": _normalized_peak_rss(
+            int(usage.ru_maxrss),
+            source=f"{source}.ru_maxrss",
+            semantics=semantics,
+        ),
+    }
+
+
+def _validate_rusage_record(
+    record: object,
+    *,
+    children: bool,
+    require_positive_rss: bool,
+) -> None:
+    """Validate one explicit self or child resource receipt."""
+    if not isinstance(record, dict):
+        msg = "Calibration resource receipt is missing."
+        raise TypeError(msg)
+    user = record.get("user_cpu_seconds")
+    system = record.get("system_cpu_seconds")
+    peak = record.get("peak_rss")
+    if (
+        not isinstance(user, (int, float))
+        or isinstance(user, bool)
+        or not math.isfinite(user)
+        or user < 0
+        or not isinstance(system, (int, float))
+        or isinstance(system, bool)
+        or not math.isfinite(system)
+        or system < 0
+        or not isinstance(peak, dict)
+    ):
+        msg = "Calibration resource receipt has invalid CPU/RSS values."
+        raise ValueError(msg)
+    native_value = peak.get("native_value")
+    byte_count = peak.get("bytes")
+    platform = peak.get("platform")
+    if platform == "darwin":
+        expected_unit = "bytes"
+        multiplier = 1
+    elif isinstance(platform, str) and platform.startswith("linux"):
+        expected_unit = "KiB"
+        multiplier = 1024
+    else:
+        msg = "Calibration resource receipt has unsupported RSS provenance."
+        raise ValueError(msg)
+    source_root = (
+        "resource.getrusage(resource.RUSAGE_CHILDREN)"
+        if children
+        else "resource.getrusage(resource.RUSAGE_SELF)"
+    )
+    expected_semantics = (
+        "maximum-over-terminated-children-not-additive"
+        if children
+        else "task-process-maximum-resident-set-size"
+    )
+    if (
+        not isinstance(native_value, int)
+        or isinstance(native_value, bool)
+        or native_value < int(require_positive_rss)
+        or not isinstance(byte_count, int)
+        or isinstance(byte_count, bool)
+        or byte_count != native_value * multiplier
+        or peak.get("native_unit") != expected_unit
+        or peak.get("source") != f"{source_root}.ru_maxrss"
+        or peak.get("semantics") != expected_semantics
+    ):
+        msg = "Calibration resource receipt has invalid RSS provenance."
+        raise ValueError(msg)
+
+
+def _validate_calibration_resource_usage(
+    manifest: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    provider: str,
+) -> None:
+    """Validate explicit worker topology plus separate self/child telemetry."""
+    expected_topology = _worker_topology(config, provider=provider)
+    if manifest.get("worker_topology") != expected_topology:
+        msg = "Calibration task worker topology violates its resource contract."
+        raise ValueError(msg)
+    usage = manifest.get("resource_usage")
+    if not isinstance(usage, dict):
+        msg = "Calibration task lacks explicit resource usage."
+        raise TypeError(msg)
+    self_record = usage.get("self")
+    child_record = usage.get("terminated_children")
+    fit_workers = int(expected_topology["fit_workers"])
+    _validate_rusage_record(
+        self_record,
+        children=False,
+        require_positive_rss=True,
+    )
+    _validate_rusage_record(
+        child_record,
+        children=True,
+        require_positive_rss=fit_workers > 1,
+    )
+    if (
+        not isinstance(self_record, dict)
+        or usage.get("user_cpu_seconds") != self_record.get("user_cpu_seconds")
+        or usage.get("system_cpu_seconds") != self_record.get("system_cpu_seconds")
+        or usage.get("peak_rss", {}).get("bytes")
+        != self_record.get("peak_rss", {}).get("bytes")
+    ):
+        msg = "Calibration task legacy self-usage fields disagree with their receipt."
+        raise ValueError(msg)
+
+
 def _seed(root_seed: int, cohort: str, provider: str) -> int:
     digest = hashlib.sha256(
-        _canonical_json([root_seed, "focused-calibration-v2", cohort, provider]),
+        _canonical_json([root_seed, "focused-calibration-v3", cohort, provider]),
     ).digest()
     return int.from_bytes(digest[:16], "big")
 
@@ -321,23 +586,40 @@ def _simulate_features(
     return counts
 
 
-def _fit_pair(
+def _pair_genes(
     cell: Cell,
     indices: tuple[int, int],
     counts: np.ndarray,
-) -> tuple[float, bool]:
-    """Return the profile LRT and whether its dependence effect is reportable."""
+    gene_type: type[Gene],
+) -> tuple[Gene, Gene]:
+    """Construct one simulated pair on the frozen sample/background axes."""
     genes = []
     for column, index in enumerate(indices):
         feature = cell.features[index]
-        gene = Gene(
-            name=feature,
-            samples=cell.samples,
-            counts=counts[:, column],
-            bmr_pmf=cell.pmfs[feature],
+        genes.append(
+            gene_type(
+                name=feature,
+                samples=cell.samples,
+                counts=counts[:, column],
+                bmr_pmf=cell.pmfs[feature],
+            ),
         )
+    if len(genes) != 2:
+        msg = "Calibration requires exactly two simulated genes per pair."
+        raise ValueError(msg)
+    return genes[0], genes[1]
+
+
+def _fit_pair_with_gene_type(
+    cell: Cell,
+    indices: tuple[int, int],
+    counts: np.ndarray,
+    gene_type: type[Gene],
+) -> tuple[float, bool]:
+    """Return the profile LRT and whether its dependence effect is reportable."""
+    genes = list(_pair_genes(cell, indices, counts, gene_type))
+    for gene in genes:
         gene.estimate_pi_with_mle()
-        genes.append(gene)
     interaction = Interaction(*genes)
     interaction.estimate_tau_with_coordinate_ascent()
     statistic = float(interaction.likelihood_ratio)
@@ -357,6 +639,24 @@ def _fit_pair(
         max(statistic, 0.0),
         status == core.REQUIRED_PAIR_EFFECT_IDENTIFIED_STATUS,
     )
+
+
+def _fit_pair(
+    cell: Cell,
+    indices: tuple[int, int],
+    counts: np.ndarray,
+) -> tuple[float, bool]:
+    """Fit one pair through the unmodified production model classes."""
+    return _fit_pair_with_gene_type(cell, indices, counts, Gene)
+
+
+def _fit_pair_scalar_reference(
+    cell: Cell,
+    indices: tuple[int, int],
+    counts: np.ndarray,
+) -> tuple[float, bool]:
+    """Fit one pair through the unmodified production Gene implementation."""
+    return _fit_pair(cell, indices, counts)
 
 
 def _effective_p_values(
@@ -379,7 +679,7 @@ def _effective_p_values(
     return result
 
 
-def _sentinel_pairs(features: Sequence[str], count: int = 64) -> np.ndarray:
+def _sentinel_pairs(features: Sequence[str], count: int = 32) -> np.ndarray:
     positions = {feature: index for index, feature in enumerate(features)}
     pairs = list(core.iter_tested_pairs(features))
     targets = np.linspace(0, len(pairs) - 1, count, dtype=np.int64)
@@ -398,6 +698,143 @@ def _sentinel_pairs(features: Sequence[str], count: int = 64) -> np.ndarray:
             msg = "Could not select the prespecified disjoint sentinel pair axis."
             raise RuntimeError(msg)
     return np.asarray(selected, dtype=np.int32)
+
+
+_PAIR_WORKER_CELL: Cell | None = None
+_PAIR_WORKER_SAMPLERS: tuple[tuple[tuple[np.ndarray, np.ndarray], ...], ...] | None = (
+    None
+)
+_PAIR_WORKER_SEED: int | None = None
+
+
+def _pair_seed(cell_seed: int, pair_index: int) -> int:
+    digest = hashlib.sha256(
+        _canonical_json(
+            [cell_seed, "sentinel-pair-independent-replicates-v1", pair_index],
+        ),
+    ).digest()
+    return int.from_bytes(digest[:16], "big")
+
+
+def _narrow_simulation_cell(
+    cell: Cell,
+    sentinel_pairs: np.ndarray,
+) -> tuple[Cell, np.ndarray]:
+    """Return a worker payload containing only the disjoint sentinel features."""
+    selected = [int(value) for value in sentinel_pairs.ravel()]
+    if len(set(selected)) != len(selected):
+        msg = "Calibration sentinel pairs must remain feature-disjoint."
+        raise ValueError(msg)
+    features = tuple(cell.features[index] for index in selected)
+    narrowed = Cell(
+        cohort=cell.cohort,
+        provider=cell.provider,
+        features=features,
+        samples=cell.samples,
+        pmfs={feature: cell.pmfs[feature] for feature in features},
+        pi=cell.pi[np.asarray(selected, dtype=np.int64)].copy(),
+        source_task_manifest=cell.source_task_manifest,
+        single_gene_input=cell.single_gene_input,
+    )
+    local_pairs = np.arange(len(selected), dtype=np.int32).reshape(-1, 2)
+    return narrowed, local_pairs
+
+
+def _initialize_pair_worker(cell: Cell, cell_seed: int) -> None:
+    global _PAIR_WORKER_CELL  # noqa: PLW0603
+    global _PAIR_WORKER_SAMPLERS  # noqa: PLW0603
+    global _PAIR_WORKER_SEED  # noqa: PLW0603
+    _PAIR_WORKER_CELL = cell
+    _PAIR_WORKER_SAMPLERS = _prepare_samplers(cell)
+    _PAIR_WORKER_SEED = cell_seed
+
+
+def _replicate_chunk_size(sample_count: int) -> int:
+    """Bound the batch working set while preserving replicate order."""
+    if sample_count < 1:
+        msg = "Calibration batch requires a nonempty sample axis."
+        raise ValueError(msg)
+    return max(1, min(512, 128_000 // sample_count))
+
+
+def _simulate_pair_worker(
+    task: tuple[int, int, int, int],
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+    """Simulate and fit every replicate for one sentinel pair."""
+    pair_index, index_a, index_b, replicates = task
+    cell = _PAIR_WORKER_CELL
+    samplers = _PAIR_WORKER_SAMPLERS
+    cell_seed = _PAIR_WORKER_SEED
+    if cell is None or samplers is None or cell_seed is None:
+        msg = "Calibration pair worker was not initialized."
+        raise RuntimeError(msg)
+    indices = (index_a, index_b)
+    rng = np.random.default_rng(_pair_seed(cell_seed, pair_index))
+    likelihood_ratios = np.empty(replicates, dtype=np.float64)
+    reportable = np.empty(replicates, dtype=bool)
+    scalar_fallback = np.empty(replicates, dtype=bool)
+    chunk_size = _replicate_chunk_size(len(cell.samples))
+    for start in range(0, replicates, chunk_size):
+        stop = min(start + chunk_size, replicates)
+        pairs = [
+            _pair_genes(
+                cell,
+                indices,
+                _simulate_features(cell, indices, samplers, rng),
+                Gene,
+            )
+            for _replicate in range(start, stop)
+        ]
+        fitted = fit_gene_pairs_batched(pairs)
+        likelihood_ratios[start:stop] = fitted.likelihood_ratio
+        reportable[start:stop] = fitted.reportable
+        scalar_fallback[start:stop] = fitted.scalar_fallback
+    return pair_index, likelihood_ratios, reportable, scalar_fallback
+
+
+def _simulate_null_arrays(
+    *,
+    cell: Cell,
+    sentinel_pairs: np.ndarray,
+    replicates: int,
+    cell_seed: int,
+    workers: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return deterministic pair-parallel calibration arrays."""
+    if replicates < 1 or workers < 1 or workers > len(sentinel_pairs):
+        msg = "Calibration pair simulation dimensions are invalid."
+        raise ValueError(msg)
+    narrowed, local_pairs = _narrow_simulation_cell(cell, sentinel_pairs)
+    tasks = tuple(
+        (pair_index, int(indices[0]), int(indices[1]), replicates)
+        for pair_index, indices in enumerate(local_pairs)
+    )
+    if workers == 1:
+        _initialize_pair_worker(narrowed, cell_seed)
+        results = [_simulate_pair_worker(task) for task in tasks]
+    else:
+        with multiprocessing.get_context("spawn").Pool(
+            processes=workers,
+            initializer=_initialize_pair_worker,
+            initargs=(narrowed, cell_seed),
+        ) as pool:
+            results = pool.map(_simulate_pair_worker, tasks, chunksize=1)
+    likelihood_ratios = np.empty(
+        (replicates, len(sentinel_pairs)),
+        dtype=np.float64,
+    )
+    reportable = np.empty((replicates, len(sentinel_pairs)), dtype=bool)
+    scalar_fallback = np.empty((replicates, len(sentinel_pairs)), dtype=bool)
+    observed_indices = []
+    for pair_index, pair_lrt, pair_reportable, pair_fallback in results:
+        observed_indices.append(pair_index)
+        likelihood_ratios[:, pair_index] = pair_lrt
+        reportable[:, pair_index] = pair_reportable
+        scalar_fallback[:, pair_index] = pair_fallback
+    if observed_indices != list(range(len(sentinel_pairs))):
+        msg = "Calibration pair workers returned an invalid pair axis."
+        raise RuntimeError(msg)
+    return likelihood_ratios, reportable, scalar_fallback
 
 
 def _validate_single_gene_source(
@@ -583,7 +1020,10 @@ def _run_manifest_payload(
             }
             for cell in _protocol_cells(config)
         ],
-        "observed_pair_statistics_opened": False,
+        "resource_contract": dict(config["resources"]),
+        "runtime_resource_observation": _frozen_resource_observation(config),
+        "thread_environment": dict(THREAD_ENV),
+        "result_blindness": _result_blindness_receipt(),
     }
 
 
@@ -593,6 +1033,7 @@ def _ensure_run_root(
     output_root: Path,
 ) -> dict[str, Any]:
     config = _load_config()
+    _preflight_runtime_resources(config)
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "tasks").mkdir(exist_ok=True)
     manifest = _run_manifest_payload(
@@ -649,6 +1090,24 @@ def _validate_task(  # noqa: PLR0913
     contract = json.loads(
         (run_root / "contracts" / f"{cohort}.json").read_text(encoding="utf-8"),
     )
+    expected_worker_topology = _worker_topology(config, provider=provider)
+    sample_count = contract.get("samples", {}).get("count")
+    fit_kernel = manifest.get("fit_kernel")
+    fallback_count = (
+        fit_kernel.get("scalar_fallback_count")
+        if isinstance(fit_kernel, dict)
+        else None
+    )
+    expected_fit_kernel = {
+        "contract": marginal["fit_kernel"],
+        "replicate_chunk_rule": marginal["replicate_chunk_rule"],
+        "replicate_chunk_size": (
+            _replicate_chunk_size(sample_count)
+            if isinstance(sample_count, int) and not isinstance(sample_count, bool)
+            else None
+        ),
+        "scalar_fallback_count": fallback_count,
+    }
     source_manifest, single_gene_input = _validate_single_gene_source(
         run_root,
         cohort,
@@ -669,6 +1128,18 @@ def _validate_task(  # noqa: PLR0913
         or manifest.get("sentinel_pair_count")
         != int(marginal["sentinel_pair_count"])
         or manifest.get("alphas") != marginal["alphas"]
+        or manifest.get("replicate_rng") != marginal["replicate_rng"]
+        or not isinstance(fit_kernel, dict)
+        or not isinstance(sample_count, int)
+        or isinstance(sample_count, bool)
+        or not isinstance(fallback_count, int)
+        or isinstance(fallback_count, bool)
+        or not 0
+        <= fallback_count
+        <= int(marginal["replicates_per_cell"])
+        * int(marginal["sentinel_pair_count"])
+        or fit_kernel != expected_fit_kernel
+        or manifest.get("worker_topology") != expected_worker_topology
         or manifest.get("source_task_manifest") != source_manifest
         or manifest.get("single_gene_input") != single_gene_input
         or manifest.get("output", {}).get("path") != TASK_DATA_NAME
@@ -680,22 +1151,35 @@ def _validate_task(  # noqa: PLR0913
         msg = f"Calibration task failed manifest validation: {task_root}"
         raise ValueError(msg)
     core._validate_task_resource_usage(manifest, task_root)  # noqa: SLF001
+    _validate_calibration_resource_usage(
+        manifest,
+        config,
+        provider=provider,
+    )
     replicates = int(marginal["replicates_per_cell"])
     pair_count = int(marginal["sentinel_pair_count"])
     expected_pairs = _sentinel_pairs(contract["features"], pair_count)
     with np.load(data, allow_pickle=False) as arrays:
         if (
             set(arrays.files)
-            != {"marginal_lrt", "marginal_reportable", "sentinel_pairs"}
+            != {
+                "marginal_lrt",
+                "marginal_reportable",
+                "scalar_fallback",
+                "sentinel_pairs",
+            }
             or arrays["marginal_lrt"].shape != (replicates, pair_count)
             or arrays["marginal_reportable"].shape != (replicates, pair_count)
             or arrays["marginal_reportable"].dtype != np.dtype(bool)
+            or arrays["scalar_fallback"].shape != (replicates, pair_count)
+            or arrays["scalar_fallback"].dtype != np.dtype(bool)
             or arrays["sentinel_pairs"].shape != (pair_count, 2)
             or not np.array_equal(arrays["sentinel_pairs"], expected_pairs)
             or not np.isfinite(arrays["marginal_lrt"]).all()
             or (arrays["marginal_lrt"] < 0).any()
             or manifest.get("marginal_reportable_count")
             != int(arrays["marginal_reportable"].sum())
+            or fallback_count != int(arrays["scalar_fallback"].sum())
         ):
             msg = f"Calibration task arrays failed validation: {task_root}"
             raise ValueError(msg)
@@ -748,30 +1232,30 @@ def run_task(  # noqa: PLR0913
             run_root=run_root,
         )
         return "already-complete"
+    _preflight_runtime_resources(config)
     if nice_increment:
         os.nice(nice_increment)
+    os.environ.update(THREAD_ENV)
     started = time.monotonic()
     cell = _load_cell(run_root, provider_root, cohort, provider)
-    samplers = _prepare_samplers(cell)
-    rng = np.random.default_rng(_seed(int(config["seed"]), cohort, provider))
     pair_count = int(config["marginal_lrt"]["sentinel_pair_count"])
     sentinel_pairs = _sentinel_pairs(cell.features, pair_count)
     marginal_replicates = int(config["marginal_lrt"]["replicates_per_cell"])
-    marginal_lrt = np.empty(
-        (marginal_replicates, len(sentinel_pairs)),
-        dtype=np.float64,
-    )
-    marginal_reportable = np.empty(
-        (marginal_replicates, len(sentinel_pairs)),
-        dtype=bool,
-    )
-    for replicate in range(marginal_replicates):
-        for pair_index, raw_indices in enumerate(sentinel_pairs):
-            indices = (int(raw_indices[0]), int(raw_indices[1]))
-            counts = _simulate_features(cell, indices, samplers, rng)
-            statistic, reportable = _fit_pair(cell, indices, counts)
-            marginal_lrt[replicate, pair_index] = statistic
-            marginal_reportable[replicate, pair_index] = reportable
+    fit_workers = _fit_worker_count(config, provider)
+    with threadpool_limits(
+        limits=int(config["resources"]["blas_threads_per_fit_worker"]),
+    ):
+        (
+            marginal_lrt,
+            marginal_reportable,
+            scalar_fallback,
+        ) = _simulate_null_arrays(
+            cell=cell,
+            sentinel_pairs=sentinel_pairs,
+            replicates=marginal_replicates,
+            cell_seed=_seed(int(config["seed"]), cohort, provider),
+            workers=fit_workers,
+        )
 
     task_root.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{provider}.", dir=task_root.parent))
@@ -781,16 +1265,26 @@ def run_task(  # noqa: PLR0913
             handle,
             marginal_lrt=marginal_lrt,
             marginal_reportable=marginal_reportable,
+            scalar_fallback=scalar_fallback,
             sentinel_pairs=sentinel_pairs,
         )
         handle.flush()
         os.fsync(handle.fileno())
-    usage = resource.getrusage(resource.RUSAGE_SELF)
+    self_usage = _rusage_record(
+        resource.getrusage(resource.RUSAGE_SELF),
+        children=False,
+    )
+    child_usage = _rusage_record(
+        resource.getrusage(resource.RUSAGE_CHILDREN),
+        children=True,
+    )
     resource_usage = core._task_resource_usage(started)  # noqa: SLF001
     resource_usage.update(
         {
-            "user_cpu_seconds": usage.ru_utime,
-            "system_cpu_seconds": usage.ru_stime,
+            "user_cpu_seconds": self_usage["user_cpu_seconds"],
+            "system_cpu_seconds": self_usage["system_cpu_seconds"],
+            "self": self_usage,
+            "terminated_children": child_usage,
         },
     )
     manifest = {
@@ -805,6 +1299,16 @@ def run_task(  # noqa: PLR0913
         "marginal_replicates": marginal_replicates,
         "sentinel_pair_count": len(sentinel_pairs),
         "alphas": config["marginal_lrt"]["alphas"],
+        "replicate_rng": config["marginal_lrt"]["replicate_rng"],
+        "fit_kernel": {
+            "contract": config["marginal_lrt"]["fit_kernel"],
+            "replicate_chunk_rule": config["marginal_lrt"][
+                "replicate_chunk_rule"
+            ],
+            "replicate_chunk_size": _replicate_chunk_size(len(cell.samples)),
+            "scalar_fallback_count": int(scalar_fallback.sum()),
+        },
+        "worker_topology": _worker_topology(config, provider=provider),
         "marginal_reportable_count": int(marginal_reportable.sum()),
         "source_task_manifest": dict(cell.source_task_manifest),
         "single_gene_input": dict(cell.single_gene_input),
@@ -856,17 +1360,36 @@ def _task_command(  # noqa: PLR0913
     ]
 
 
-def _run_batch(  # noqa: PLR0913
+def _run_protocol(  # noqa: PLR0913
     tasks: Sequence[ProtocolCell],
     *,
     run_root: Path,
     provider_root: Path,
     output_root: Path,
     jobs: int,
+    max_mutsig_cells: int,
+    mutsig_fit_workers: int,
+    descriptive_fit_workers: int,
+    max_total_fit_workers: int,
     nice_increment: int,
 ) -> None:
+    """Run mixed protocol cells under total and MutSig concurrency caps."""
     if not tasks:
         return
+    maximum_scheduled_fit_workers = (
+        max_mutsig_cells * mutsig_fit_workers
+        + (jobs - max_mutsig_cells) * descriptive_fit_workers
+    )
+    if (
+        jobs < 1
+        or max_mutsig_cells < 1
+        or max_mutsig_cells > jobs
+        or mutsig_fit_workers < 1
+        or descriptive_fit_workers < 1
+        or maximum_scheduled_fit_workers > max_total_fit_workers
+    ):
+        msg = "Calibration scheduler concurrency limits are invalid."
+        raise ValueError(msg)
     environment = os.environ.copy()
     environment.update(THREAD_ENV)
 
@@ -884,14 +1407,35 @@ def _run_batch(  # noqa: PLR0913
             env=environment,
         )
 
-    remaining = iter(tasks)
+    mutsig_remaining = iter(cell for cell in tasks if cell.provider == "mutsig")
+    descriptive_remaining = iter(
+        cell for cell in tasks if cell.provider != "mutsig"
+    )
+    next_mutsig = next(mutsig_remaining, None)
+    next_descriptive = next(descriptive_remaining, None)
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures: dict[Any, ProtocolCell] = {}
-        for _ in range(jobs):
-            cell = next(remaining, None)
-            if cell is None:
-                break
-            futures[executor.submit(invoke, cell)] = cell
+
+        def fill_slots() -> None:
+            nonlocal next_descriptive, next_mutsig
+            active_mutsig = sum(
+                cell.provider == "mutsig" for cell in futures.values()
+            )
+            while (
+                len(futures) < jobs
+                and next_mutsig is not None
+                and active_mutsig < max_mutsig_cells
+            ):
+                cell = next_mutsig
+                next_mutsig = next(mutsig_remaining, None)
+                futures[executor.submit(invoke, cell)] = cell
+                active_mutsig += 1
+            while len(futures) < jobs and next_descriptive is not None:
+                cell = next_descriptive
+                next_descriptive = next(descriptive_remaining, None)
+                futures[executor.submit(invoke, cell)] = cell
+
+        fill_slots()
         while futures:
             future = next(as_completed(futures))
             cell = futures.pop(future)
@@ -902,9 +1446,7 @@ def _run_batch(  # noqa: PLR0913
                     pending.cancel()
                 raise
             print(f"calibration complete {cell.cohort}/{cell.provider}", flush=True)
-            next_cell = next(remaining, None)
-            if next_cell is not None:
-                futures[executor.submit(invoke, next_cell)] = next_cell
+            fill_slots()
 
 
 def run_all(
@@ -918,44 +1460,55 @@ def run_all(
     """Run all frozen cells with at most one MutSig worker and three total jobs."""
     config = _ensure_run_root(run_root, provider_root, output_root)
     resources = config["resources"]
-    if jobs < 1 or jobs > int(resources["max_jobs"]):
+    if jobs < 1 or jobs > int(resources["max_outer_cells"]):
         msg = "Calibration --jobs exceeds the frozen resource contract."
         raise ValueError(msg)
     if nice_increment != int(resources["nice_increment"]):
         msg = "Calibration --nice differs from the frozen resource contract."
         raise ValueError(msg)
     protocol = _protocol_cells(config)
-    primary = tuple(cell for cell in protocol if cell.provider == "mutsig")
-    descriptive = tuple(cell for cell in protocol if cell.provider != "mutsig")
-    _run_batch(
-        primary,
-        run_root=run_root,
-        provider_root=provider_root,
-        output_root=output_root,
-        jobs=int(resources["max_mutsig_jobs"]),
-        nice_increment=nice_increment,
-    )
-    _run_batch(
-        descriptive,
+    _run_protocol(
+        protocol,
         run_root=run_root,
         provider_root=provider_root,
         output_root=output_root,
         jobs=jobs,
+        max_mutsig_cells=int(resources["max_mutsig_cells"]),
+        mutsig_fit_workers=int(resources["mutsig_fit_workers"]),
+        descriptive_fit_workers=int(resources["descriptive_fit_workers"]),
+        max_total_fit_workers=int(resources["max_total_fit_workers"]),
         nice_increment=nice_increment,
     )
 
 
-def _hoeffding_margin(
+def _clopper_pearson_upper_bound(
     *,
+    successes: int,
     trials: int,
-    endpoint_count: int,
-    familywise_error: float,
+    endpoint_error: float,
 ) -> float:
-    """Return the simultaneous one-sided Hoeffding union-bound margin."""
-    if trials < 1 or endpoint_count < 1 or not 0 < familywise_error < 1:
-        msg = "Hoeffding gate parameters are invalid."
+    """Return one exact one-sided Clopper-Pearson binomial upper bound."""
+    if (
+        trials < 1
+        or successes < 0
+        or successes > trials
+        or not 0 < endpoint_error < 1
+    ):
+        msg = "Exact-binomial gate parameters are invalid."
         raise ValueError(msg)
-    return math.sqrt(math.log(endpoint_count / familywise_error) / (2 * trials))
+    if successes == trials:
+        return 1.0
+    upper = float(
+        beta.ppf(
+            1.0 - endpoint_error,
+            successes + 1,
+            trials - successes,
+        ),
+    )
+    if not np.isfinite(upper) or not successes / trials <= upper <= 1:
+        msg = "Exact-binomial upper bound is invalid."
+        raise RuntimeError(msg)
+    return upper
 
 
 def _gate_fields(
@@ -970,18 +1523,20 @@ def _gate_fields(
         msg = "Calibration endpoint counts are invalid."
         raise ValueError(msg)
     gate = config["affirmative_gate"]
-    margin = _hoeffding_margin(
+    familywise_error = float(gate["familywise_error"])
+    endpoint_count = int(gate["endpoint_count"])
+    endpoint_error = familywise_error / endpoint_count
+    upper = _clopper_pearson_upper_bound(
+        successes=successes,
         trials=trials,
-        endpoint_count=int(gate["endpoint_count"]),
-        familywise_error=float(gate["familywise_error"]),
+        endpoint_error=endpoint_error,
     )
-    upper = min(1.0, successes / trials + margin)
     acceptance = float(gate["acceptance_upper_bounds"][f"{alpha:.2f}"])
     return {
-        "hoeffding_familywise_error": float(gate["familywise_error"]),
-        "hoeffding_endpoint_count": int(gate["endpoint_count"]),
-        "hoeffding_margin": margin,
-        "hoeffding_upper_bound": upper,
+        "exact_binomial_familywise_error": familywise_error,
+        "exact_binomial_endpoint_count": endpoint_count,
+        "bonferroni_endpoint_error": endpoint_error,
+        "clopper_pearson_upper_bound": upper,
         "acceptance_upper_bound": acceptance,
         "endpoint_gate_pass": (
             ENDPOINT_ACCEPTED if upper <= acceptance else ENDPOINT_REJECTED
@@ -995,7 +1550,7 @@ def _summary_frame(
     run_root: Path,
     provider_root: Path,
     config: Mapping[str, Any],
-) -> tuple[pd.DataFrame, list[dict[str, int | str]], int]:
+) -> tuple[pd.DataFrame, list[dict[str, Any]], int]:
     run_completion_sha256, _ = _validate_run_manifest(
         run_root=run_root,
         provider_root=provider_root,
@@ -1007,7 +1562,7 @@ def _summary_frame(
     nonreportable_fit_count = 0
     for cell in _protocol_cells(config):
         task_root = _task_root(output_root, cell.cohort, cell.provider)
-        _validate_task(
+        manifest = _validate_task(
             task_root,
             config,
             cohort=cell.cohort,
@@ -1016,48 +1571,66 @@ def _summary_frame(
             run_completion_sha256=run_completion_sha256,
             run_root=run_root,
         )
-        task_manifests.append(
-            _file_record(task_root / TASK_MANIFEST_NAME, relative_to=output_root),
+        task_manifest_record = _file_record(
+            task_root / TASK_MANIFEST_NAME,
+            relative_to=output_root,
         )
+        task_manifest_record.update(
+            {
+                "cohort": cell.cohort,
+                "provider": cell.provider,
+                "role": cell.role,
+                "fit_kernel": manifest["fit_kernel"],
+                "worker_topology": manifest["worker_topology"],
+                "resource_usage": manifest["resource_usage"],
+            },
+        )
+        task_manifests.append(task_manifest_record)
         with np.load(task_root / TASK_DATA_NAME, allow_pickle=False) as arrays:
             reportable = arrays["marginal_reportable"]
             p_values = _effective_p_values(arrays["marginal_lrt"], reportable)
-            reportable_trials = int(reportable.sum())
-            nonreportable_trials = int(reportable.size - reportable_trials)
-            nonreportable_fit_count += nonreportable_trials
-            for raw_alpha in config["marginal_lrt"]["alphas"]:
-                alpha = float(raw_alpha)
-                successes = int((p_values <= alpha).sum())
-                trials = int(p_values.size)
-                row: dict[str, Any] = {
-                    "cohort": cell.cohort,
-                    "provider": cell.provider,
-                    "role": cell.role,
-                    "screen": MARGINAL_SCREEN,
-                    "threshold": alpha,
-                    "events": successes,
-                    "trials": trials,
-                    "rate": successes / trials,
-                    "reportable_trials": reportable_trials,
-                    "nonreportable_trials": nonreportable_trials,
-                    "gate_endpoint": cell.role == PRIMARY_ROLE,
-                    "hoeffding_familywise_error": "",
-                    "hoeffding_endpoint_count": "",
-                    "hoeffding_margin": "",
-                    "hoeffding_upper_bound": "",
-                    "acceptance_upper_bound": "",
-                    "endpoint_gate_pass": GATE_NOT_APPLICABLE,
-                }
-                if cell.role == PRIMARY_ROLE:
-                    row.update(
-                        _gate_fields(
-                            successes=successes,
-                            trials=trials,
-                            alpha=alpha,
-                            config=config,
-                        ),
-                    )
-                rows.append(row)
+            nonreportable_fit_count += int(reportable.size - reportable.sum())
+            for pair_index in range(p_values.shape[1]):
+                pair_p_values = p_values[:, pair_index]
+                pair_reportable = reportable[:, pair_index]
+                reportable_trials = int(pair_reportable.sum())
+                nonreportable_trials = int(
+                    pair_reportable.size - reportable_trials,
+                )
+                for raw_alpha in config["marginal_lrt"]["alphas"]:
+                    alpha = float(raw_alpha)
+                    successes = int((pair_p_values <= alpha).sum())
+                    trials = int(pair_p_values.size)
+                    row: dict[str, Any] = {
+                        "cohort": cell.cohort,
+                        "provider": cell.provider,
+                        "role": cell.role,
+                        "screen": MARGINAL_SCREEN,
+                        "sentinel_pair_index": pair_index,
+                        "threshold": alpha,
+                        "events": successes,
+                        "trials": trials,
+                        "rate": successes / trials,
+                        "reportable_trials": reportable_trials,
+                        "nonreportable_trials": nonreportable_trials,
+                        "gate_endpoint": cell.role == PRIMARY_ROLE,
+                        "exact_binomial_familywise_error": "",
+                        "exact_binomial_endpoint_count": "",
+                        "bonferroni_endpoint_error": "",
+                        "clopper_pearson_upper_bound": "",
+                        "acceptance_upper_bound": "",
+                        "endpoint_gate_pass": GATE_NOT_APPLICABLE,
+                    }
+                    if cell.role == PRIMARY_ROLE:
+                        row.update(
+                            _gate_fields(
+                                successes=successes,
+                                trials=trials,
+                                alpha=alpha,
+                                config=config,
+                            ),
+                        )
+                    rows.append(row)
     return (
         pd.DataFrame(rows, columns=SUMMARY_COLUMNS),
         task_manifests,
@@ -1069,6 +1642,106 @@ def _summary_csv_bytes(frame: pd.DataFrame) -> bytes:
     return frame.to_csv(index=False, lineterminator="\n").encode("utf-8")
 
 
+def _validated_gate_rows(
+    frame: pd.DataFrame,
+    config: Mapping[str, Any],
+) -> pd.DataFrame:
+    """Validate the pair-resolved endpoint inventory and return gate rows."""
+    if tuple(frame.columns) != SUMMARY_COLUMNS:
+        msg = "Calibration summary table columns are invalid."
+        raise ValueError(msg)
+    pair_count = int(config["marginal_lrt"]["sentinel_pair_count"])
+    replicates = int(config["marginal_lrt"]["replicates_per_cell"])
+    alphas = tuple(float(value) for value in config["marginal_lrt"]["alphas"])
+    expected = {
+        (cell.cohort, cell.provider, cell.role, pair_index, alpha)
+        for cell in _protocol_cells(config)
+        for pair_index in range(pair_count)
+        for alpha in alphas
+    }
+    observed = list(
+        zip(
+            frame["cohort"].astype(str),
+            frame["provider"].astype(str),
+            frame["role"].astype(str),
+            frame["sentinel_pair_index"].astype(int),
+            frame["threshold"].astype(float),
+            strict=True,
+        ),
+    )
+    primary_mask = frame["role"].eq(PRIMARY_ROLE)
+    descriptive_mask = frame["role"].eq(DESCRIPTIVE_ROLE)
+    descriptive_blank_gate_fields = (
+        "exact_binomial_familywise_error",
+        "exact_binomial_endpoint_count",
+        "bonferroni_endpoint_error",
+        "clopper_pearson_upper_bound",
+        "acceptance_upper_bound",
+    )
+    if (
+        len(observed) != len(expected)
+        or set(observed) != expected
+        or not frame["screen"].eq(MARGINAL_SCREEN).all()
+        or not frame["trials"].eq(replicates).all()
+        or not (frame["reportable_trials"] + frame["nonreportable_trials"])
+        .eq(frame["trials"])
+        .all()
+        or not frame.loc[primary_mask, "gate_endpoint"].all()
+        or frame.loc[descriptive_mask, "gate_endpoint"].any()
+        or not frame.loc[
+            descriptive_mask,
+            "endpoint_gate_pass",
+        ].eq(GATE_NOT_APPLICABLE).all()
+        or not frame.loc[
+            descriptive_mask,
+            descriptive_blank_gate_fields,
+        ].eq("").to_numpy().all()
+    ):
+        msg = "Calibration pair-resolved endpoint inventory is invalid."
+        raise ValueError(msg)
+    gate_rows = frame.loc[primary_mask]
+    gate = config["affirmative_gate"]
+    endpoint_count = int(gate["endpoint_count"])
+    endpoint_error = float(gate["familywise_error"]) / endpoint_count
+    gate_field_names = (
+        "exact_binomial_familywise_error",
+        "exact_binomial_endpoint_count",
+        "bonferroni_endpoint_error",
+        "clopper_pearson_upper_bound",
+        "acceptance_upper_bound",
+        "endpoint_gate_pass",
+    )
+    if (
+        len(gate_rows) != endpoint_count
+        or not gate_rows["endpoint_gate_pass"].isin(
+            [ENDPOINT_ACCEPTED, ENDPOINT_REJECTED],
+        ).all()
+        or not gate_rows["exact_binomial_familywise_error"].eq(
+            float(gate["familywise_error"]),
+        ).all()
+        or not gate_rows["exact_binomial_endpoint_count"].eq(endpoint_count).all()
+        or not gate_rows["bonferroni_endpoint_error"].eq(endpoint_error).all()
+        or not gate_rows.apply(
+            lambda row: row["acceptance_upper_bound"]
+            == float(gate["acceptance_upper_bounds"][f"{row['threshold']:.2f}"]),
+            axis=1,
+        ).all()
+    ):
+        msg = "Calibration exact-binomial gate endpoint inventory is invalid."
+        raise ValueError(msg)
+    for row in gate_rows.to_dict(orient="records"):
+        expected_fields = _gate_fields(
+            successes=int(row["events"]),
+            trials=int(row["trials"]),
+            alpha=float(row["threshold"]),
+            config=config,
+        )
+        if any(row[name] != expected_fields[name] for name in gate_field_names):
+            msg = "Calibration exact-binomial endpoint differs from its counts."
+            raise ValueError(msg)
+    return gate_rows
+
+
 def _summary_payload(  # noqa: PLR0913
     *,
     output_root: Path,
@@ -1076,7 +1749,7 @@ def _summary_payload(  # noqa: PLR0913
     provider_root: Path,
     config: Mapping[str, Any],
     frame: pd.DataFrame,
-    task_manifests: list[dict[str, int | str]],
+    task_manifests: list[dict[str, Any]],
     nonreportable_fit_count: int,
 ) -> dict[str, Any]:
     run_completion_sha256, provider_manifest_sha256 = _validate_run_manifest(
@@ -1085,18 +1758,10 @@ def _summary_payload(  # noqa: PLR0913
         output_root=output_root,
         config=config,
     )
-    gate_rows = frame.loc[frame["gate_endpoint"]]
-    if (
-        len(gate_rows) != int(config["affirmative_gate"]["endpoint_count"])
-        or not gate_rows["endpoint_gate_pass"].isin(
-            [ENDPOINT_ACCEPTED, ENDPOINT_REJECTED],
-        ).all()
-    ):
-        msg = "Calibration gate endpoint inventory is invalid."
-        raise ValueError(msg)
+    gate_rows = _validated_gate_rows(frame, config)
     passed = int(gate_rows["endpoint_gate_pass"].eq(ENDPOINT_ACCEPTED).sum())
     gate = config["affirmative_gate"]
-    trials = int(gate_rows["trials"].iloc[0])
+    endpoint_error = float(gate["familywise_error"]) / int(gate["endpoint_count"])
     reporting = config["reporting_candidates"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1114,14 +1779,13 @@ def _summary_payload(  # noqa: PLR0913
         "primary_gate_passed_endpoint_count": passed,
         "overall_gate_pass": passed == len(gate_rows),
         "gate_provider": gate["provider"],
+        "gate_endpoint_unit": gate["endpoint_unit"],
         "gate_method": gate["method"],
-        "hoeffding_familywise_error": gate["familywise_error"],
+        "exact_binomial_familywise_error": gate["familywise_error"],
+        "exact_binomial_endpoint_count": gate["endpoint_count"],
+        "bonferroni_endpoint_error": endpoint_error,
+        "clopper_pearson_confidence_level": 1.0 - endpoint_error,
         "acceptance_upper_bounds": gate["acceptance_upper_bounds"],
-        "hoeffding_margin": _hoeffding_margin(
-            trials=trials,
-            endpoint_count=int(gate["endpoint_count"]),
-            familywise_error=float(gate["familywise_error"]),
-        ),
         "effective_p_policy": (
             "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
         ),
@@ -1132,6 +1796,16 @@ def _summary_payload(  # noqa: PLR0913
         "sensitivity_q_candidate": reporting["sensitivity_q_threshold"],
         "interpretation": reporting["interpretation"],
         "reporting_rule_selected": False,
+        "resource_contract": dict(config["resources"]),
+        "runtime_resource_observation": _frozen_resource_observation(config),
+        "thread_environment": dict(THREAD_ENV),
+        "resource_usage_interpretation": {
+            "self_and_terminated_child_cpu_seconds_reported_separately": True,
+            "terminated_child_peak_rss": (
+                "maximum-over-terminated-children-not-additive"
+            ),
+        },
+        "result_blindness": _result_blindness_receipt(),
         "run_completion_sha256": run_completion_sha256,
         "provider_manifest_sha256": provider_manifest_sha256,
         "run_manifest": _file_record(

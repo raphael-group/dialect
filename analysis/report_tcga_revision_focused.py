@@ -153,8 +153,16 @@ def _load_rule(
         != "finite-scenario-stress-not-formal-uniform-FDR-proof"
         or not isinstance(gate_pass, bool)
         or gate.get("provider") != "mutsig"
+        or gate.get("endpoint_unit") != "cohort-sentinel-pair-alpha"
         or gate.get("method")
-        != "simultaneous-one-sided-hoeffding-upper-bound"
+        != (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        )
+        or gate.get("endpoint_count") != 2_048
+        or gate.get("familywise_error") != 0.05
+        or gate.get("acceptance_upper_bounds")
+        != {"0.01": 0.02, "0.05": 0.07}
         or rule.get("inference_status") != expected_status
         or (
             rule.get("inference_status") == rule_module.REPORTABLE_STATUS
@@ -293,6 +301,70 @@ def _decision_prefix(provider: str, analysis: str) -> str:
         return f"{provider}_descriptive_sensitivity_rule_crossing"
     msg = f"Unsupported reporting analysis: {analysis}"
     raise ValueError(msg)
+
+
+def _calibration_gate_maxima(calibration_table: pd.DataFrame) -> pd.DataFrame:
+    """Return each cohort's worst pair-resolved primary-gate endpoint."""
+    required = {
+        "cohort",
+        "provider",
+        "screen",
+        "sentinel_pair_index",
+        "threshold",
+        "gate_endpoint",
+        "clopper_pearson_upper_bound",
+        "acceptance_upper_bound",
+    }
+    if not required.issubset(calibration_table.columns):
+        msg = "Calibration table lacks pair-resolved gate columns."
+        raise ValueError(msg)
+    gate_mask = calibration_table["gate_endpoint"].astype("boolean").fillna(
+        value=False,
+    )
+    gate = calibration_table.loc[gate_mask].copy()
+    if gate.empty:
+        msg = "Calibration table lacks primary gate endpoints."
+        raise ValueError(msg)
+    gate["sentinel_pair_index"] = gate["sentinel_pair_index"].astype(int)
+    gate["threshold"] = gate["threshold"].astype(float)
+    gate["clopper_pearson_upper_bound"] = pd.to_numeric(
+        gate["clopper_pearson_upper_bound"],
+        errors="raise",
+    )
+    gate["acceptance_upper_bound"] = pd.to_numeric(
+        gate["acceptance_upper_bound"],
+        errors="raise",
+    )
+    expected_pair_axis = set(range(32))
+    rows = []
+    for (cohort, threshold), group in gate.groupby(
+        ["cohort", "threshold"],
+        sort=True,
+    ):
+        acceptance = group["acceptance_upper_bound"].unique()
+        if (
+            not group["provider"].eq("mutsig").all()
+            or not group["screen"].eq("marginal_lrt").all()
+            or group["sentinel_pair_index"].duplicated().any()
+            or set(group["sentinel_pair_index"]) != expected_pair_axis
+            or len(acceptance) != 1
+            or not np.isfinite(
+                group["clopper_pearson_upper_bound"].to_numpy(dtype=float),
+            ).all()
+        ):
+            msg = "Calibration worst-case summary has an incomplete endpoint family."
+            raise ValueError(msg)
+        rows.append(
+            {
+                "cohort": str(cohort),
+                "threshold": float(threshold),
+                "maximum_clopper_pearson_upper_bound": float(
+                    group["clopper_pearson_upper_bound"].max(),
+                ),
+                "acceptance_upper_bound": float(acceptance[0]),
+            },
+        )
+    return pd.DataFrame(rows)
 
 
 def _read_inference(postprocess_root: Path, cohort: str) -> pd.DataFrame:
@@ -830,13 +902,31 @@ def _plot_figure6(  # noqa: PLR0913
         {
             "axes.spines.right": False,
             "axes.spines.top": False,
+            "axes.labelsize": 8,
+            "axes.titlesize": 9,
+            "font.family": "Arial",
             "font.size": 9,
             "figure.dpi": 150,
+            "legend.fontsize": 8,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
         },
     )
-    figure, axes = plt.subplots(2, 2, figsize=(13, 12), constrained_layout=True)
+    figure = plt.figure(figsize=(7.5, 8.75), constrained_layout=True)
+    grid = figure.add_gridspec(
+        3,
+        2,
+        width_ratios=(1.15, 1.0),
+        height_ratios=(1.0, 1.0, 1.0),
+    )
+    ax_b = figure.add_subplot(grid[:, 0])
+    ax_a = figure.add_subplot(grid[0, 1])
+    ax_c = figure.add_subplot(grid[1, 1])
+    ax_d = figure.add_subplot(grid[2, 1])
 
-    ax = axes[0, 0]
+    ax = ax_a
     for provider in core.BMRS:
         selected_bins = burden_bins.loc[burden_bins["provider"].eq(provider)]
         observed = np.exp(
@@ -866,12 +956,12 @@ def _plot_figure6(  # noqa: PLR0913
     ax.plot([1, maximum], [1, maximum], color="#111827", linewidth=0.8, linestyle="--")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Observed selected-event count per tumor + 1")
-    ax.set_ylabel("Model-expected count per tumor + 1")
+    ax.set_xlabel("Observed selected events per tumor + 1")
+    ax.set_ylabel("Model-expected events per tumor + 1")
     ax.set_title("A  UCEC burden across background models", loc="left")
     ax.legend(frameon=False)
 
-    ax = axes[0, 1]
+    ax = ax_b
     ordered = summary.sort_values(
         f"{_decision_prefix('mutsig', 'primary')}_co",
         ascending=True,
@@ -909,12 +999,16 @@ def _plot_figure6(  # noqa: PLR0913
     )
     ax.grid(axis="x", alpha=0.2)
 
-    ax = axes[1, 0]
+    ax = ax_c
     marginal = calibration_table.loc[
         calibration_table["screen"].eq("marginal_lrt"),
     ]
+    cell_rates = marginal.groupby(
+        ["cohort", "provider", "threshold"],
+        as_index=False,
+    )["rate"].mean()
     for provider in core.BMRS:
-        selected = marginal.loc[marginal["provider"].eq(provider)]
+        selected = cell_rates.loc[cell_rates["provider"].eq(provider)]
         for threshold, group in selected.groupby("threshold"):
             x = np.full(len(group), float(threshold))
             ax.scatter(
@@ -929,47 +1023,45 @@ def _plot_figure6(  # noqa: PLR0913
             means["threshold"],
             means["rate"],
             color=PROVIDER_COLORS[provider],
-            label=PROVIDER_LABELS[provider],
+            label=f"{PROVIDER_LABELS[provider]} cohort mean",
         )
-    gate_mask = marginal["gate_endpoint"].astype("boolean").fillna(value=False)
-    gate = marginal.loc[gate_mask]
-    if not gate.empty:
-        ax.scatter(
-            gate["threshold"],
-            gate["hoeffding_upper_bound"],
-            marker="^",
-            facecolors="none",
-            edgecolors=PROVIDER_COLORS["mutsig"],
-            s=32,
-            label="MutSig simultaneous upper bound",
-        )
-        acceptance = gate.groupby("threshold", as_index=False)[
-            "acceptance_upper_bound"
-        ].first()
-        ax.scatter(
-            acceptance["threshold"],
-            acceptance["acceptance_upper_bound"],
-            marker="_",
-            color="#111827",
-            s=90,
-            linewidths=1.4,
-            label="Prespecified acceptance bound",
-        )
-    calibration_values = [float(marginal["rate"].max())]
-    for column in ("hoeffding_upper_bound", "acceptance_upper_bound"):
-        finite = pd.to_numeric(marginal[column], errors="coerce").dropna()
-        if not finite.empty:
-            calibration_values.append(float(finite.max()))
+    gate_maxima = _calibration_gate_maxima(calibration_table)
+    ax.scatter(
+        gate_maxima["threshold"],
+        gate_maxima["maximum_clopper_pearson_upper_bound"],
+        marker="^",
+        facecolors="none",
+        edgecolors=PROVIDER_COLORS["mutsig"],
+        s=22,
+        label="MutSig cohort worst pair",
+    )
+    acceptance = gate_maxima.groupby("threshold", as_index=False)[
+        "acceptance_upper_bound"
+    ].first()
+    ax.scatter(
+        acceptance["threshold"],
+        acceptance["acceptance_upper_bound"],
+        marker="_",
+        color="#111827",
+        s=70,
+        linewidths=1.4,
+        label="Acceptance bound",
+    )
+    calibration_values = [
+        float(cell_rates["rate"].max()),
+        float(gate_maxima["maximum_clopper_pearson_upper_bound"].max()),
+        float(gate_maxima["acceptance_upper_bound"].max()),
+    ]
     limits = [0, max(0.06, max(calibration_values) * 1.08)]
     ax.plot(limits, limits, color="#111827", linewidth=0.8, linestyle="--")
     ax.set_xlim(limits)
     ax.set_ylim(limits)
     ax.set_xlabel("Nominal p-value threshold")
-    ax.set_ylabel("Null rejection rate")
-    ax.set_title("C  Profile-LRT fitted-null calibration", loc="left")
-    ax.legend(frameon=False)
+    ax.set_ylabel("Rejection rate / upper bound")
+    ax.set_title("C  Fitted-null calibration; cohort worst pair", loc="left")
+    ax.legend(frameon=False, ncols=2, loc="upper left")
 
-    ax = axes[1, 1]
+    ax = ax_d
     aggregate = overlap.groupby("direction", sort=False)[
         [
             "mutsig_primary_rejection_count",
@@ -1026,12 +1118,12 @@ def _plot_figure6(  # noqa: PLR0913
     ax.set_xticks(positions, ["Mutual exclusivity", "Co-occurrence"])
     ax.set_ylabel(f"Pairs across {len(summary)} cohorts ({threshold_label})")
     ax.set_title("D  Direction-concordant provider overlap", loc="left")
-    ax.legend(frameon=False, loc="upper right")
+    ax.margins(y=0.35)
+    ax.legend(frameon=False, loc="upper right", bbox_to_anchor=(1.0, 0.82))
     ax.grid(axis="y", alpha=0.2)
 
     figure.savefig(
         output,
-        bbox_inches="tight",
         metadata={"CreationDate": None, "ModDate": None},
     )
     plt.close(figure)

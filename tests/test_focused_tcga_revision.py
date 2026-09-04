@@ -327,10 +327,14 @@ def test_calibration_candidates_are_frozen_before_result_inspection() -> None:
     }
     assert config["affirmative_gate"] == {
         "provider": "mutsig",
-        "method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "endpoint_unit": "cohort-sentinel-pair-alpha",
+        "method": (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        ),
         "familywise_error": 0.05,
-        "endpoint_count": 64,
-        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.06},
+        "endpoint_count": 2_048,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
     }
     assert config["reporting_candidates"] == {
         "test": "chi-square-one-df-profile-lrt",
@@ -347,8 +351,8 @@ def test_calibration_sentinel_pairs_are_disjoint_and_span_axis() -> None:
     features = tuple(f"G{index}_M" for index in range(500))
     pairs = calibration._sentinel_pairs(features)  # noqa: SLF001
 
-    assert pairs.shape == (64, 2)
-    assert len(set(pairs.ravel().tolist())) == 128
+    assert pairs.shape == (32, 2)
+    assert len(set(pairs.ravel().tolist())) == 64
     assert int(pairs.min()) == 0
     assert int(pairs.max()) >= 490
 
@@ -365,15 +369,16 @@ def _write_calibration_task(
     contract_root = run_root / "contracts"
     contract_root.mkdir(parents=True, exist_ok=True)
     (contract_root / f"{cohort}.json").write_text(
-        json.dumps({"features": features}),
+        json.dumps({"features": features, "samples": {"count": 100}}),
         encoding="utf-8",
     )
     task_root.mkdir(parents=True)
     data_path = task_root / calibration.TASK_DATA_NAME
     np.savez_compressed(
         data_path,
-        marginal_lrt=np.zeros((1000, 64), dtype=np.float64),
-        marginal_reportable=np.ones((1000, 64), dtype=bool),
+        marginal_lrt=np.zeros((10_000, 32), dtype=np.float64),
+        marginal_reportable=np.ones((10_000, 32), dtype=bool),
+        scalar_fallback=np.zeros((10_000, 32), dtype=bool),
         sentinel_pairs=calibration._sentinel_pairs(features),  # noqa: SLF001
     )
     source_task_manifest: dict[str, object] = {
@@ -386,6 +391,16 @@ def _write_calibration_task(
         "bytes": 202,
         "sha256": "c" * 64,
     }
+    self_peak = calibration._normalized_peak_rss(  # noqa: SLF001
+        1,
+        source="resource.getrusage(resource.RUSAGE_SELF).ru_maxrss",
+        semantics="task-process-maximum-resident-set-size",
+    )
+    child_peak = calibration._normalized_peak_rss(  # noqa: SLF001
+        0,
+        source="resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss",
+        semantics="maximum-over-terminated-children-not-additive",
+    )
     manifest: dict[str, object] = {
         "schema_version": calibration.SCHEMA_VERSION,
         "contract": calibration.TASK_CONTRACT,
@@ -395,23 +410,41 @@ def _write_calibration_task(
         "config_sha256": calibration._sha256(calibration.CONFIG_PATH),  # noqa: SLF001
         "run_completion_sha256": "a" * 64,
         "seed": calibration._seed(int(config["seed"]), cohort, provider),  # noqa: SLF001
-        "marginal_replicates": 1000,
-        "sentinel_pair_count": 64,
+        "marginal_replicates": 10_000,
+        "sentinel_pair_count": 32,
         "alphas": [0.01, 0.05],
-        "marginal_reportable_count": 64_000,
+        "replicate_rng": "sha256-cell-seed-and-sentinel-pair-index-v1",
+        "fit_kernel": {
+            "contract": (
+                "bounded-batched-profile-lrt-with-scalar-boundary-"
+                "reconciliation-v1"
+            ),
+            "replicate_chunk_rule": "max(1,min(512,128000//sample-count))",
+            "replicate_chunk_size": 512,
+            "scalar_fallback_count": 0,
+        },
+        "worker_topology": calibration._worker_topology(  # noqa: SLF001
+            config,
+            provider=provider,
+        ),
+        "marginal_reportable_count": 320_000,
         "source_task_manifest": source_task_manifest,
         "single_gene_input": single_gene_input,
         "resource_usage": {
             "elapsed_seconds": 1.0,
-            "peak_rss": {
-                "bytes": 1024,
-                "native_value": 1,
-                "native_unit": "KiB",
-                "platform": "linux",
-                "source": "resource.getrusage(resource.RUSAGE_SELF).ru_maxrss",
-            },
+            "peak_rss": self_peak,
             "user_cpu_seconds": 0.5,
             "system_cpu_seconds": 0.1,
+            "self": {
+                "user_cpu_seconds": 0.5,
+                "system_cpu_seconds": 0.1,
+                "peak_rss": self_peak,
+            },
+            "terminated_children": {
+                "user_cpu_seconds": 0.0,
+                "system_cpu_seconds": 0.0,
+                "peak_rss": child_peak,
+            },
         },
         "output": {
             "path": calibration.TASK_DATA_NAME,
@@ -615,7 +648,14 @@ def test_reporting_rule_freezes_prespecified_candidates(
         "overall_gate_pass": True,
         "reporting_rule_selected": False,
         "gate_provider": "mutsig",
-        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "gate_endpoint_unit": "cohort-sentinel-pair-alpha",
+        "gate_method": (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        ),
+        "exact_binomial_familywise_error": 0.05,
+        "exact_binomial_endpoint_count": 2_048,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
         "primary_adjustment": "benjamini-yekutieli",
         "primary_q_candidate": 0.01,
         "sensitivity_adjustment": "benjamini-hochberg",
@@ -661,7 +701,14 @@ def test_reporting_rule_freezes_prespecified_candidates(
     assert rule["inference_status"] == reporting_rule.REPORTABLE_STATUS
     assert rule["calibration_gate"] == {
         "provider": "mutsig",
-        "method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "endpoint_unit": "cohort-sentinel-pair-alpha",
+        "method": (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        ),
+        "endpoint_count": 2_048,
+        "familywise_error": 0.05,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
         "overall_gate_pass": True,
     }
     assert rule["scope"] == "one-identical-rule-across-all-32-cancer-types"
@@ -684,7 +731,14 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
         "overall_gate_pass": False,
         "reporting_rule_selected": False,
         "gate_provider": "mutsig",
-        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "gate_endpoint_unit": "cohort-sentinel-pair-alpha",
+        "gate_method": (
+            "pair-resolved-simultaneous-one-sided-exact-binomial-"
+            "clopper-pearson-with-bonferroni"
+        ),
+        "exact_binomial_familywise_error": 0.05,
+        "exact_binomial_endpoint_count": 2_048,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
         "primary_adjustment": "benjamini-yekutieli",
         "primary_q_candidate": 0.01,
         "sensitivity_adjustment": "benjamini-hochberg",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -184,7 +186,7 @@ def test_figure_burden_bins_reconcile_observed_axis_without_sample_rows(
     )
 
 
-def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> None:
+def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> None:
     burden = pd.concat(
         [
             reporting._aggregate_burden_bins(  # noqa: SLF001
@@ -221,21 +223,27 @@ def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> 
     calibration = pd.DataFrame(
         [
             {
+                "cohort": cohort,
                 "provider": provider,
                 "screen": "marginal_lrt",
+                "sentinel_pair_index": pair_index,
                 "threshold": threshold,
-                "rate": threshold / 2,
+                "rate": threshold / 2 + pair_index / 100_000,
                 "gate_endpoint": provider == "mutsig",
-                "hoeffding_upper_bound": (
-                    threshold * 0.8 if provider == "mutsig" else np.nan
+                "clopper_pearson_upper_bound": (
+                    threshold * 0.8 + pair_index / 100_000
+                    if provider == "mutsig"
+                    else np.nan
                 ),
                 "acceptance_upper_bound": (
-                    {0.01: 0.02, 0.05: 0.06}[threshold]
+                    {0.01: 0.02, 0.05: 0.07}[threshold]
                     if provider == "mutsig"
                     else np.nan
                 ),
             }
+            for cohort in ("A", "B")
             for provider in reporting.core.BMRS
+            for pair_index in range(32)
             for threshold in (0.01, 0.05)
         ],
     )
@@ -252,6 +260,52 @@ def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> 
     )
 
     assert output.read_bytes().startswith(b"%PDF-")
+    if pdfinfo := shutil.which("pdfinfo"):
+        info = subprocess.run(  # noqa: S603
+            [pdfinfo, output],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "Page size:       540 x 630 pts" in info
+    if pdffonts := shutil.which("pdffonts"):
+        fonts = subprocess.run(  # noqa: S603
+            [pdffonts, output],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "Arial" in fonts
+        assert "Type 3" not in fonts
+
+
+def test_calibration_gate_maxima_selects_worst_pair_per_cohort() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "cohort": cohort,
+                "provider": "mutsig",
+                "screen": "marginal_lrt",
+                "sentinel_pair_index": pair_index,
+                "threshold": threshold,
+                "gate_endpoint": True,
+                "clopper_pearson_upper_bound": threshold + pair_index / 10_000,
+                "acceptance_upper_bound": {0.01: 0.02, 0.05: 0.07}[threshold],
+            }
+            for cohort in ("A", "B")
+            for threshold in (0.01, 0.05)
+            for pair_index in range(32)
+        ],
+    )
+
+    maxima = reporting._calibration_gate_maxima(frame)  # noqa: SLF001
+
+    assert len(maxima) == 4
+    assert maxima["maximum_clopper_pearson_upper_bound"].tolist() == pytest.approx(
+        [0.0131, 0.0531, 0.0131, 0.0531],
+    )
+    with pytest.raises(ValueError, match="incomplete endpoint family"):
+        reporting._calibration_gate_maxima(frame.iloc[:-1])  # noqa: SLF001
 
 
 def test_fit_diagnostics_cover_every_certificate(

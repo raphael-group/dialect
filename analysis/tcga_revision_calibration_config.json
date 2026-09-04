@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "contract": "focused-result-blind-null-calibration-v2",
+  "contract": "focused-result-blind-null-calibration-v3",
   "seed": 20260903,
   "cells": {
     "primary_gate": {
@@ -59,9 +59,12 @@
     }
   },
   "marginal_lrt": {
-    "pair_selection": "64-disjoint-pairs-spanning-the-K500-feature-rank-axis",
-    "sentinel_pair_count": 64,
-    "replicates_per_cell": 1000,
+    "pair_selection": "32-disjoint-pairs-spanning-the-K500-feature-rank-axis",
+    "sentinel_pair_count": 32,
+    "replicates_per_cell": 10000,
+    "replicate_rng": "sha256-cell-seed-and-sentinel-pair-index-v1",
+    "fit_kernel": "bounded-batched-profile-lrt-with-scalar-boundary-reconciliation-v1",
+    "replicate_chunk_rule": "max(1,min(512,128000//sample-count))",
     "alphas": [
       0.01,
       0.05
@@ -69,12 +72,13 @@
   },
   "affirmative_gate": {
     "provider": "mutsig",
-    "method": "simultaneous-one-sided-hoeffding-upper-bound",
+    "endpoint_unit": "cohort-sentinel-pair-alpha",
+    "method": "pair-resolved-simultaneous-one-sided-exact-binomial-clopper-pearson-with-bonferroni",
     "familywise_error": 0.05,
-    "endpoint_count": 64,
+    "endpoint_count": 2048,
     "acceptance_upper_bounds": {
       "0.01": 0.02,
-      "0.05": 0.06
+      "0.05": 0.07
     }
   },
   "reporting_candidates": {
@@ -87,9 +91,13 @@
     "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof"
   },
   "resources": {
-    "max_jobs": 3,
-    "max_mutsig_jobs": 1,
-    "threads_per_job": 1,
+    "observed_logical_cpus": 14,
+    "max_outer_cells": 3,
+    "max_mutsig_cells": 1,
+    "mutsig_fit_workers": 5,
+    "descriptive_fit_workers": 1,
+    "max_total_fit_workers": 7,
+    "blas_threads_per_fit_worker": 1,
     "nice_increment": 10,
     "overwrite_outputs": false
   }
