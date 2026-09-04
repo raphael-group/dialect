@@ -295,13 +295,50 @@ def test_serial_canary_stops_before_the_next_provider(tmp_path, monkeypatch) -> 
 
 def test_calibration_candidates_are_frozen_before_result_inspection() -> None:
     config = calibration._load_config()  # noqa: SLF001
+    cells = calibration._protocol_cells(config)  # noqa: SLF001
 
-    assert config["cells"]["cohorts"] == ["CHOL", "LAML", "PAAD", "SKCM", "UCEC"]
+    assert config["cells"] == {
+        "primary_gate": {
+            "role": calibration.PRIMARY_ROLE,
+            "cohorts": list(calibration.TCGA_COHORTS),
+            "providers": ["mutsig"],
+        },
+        "descriptive": {
+            "role": calibration.DESCRIPTIVE_ROLE,
+            "cohorts": ["CHOL", "LAML", "PAAD", "SKCM", "UCEC"],
+            "providers": ["cbase", "dig"],
+        },
+    }
+    assert len(cells) == 42
+    assert len({(cell.cohort, cell.provider) for cell in cells}) == 42
+    assert [
+        (cell.cohort, cell.provider)
+        for cell in cells
+        if cell.role == calibration.PRIMARY_ROLE
+    ] == [(cohort, "mutsig") for cohort in calibration.TCGA_COHORTS]
+    assert {
+        (cell.cohort, cell.provider)
+        for cell in cells
+        if cell.role == calibration.DESCRIPTIVE_ROLE
+    } == {
+        (cohort, provider)
+        for cohort in ("CHOL", "LAML", "PAAD", "SKCM", "UCEC")
+        for provider in ("cbase", "dig")
+    }
+    assert config["affirmative_gate"] == {
+        "provider": "mutsig",
+        "method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "familywise_error": 0.05,
+        "endpoint_count": 64,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.06},
+    }
     assert config["reporting_candidates"] == {
-        "primary_q_threshold": 0.1,
-        "sensitivity_q_threshold": 0.2,
+        "test": "chi-square-one-df-profile-lrt",
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_threshold": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_threshold": 0.01,
         "thresholds_selected_from_observed_pairs": False,
-        "retain_chi_square_bh_only_without_detected_inflation": True,
         "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof",
     }
 
@@ -319,33 +356,51 @@ def test_calibration_sentinel_pairs_are_disjoint_and_span_axis() -> None:
 def _write_calibration_task(
     task_root: Path,
     *,
-    cohort: str = "CHOL",
-    provider: str = "cbase",
-    run_completion_sha256: str = "a" * 64,
-) -> dict[str, object]:
+    run_root: Path,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     config = calibration._load_config()  # noqa: SLF001
+    cohort = "CHOL"
+    provider = "cbase"
+    features = [f"G{index}_M" for index in range(500)]
+    contract_root = run_root / "contracts"
+    contract_root.mkdir(parents=True, exist_ok=True)
+    (contract_root / f"{cohort}.json").write_text(
+        json.dumps({"features": features}),
+        encoding="utf-8",
+    )
     task_root.mkdir(parents=True)
     data_path = task_root / calibration.TASK_DATA_NAME
     np.savez_compressed(
         data_path,
         marginal_lrt=np.zeros((1000, 64), dtype=np.float64),
-        family_rejections=np.zeros((250, 2), dtype=np.int32),
-        family_min_p=np.ones(250, dtype=np.float64),
-        sentinel_pairs=np.arange(128, dtype=np.int32).reshape(64, 2),
+        marginal_reportable=np.ones((1000, 64), dtype=bool),
+        sentinel_pairs=calibration._sentinel_pairs(features),  # noqa: SLF001
     )
+    source_task_manifest: dict[str, object] = {
+        "path": f"tasks/{cohort}/{provider}/task_manifest.json",
+        "bytes": 101,
+        "sha256": "b" * 64,
+    }
+    single_gene_input: dict[str, object] = {
+        "path": f"tasks/{cohort}/{provider}/single_gene_results.csv",
+        "bytes": 202,
+        "sha256": "c" * 64,
+    }
     manifest: dict[str, object] = {
         "schema_version": calibration.SCHEMA_VERSION,
         "contract": calibration.TASK_CONTRACT,
         "cohort": cohort,
         "provider": provider,
+        "role": calibration.DESCRIPTIVE_ROLE,
         "config_sha256": calibration._sha256(calibration.CONFIG_PATH),  # noqa: SLF001
-        "run_completion_sha256": run_completion_sha256,
+        "run_completion_sha256": "a" * 64,
         "seed": calibration._seed(int(config["seed"]), cohort, provider),  # noqa: SLF001
         "marginal_replicates": 1000,
         "sentinel_pair_count": 64,
-        "family_replicates": 250,
-        "family_top_k": 30,
-        "q_values": [0.1, 0.2],
+        "alphas": [0.01, 0.05],
+        "marginal_reportable_count": 64_000,
+        "source_task_manifest": source_task_manifest,
+        "single_gene_input": single_gene_input,
         "resource_usage": {
             "elapsed_seconds": 1.0,
             "peak_rss": {
@@ -368,50 +423,82 @@ def _write_calibration_task(
         json.dumps(manifest),
         encoding="utf-8",
     )
-    return manifest
+    return manifest, source_task_manifest, single_gene_input
 
 
 def test_calibration_task_validation_binds_coordinates(tmp_path: Path) -> None:
     config = calibration._load_config()  # noqa: SLF001
     task_root = tmp_path / "task"
-    manifest = _write_calibration_task(task_root)
-
-    calibration._validate_task(  # noqa: SLF001
+    run_root = tmp_path / "run"
+    manifest, source_task_manifest, single_gene_input = _write_calibration_task(
         task_root,
-        config,
-        cohort="CHOL",
-        provider="cbase",
-        run_completion_sha256="a" * 64,
-    )
-    manifest["provider"] = "dig"
-    (task_root / calibration.TASK_MANIFEST_NAME).write_text(
-        json.dumps(manifest),
-        encoding="utf-8",
+        run_root=run_root,
     )
 
-    with pytest.raises(ValueError, match="manifest validation"):
+    def validate_source(*_args: object) -> tuple[dict[str, object], dict[str, object]]:
+        return source_task_manifest, single_gene_input
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            calibration,
+            "_validate_single_gene_source",
+            validate_source,
+        )
         calibration._validate_task(  # noqa: SLF001
             task_root,
             config,
             cohort="CHOL",
             provider="cbase",
+            role=calibration.DESCRIPTIVE_ROLE,
             run_completion_sha256="a" * 64,
+            run_root=run_root,
         )
+        manifest["provider"] = "dig"
+        (task_root / calibration.TASK_MANIFEST_NAME).write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="manifest validation"):
+            calibration._validate_task(  # noqa: SLF001
+                task_root,
+                config,
+                cohort="CHOL",
+                provider="cbase",
+                role=calibration.DESCRIPTIVE_ROLE,
+                run_completion_sha256="a" * 64,
+                run_root=run_root,
+            )
 
 
 def test_calibration_task_validation_rejects_other_run(tmp_path: Path) -> None:
     config = calibration._load_config()  # noqa: SLF001
     task_root = tmp_path / "task"
-    _write_calibration_task(task_root)
+    run_root = tmp_path / "run"
+    _, source_task_manifest, single_gene_input = _write_calibration_task(
+        task_root,
+        run_root=run_root,
+    )
 
-    with pytest.raises(ValueError, match="manifest validation"):
-        calibration._validate_task(  # noqa: SLF001
-            task_root,
-            config,
-            cohort="CHOL",
-            provider="cbase",
-            run_completion_sha256="b" * 64,
+    def validate_source(*_args: object) -> tuple[dict[str, object], dict[str, object]]:
+        return source_task_manifest, single_gene_input
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            calibration,
+            "_validate_single_gene_source",
+            validate_source,
         )
+        with pytest.raises(ValueError, match="manifest validation"):
+            calibration._validate_task(  # noqa: SLF001
+                task_root,
+                config,
+                cohort="CHOL",
+                provider="cbase",
+                role=calibration.DESCRIPTIVE_ROLE,
+                run_completion_sha256="b" * 64,
+                run_root=run_root,
+            )
 
 
 def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None:
@@ -420,11 +507,30 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
     cohort_root.mkdir(parents=True)
     result_path = cohort_root / postprocess.RESULT_NAME
     result_path.write_text("gene_a,gene_b\nA_M,B_M\n", encoding="utf-8")
+    diagnostics = {
+        provider: {
+            "full_affine_rank_count": 1,
+            "rank_deficient_count": 0,
+            "rank_not_certified_underflow_count": 0,
+            "exact_zero_p_value_count": 0,
+        }
+        for provider in postprocess.BMRS
+    }
     cohort_manifest = {
         "schema_version": postprocess.SCHEMA_VERSION,
         "contract": postprocess.DERIVATION_CONTRACT,
         "cohort": "CHOL",
         "providers": list(postprocess.BMRS),
+        "pair_count": 1,
+        "multiplicity": {
+            "primary": "provider-specific-BY-over-complete-within-cohort-family",
+            "nominal_sensitivity": (
+                "provider-specific-BH-over-complete-within-cohort-family"
+            ),
+        },
+        "non_full_rank": "retain-in-family-with-p-one-and-no-directional-effect",
+        "reporting_threshold_selected": False,
+        "diagnostics": diagnostics,
         "output": postprocess._file_record(  # noqa: SLF001
             result_path,
             relative_to=output_root,
@@ -440,6 +546,13 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
         "cohorts": ["CHOL"],
         "cohort_count": 1,
         "provider_family_count": 3,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+        "multiplicity": {
+            "primary": "benjamini-yekutieli",
+            "nominal_sensitivity": "benjamini-hochberg",
+        },
         "cohort_manifests": [
             postprocess._file_record(  # noqa: SLF001
                 cohort_manifest_path,
@@ -464,8 +577,12 @@ def test_reporting_rule_freezes_prespecified_candidates(
 ) -> None:
     calibration_root = tmp_path / "calibration"
     postprocess_root = tmp_path / "postprocess"
+    run_root = tmp_path / "run"
+    provider_root = tmp_path / "providers"
     calibration_root.mkdir()
     postprocess_root.mkdir()
+    run_root.mkdir()
+    provider_root.mkdir()
     (calibration_root / calibration.SUMMARY_NAME).write_text("{}\n", encoding="utf-8")
     (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
         "{}\n",
@@ -474,24 +591,47 @@ def test_reporting_rule_freezes_prespecified_candidates(
     monkeypatch.setattr(
         calibration,
         "validate_summary",
-        lambda _root: {
-            "detected_inflation": False,
-            "retain_chi_square_bh_candidates": True,
+        lambda *_args, **_kwargs: {
+            "overall_gate_pass": True,
+            "reporting_rule_selected": False,
+            "gate_provider": "mutsig",
+            "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+            "primary_adjustment": "benjamini-yekutieli",
+            "primary_q_candidate": 0.01,
+            "sensitivity_adjustment": "benjamini-hochberg",
+            "sensitivity_q_candidate": 0.01,
+            "effective_p_policy": (
+                "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+            ),
         },
     )
-    monkeypatch.setattr(postprocess, "validate_derived_root", lambda *_args: {})
+    monkeypatch.setattr(
+        postprocess,
+        "validate_derived_root",
+        lambda *_args, **_kwargs: {},
+    )
     output = tmp_path / "reporting_rule.json"
 
     reporting_rule.freeze_rule(
         calibration_root=calibration_root,
         postprocess_root=postprocess_root,
+        run_root=run_root,
+        provider_root=provider_root,
         output_path=output,
     )
 
     rule = json.loads(output.read_text(encoding="utf-8"))
     assert rule["primary_provider"] == "mutsig"
-    assert rule["primary_q_threshold"] == 0.1
-    assert rule["sensitivity_q_threshold"] == 0.2
+    assert rule["primary_adjustment"] == "benjamini-yekutieli"
+    assert rule["primary_q_threshold"] == 0.01
+    assert rule["sensitivity_adjustment"] == "benjamini-hochberg"
+    assert rule["sensitivity_q_threshold"] == 0.01
+    assert rule["inference_status"] == reporting_rule.REPORTABLE_STATUS
+    assert rule["calibration_gate"] == {
+        "provider": "mutsig",
+        "method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "overall_gate_pass": True,
+    }
     assert rule["scope"] == "one-identical-rule-across-all-32-cancer-types"
     assert (
         rule["direction_unavailable"]
