@@ -37,6 +37,7 @@ PRODUCTION_FIT_COMMIT: Final = "b23a9fc4f32fd3df6d145a655fec3df221ab8b04"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _TCGA_SAMPLE_ID = re.compile(r"TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}(?:-[A-Z0-9-]+)?")
+_JSON_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _MACHINE_FILE_KEYS = frozenset(
     {"ctime_ns", "device", "inode", "mode", "mtime_ns", "nlink", "uid"},
 )
@@ -60,6 +61,7 @@ RELEASE_PIPELINE_FILES: Final = (
     Path("analysis/build_tcga_revision_focused_release.py"),
     Path("analysis/calibrate_tcga_revision_focused.py"),
     Path("analysis/calibration_batch.py"),
+    Path("analysis/diagnose_tcga_revision_focused.py"),
     Path("analysis/focused_revision_provenance.py"),
     Path("analysis/freeze_tcga_revision_reporting_rule.py"),
     Path("analysis/postprocess_tcga_revision_focused.py"),
@@ -141,8 +143,44 @@ def _write_once(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _json_object_without_duplicates(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            msg = f"JSON input contains a duplicate key: {key}"
+            raise ValueError(msg)
+        value[key] = child
+    return value
+
+
+def _reject_json_constant(value: str) -> None:
+    msg = f"JSON input contains a nonstandard numeric constant: {value}"
+    raise ValueError(msg)
+
+
 def _load_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    if path.is_symlink():
+        msg = f"Required JSON input is unsafe: {path}"
+        raise ValueError(msg)
+    if not path.is_file():
+        msg = f"Required JSON input is missing: {path}"
+        raise FileNotFoundError(msg)
+    content = path.read_bytes()
+    if len(content) > _JSON_LIMIT_BYTES:
+        msg = f"JSON input is unexpectedly large: {path}"
+        raise ValueError(msg)
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        msg = f"JSON input is not canonical UTF-8: {path}"
+        raise ValueError(msg) from error
+    value = json.loads(
+        text,
+        object_pairs_hook=_json_object_without_duplicates,
+        parse_constant=_reject_json_constant,
+    )
     if not isinstance(value, dict):
         msg = f"Expected a JSON object: {path}"
         raise TypeError(msg)

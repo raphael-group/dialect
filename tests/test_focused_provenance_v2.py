@@ -35,6 +35,7 @@ def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None
         provenance.Path("analysis/build_tcga_revision_focused_release.py"),
         provenance.Path("analysis/calibrate_tcga_revision_focused.py"),
         provenance.Path("analysis/calibration_batch.py"),
+        provenance.Path("analysis/diagnose_tcga_revision_focused.py"),
         provenance.Path("analysis/focused_revision_provenance.py"),
         provenance.Path("analysis/freeze_tcga_revision_reporting_rule.py"),
         provenance.Path("analysis/postprocess_tcga_revision_focused.py"),
@@ -172,6 +173,25 @@ def test_raw_chain_binds_input_provider_run_completion_and_exact_tasks(
             run_root=run_root,
             cohorts=("CHOL",),
         )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"contract":"first","contract":"second"}\n',
+        b'{"contract":NaN}\n',
+        b'{"contract":Infinity}\n',
+    ],
+)
+def test_source_json_loader_rejects_ambiguous_extensions(
+    tmp_path: Path,
+    content: bytes,
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_bytes(content)
+
+    with pytest.raises(ValueError, match=r"duplicate key|numeric constant"):
+        provenance._load_json(path)  # noqa: SLF001
 
 
 def test_public_contract_removes_host_identity_but_preserves_source_digests(
