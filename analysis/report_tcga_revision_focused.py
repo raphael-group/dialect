@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v3"
+REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v4"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
@@ -949,17 +949,17 @@ def _runtime_rows(run_root: Path, cohorts: Sequence[str]) -> list[dict[str, Any]
 
 
 def _fit_diagnostic_rows(
-    run_root: Path,
+    postprocess_root: Path,
     cohorts: Sequence[str],
 ) -> list[dict[str, int | float | str]]:
-    """Summarize every production pair-fit certificate without loading all rows."""
+    """Summarize public pair-fit receipts solely from provider inference tables."""
     columns = [
-        "Fit Converged",
-        "Fit Iterations",
-        "Fit Last LL Gain",
-        "Fit Fixed-Point Residual",
-        "Fit KKT Residual",
-        "Effect Identifiability",
+        column
+        for provider in core.BMRS
+        for column in (
+            *(f"{provider}_{field}" for field in postprocess.FIT_DIAGNOSTIC_FIELDS),
+            f"{provider}_effect_identifiability",
+        )
     ]
     iterations: dict[str, list[np.ndarray]] = {provider: [] for provider in core.BMRS}
     aggregates = {
@@ -977,47 +977,37 @@ def _fit_diagnostic_rows(
         for provider in core.BMRS
     }
     for cohort in cohorts:
-        for provider in core.BMRS:
-            path = (
-                run_root
-                / "tasks"
-                / cohort
-                / provider
-                / "pairwise_interaction_results.csv"
-            )
-            aggregate = aggregates[provider]
-            for chunk in pd.read_csv(
-                path,
-                usecols=columns,
-                chunksize=100_000,
-                float_precision="round_trip",
-            ):
-                chunk_iterations = chunk["Fit Iterations"].to_numpy(dtype=np.int32)
-                gains = chunk["Fit Last LL Gain"].to_numpy(dtype=float)
-                fixed_point = chunk["Fit Fixed-Point Residual"].to_numpy(dtype=float)
-                kkt = chunk["Fit KKT Residual"].to_numpy(dtype=float)
-                convergence = chunk["Fit Converged"]
-                effects = chunk["Effect Identifiability"].astype("string")
-                if (
-                    not convergence.isin([True, False]).all()
-                    or (chunk_iterations < 0).any()
-                    or not np.isfinite(gains).all()
-                    or (gains < -1e-12).any()
-                    or not np.isfinite(fixed_point).all()
-                    or (fixed_point < 0).any()
-                    or not np.isfinite(kkt).all()
-                    or (kkt < 0).any()
-                    or not effects.isin(
-                        [
-                            "full-affine-rank",
-                            "rank-deficient",
-                            "rank-not-certified-underflow",
-                        ],
-                    ).all()
-                ):
+        path = postprocess_root / cohort / postprocess.RESULT_NAME
+        for chunk in pd.read_csv(
+            path,
+            usecols=columns,
+            chunksize=100_000,
+            float_precision="round_trip",
+        ):
+            for provider in core.BMRS:
+                aggregate = aggregates[provider]
+                diagnostics = postprocess.provider_fit_diagnostics(
+                    chunk,
+                    provider,
+                    label=f"{cohort}/{provider}",
+                )
+                chunk_iterations = diagnostics["fit_iterations"]
+                gains = diagnostics["fit_last_ll_gain"]
+                fixed_point = diagnostics["fit_fixed_point_residual"]
+                kkt = diagnostics["fit_kkt_residual"]
+                converged = diagnostics["fit_converged"]
+                effects = chunk[
+                    f"{provider}_effect_identifiability"
+                ].astype("string")
+                if not effects.isin(
+                    [
+                        "full-affine-rank",
+                        "rank-deficient",
+                        "rank-not-certified-underflow",
+                    ],
+                ).all():
                     msg = f"Invalid production fit diagnostics: {cohort}/{provider}"
                     raise ValueError(msg)
-                converged = convergence.to_numpy(dtype=bool)
                 iterations[provider].append(chunk_iterations)
                 aggregate["rows"] += len(chunk)
                 aggregate["converged"] += int(converged.sum())
@@ -1047,9 +1037,11 @@ def _fit_diagnostic_rows(
         scope: str,
         providers: Sequence[str],
     ) -> dict[str, int | float | str]:
-        values = np.concatenate(
-            [array for provider in providers for array in iterations[provider]],
-        )
+        arrays = [array for provider in providers for array in iterations[provider]]
+        if not arrays or not any(len(array) for array in arrays):
+            msg = f"Cannot summarize an empty fit-diagnostic scope: {scope}"
+            raise ValueError(msg)
+        values = np.concatenate(arrays)
         selected = [aggregates[provider] for provider in providers]
         rows = sum(int(item["rows"]) for item in selected)
         converged = sum(int(item["converged"]) for item in selected)
@@ -1529,7 +1521,7 @@ def _report_csv_frames(
             columns=RUNTIME_COLUMNS,
         ),
         "fit_diagnostics_summary.csv": pd.DataFrame(
-            _fit_diagnostic_rows(run_root, cohorts),
+            _fit_diagnostic_rows(postprocess_root, cohorts),
             columns=FIT_DIAGNOSTIC_COLUMNS,
         ),
     }

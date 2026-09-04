@@ -549,6 +549,11 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
         )
         for name, values in statistics.items():
             frame[f"{provider}_{name}"] = values
+        frame[f"{provider}_fit_converged"] = np.asarray([True])
+        frame[f"{provider}_fit_iterations"] = np.asarray([0], dtype=np.int64)
+        frame[f"{provider}_fit_last_ll_gain"] = np.asarray([0.0])
+        frame[f"{provider}_fit_fixed_point_residual"] = np.asarray([0.0])
+        frame[f"{provider}_fit_kkt_residual"] = np.asarray([0.0])
     frame.to_csv(result_path, index=False)
     diagnostics = {
         provider: {

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def _inference_frame() -> pd.DataFrame:
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "gene_a": ["A_M", "B_M", "C_M", "D_M"],
             "gene_b": ["B_M", "C_M", "D_M", "E_M"],
@@ -56,6 +56,21 @@ def _inference_frame() -> pd.DataFrame:
             "mutsig_effect_reportable": [True] * 4,
         },
     )
+    for provider in reporting.core.BMRS:
+        frame[f"{provider}_fit_converged"] = True
+        frame[f"{provider}_fit_iterations"] = np.asarray(
+            [0, 1, 2, 3],
+            dtype=np.int64,
+        )
+        frame[f"{provider}_fit_last_ll_gain"] = [0.0, 1e-12, 2e-12, 3e-12]
+        frame[f"{provider}_fit_fixed_point_residual"] = [
+            0.0,
+            1e-10,
+            2e-10,
+            3e-10,
+        ]
+        frame[f"{provider}_fit_kkt_residual"] = [0.0, 1e-9, 2e-9, 3e-9]
+    return frame.loc[:, reporting.postprocess.result_columns()]
 
 
 def test_high_burden_threshold_uses_frozen_pooled_population() -> None:
@@ -387,62 +402,87 @@ def test_fit_diagnostics_cover_every_certificate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(reporting.core, "BMRS", ("cbase",))
-    task = tmp_path / "tasks" / "TEST" / "cbase"
-    task.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "Fit Converged": [True, True, True],
-            "Fit Iterations": [0, 2, 4],
-            "Fit Last LL Gain": [0.0, 1e-12, 2e-12],
-            "Fit Fixed-Point Residual": [0.0, 1e-10, 2e-10],
-            "Fit KKT Residual": [0.0, 1e-9, 2e-9],
-            "Effect Identifiability": [
-                "full-affine-rank",
-                "rank-deficient",
-                "rank-not-certified-underflow",
-            ],
-        },
-    ).to_csv(task / "pairwise_interaction_results.csv", index=False)
-
-    rows = reporting._fit_diagnostic_rows(tmp_path, ("TEST",))  # noqa: SLF001
-
-    assert rows == [
-        {
-            "scope": "all",
-            "pairwise_rows": 3,
-            "converged_rows": 3,
-            "nonconverged_rows": 0,
-            "iterations_min": 0,
-            "iterations_median": 2.0,
-            "iterations_p95": 3.8,
-            "iterations_max": 4,
-            "minimum_last_ll_gain": 0.0,
-            "maximum_last_ll_gain": 2e-12,
-            "maximum_fixed_point_residual": 2e-10,
-            "maximum_kkt_residual": 2e-9,
-            "full_affine_rank_rows": 1,
-            "rank_deficient_rows": 1,
-            "rank_not_certified_underflow_rows": 1,
-        },
-        {
-            "scope": "cbase",
-            "pairwise_rows": 3,
-            "converged_rows": 3,
-            "nonconverged_rows": 0,
-            "iterations_min": 0,
-            "iterations_median": 2.0,
-            "iterations_p95": 3.8,
-            "iterations_max": 4,
-            "minimum_last_ll_gain": 0.0,
-            "maximum_last_ll_gain": 2e-12,
-            "maximum_fixed_point_residual": 2e-10,
-            "maximum_kkt_residual": 2e-9,
-            "full_affine_rank_rows": 1,
-            "rank_deficient_rows": 1,
-            "rank_not_certified_underflow_rows": 1,
-        },
+    providers = ("cbase", "dig")
+    monkeypatch.setattr(reporting.core, "BMRS", providers)
+    postprocess_root = tmp_path / "postprocess"
+    effects = [
+        "full-affine-rank",
+        "rank-deficient",
+        "rank-not-certified-underflow",
     ]
+    values = {
+        "cbase": {
+            "fit_iterations": [0, 2, 4],
+            "fit_last_ll_gain": [0.0, 2e-12, 4e-12],
+            "fit_fixed_point_residual": [0.0, 2e-10, 4e-10],
+            "fit_kkt_residual": [0.0, 2e-9, 4e-9],
+        },
+        "dig": {
+            "fit_iterations": [1, 3, 5],
+            "fit_last_ll_gain": [1e-12, 3e-12, 5e-12],
+            "fit_fixed_point_residual": [1e-10, 3e-10, 5e-10],
+            "fit_kkt_residual": [1e-9, 3e-9, 5e-9],
+        },
+    }
+    for cohort, indices in (("FIRST", (0, 1)), ("SECOND", (2,))):
+        cohort_root = postprocess_root / cohort
+        cohort_root.mkdir(parents=True)
+        frame: dict[str, object] = {}
+        for provider in providers:
+            frame[f"{provider}_fit_converged"] = [True] * len(indices)
+            for field, provider_values in values[provider].items():
+                frame[f"{provider}_{field}"] = [
+                    provider_values[index] for index in indices
+                ]
+            frame[f"{provider}_effect_identifiability"] = [
+                effects[index] for index in indices
+            ]
+        pd.DataFrame(frame).to_csv(
+            cohort_root / reporting.postprocess.RESULT_NAME,
+            index=False,
+        )
+
+    rows = reporting._fit_diagnostic_rows(  # noqa: SLF001
+        postprocess_root,
+        ("FIRST", "SECOND"),
+    )
+    by_scope = {str(row["scope"]): row for row in rows}
+
+    assert list(by_scope) == ["all", "cbase", "dig"]
+    assert by_scope["all"]["pairwise_rows"] == 6
+    assert by_scope["all"]["iterations_min"] == 0
+    assert by_scope["all"]["iterations_median"] == 2.5
+    assert by_scope["all"]["iterations_p95"] == 4.75
+    assert by_scope["all"]["iterations_max"] == 5
+    assert by_scope["all"]["minimum_last_ll_gain"] == 0.0
+    assert by_scope["all"]["maximum_last_ll_gain"] == 5e-12
+    assert by_scope["all"]["maximum_fixed_point_residual"] == 5e-10
+    assert by_scope["all"]["maximum_kkt_residual"] == 5e-9
+    assert by_scope["all"]["full_affine_rank_rows"] == 2
+    assert by_scope["all"]["rank_deficient_rows"] == 2
+    assert by_scope["all"]["rank_not_certified_underflow_rows"] == 2
+    assert by_scope["cbase"]["iterations_median"] == 2.0
+    assert by_scope["cbase"]["iterations_p95"] == 3.8
+    assert by_scope["dig"]["iterations_median"] == 3.0
+    assert by_scope["dig"]["iterations_p95"] == 4.8
+    assert all(row["converged_rows"] == row["pairwise_rows"] for row in rows)
+    assert all(row["nonconverged_rows"] == 0 for row in rows)
+
+    tampered = pd.read_csv(
+        postprocess_root / "SECOND" / reporting.postprocess.RESULT_NAME,
+    )
+    tampered.loc[0, "dig_fit_kkt_residual"] = (
+        reporting.core.REQUIRED_PAIR_FIT_KKT_TOL * 2
+    )
+    tampered.to_csv(
+        postprocess_root / "SECOND" / reporting.postprocess.RESULT_NAME,
+        index=False,
+    )
+    with pytest.raises(ValueError, match="exceeds the frozen tolerance"):
+        reporting._fit_diagnostic_rows(  # noqa: SLF001
+            postprocess_root,
+            ("FIRST", "SECOND"),
+        )
 
 
 def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915

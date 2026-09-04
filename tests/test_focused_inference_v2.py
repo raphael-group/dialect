@@ -18,6 +18,25 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _fit_diagnostics(
+    row_count: int,
+    *,
+    iterations: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    values = (
+        np.zeros(row_count, dtype=np.int64)
+        if iterations is None
+        else np.asarray(iterations, dtype=np.int64)
+    )
+    return {
+        "fit_converged": np.ones(row_count, dtype=np.bool_),
+        "fit_iterations": values,
+        "fit_last_ll_gain": np.zeros(row_count, dtype=np.float64),
+        "fit_fixed_point_residual": np.zeros(row_count, dtype=np.float64),
+        "fit_kkt_residual": np.zeros(row_count, dtype=np.float64),
+    }
+
+
 def _guard_association_file_access(
     monkeypatch: pytest.MonkeyPatch,
     sample_path: Path,
@@ -127,7 +146,16 @@ def test_semantic_validator_recomputes_complete_family_q_values() -> None:
         )
         providers.append(
             pd.DataFrame(
-                {f"{provider}_{name}": value for name, value in values.items()},
+                {
+                    **{
+                        f"{provider}_{name}": value
+                        for name, value in values.items()
+                    },
+                    **{
+                        f"{provider}_{name}": value
+                        for name, value in _fit_diagnostics(2).items()
+                    },
+                },
             ),
         )
     frame = pd.concat(
@@ -181,6 +209,10 @@ def test_raw_source_binding_rejects_derived_statistic_drift(
                 "gene_a": ["A_M"],
                 "gene_b": ["B_M"],
                 **{f"{provider}_{name}": value for name, value in statistics.items()},
+                **{
+                    f"{provider}_{name}": value
+                    for name, value in _fit_diagnostics(1).items()
+                },
             },
         )
         expected_by_provider[provider] = expected
@@ -206,6 +238,74 @@ def test_raw_source_binding_rejects_derived_statistic_drift(
             frame=derived,
             run_root=run_root,
             cohort="TEST",
+        )
+
+    derived.loc[0, "dig_likelihood_ratio"] = 1.0
+    derived.loc[0, "dig_fit_iterations"] = 1
+    with pytest.raises(ValueError, match="differ from the raw provider output"):
+        postprocess._validate_raw_source_binding(  # noqa: SLF001
+            manifest=manifest,
+            frame=derived,
+            run_root=run_root,
+            cohort="TEST",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("fit_converged", pd.Series([1]), "not boolean"),
+        ("fit_converged", pd.Series([False]), "unaccepted fit"),
+        ("fit_iterations", pd.Series([1.0]), "not integers"),
+        (
+            "fit_iterations",
+            pd.Series([postprocess.core.REQUIRED_PAIR_FIT_MAX_ITER + 1]),
+            "outside the frozen range",
+        ),
+        ("fit_last_ll_gain", pd.Series([-1e-12]), "receipts are invalid"),
+        ("fit_last_ll_gain", pd.Series([np.nan]), "receipts are invalid"),
+        (
+            "fit_fixed_point_residual",
+            pd.Series([postprocess.core.REQUIRED_PAIR_FIT_KKT_TOL * 2]),
+            "exceeds the frozen tolerance",
+        ),
+        (
+            "fit_kkt_residual",
+            pd.Series([postprocess.core.REQUIRED_PAIR_FIT_KKT_TOL * 2]),
+            "exceeds the frozen tolerance",
+        ),
+    ],
+)
+def test_fit_diagnostics_reject_type_and_range_drift(
+    field: str,
+    value: pd.Series,
+    message: str,
+) -> None:
+    diagnostics = {
+        "fit_converged": pd.Series([True]),
+        "fit_iterations": pd.Series([1]),
+        "fit_last_ll_gain": pd.Series([0.0]),
+        "fit_fixed_point_residual": pd.Series([0.0]),
+        "fit_kkt_residual": pd.Series([0.0]),
+    }
+    diagnostics[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        postprocess._validated_fit_diagnostics(  # noqa: SLF001
+            **diagnostics,
+            label="TEST/cbase",
+        )
+
+
+def test_zero_iteration_fit_requires_zero_last_gain() -> None:
+    with pytest.raises(ValueError, match="must have zero last gain"):
+        postprocess._validated_fit_diagnostics(  # noqa: SLF001
+            fit_converged=pd.Series([True]),
+            fit_iterations=pd.Series([0]),
+            fit_last_ll_gain=pd.Series([1e-12]),
+            fit_fixed_point_residual=pd.Series([0.0]),
+            fit_kkt_residual=pd.Series([0.0]),
+            label="TEST/cbase",
         )
 
 
@@ -235,6 +335,11 @@ def test_provider_reader_rejects_pair_axis_drift_even_with_updated_receipt(
     pairwise.loc[0, "Likelihood Ratio"] = 1.0
     pairwise.loc[0, "Rho"] = -0.2
     pairwise.loc[0, "Effect Identifiability"] = "full-affine-rank"
+    pairwise.loc[0, "Fit Converged"] = True
+    pairwise.loc[0, "Fit Iterations"] = 7
+    pairwise.loc[0, "Fit Last LL Gain"] = 1e-12
+    pairwise.loc[0, "Fit Fixed-Point Residual"] = 1e-10
+    pairwise.loc[0, "Fit KKT Residual"] = 1e-9
     source = task_root / "pairwise_interaction_results.csv"
     pairwise.to_csv(source, index=False)
     (task_root / "single_gene_results.csv").write_text(
@@ -265,12 +370,19 @@ def test_provider_reader_rejects_pair_axis_drift_even_with_updated_receipt(
     manifest_path = task_root / "task_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    observed_pairs = postprocess._read_provider(  # noqa: SLF001
+    observed = postprocess._read_provider(  # noqa: SLF001
         run_root,
         "TEST",
         "cbase",
-    )[["gene_a", "gene_b"]].to_numpy()
-    assert observed_pairs.tolist() == [["A_M", "B_M"]]
+    )
+    assert observed[["gene_a", "gene_b"]].to_numpy().tolist() == [
+        ["A_M", "B_M"],
+    ]
+    assert observed.loc[0, "cbase_fit_converged"]
+    assert observed.loc[0, "cbase_fit_iterations"] == 7
+    assert observed.loc[0, "cbase_fit_last_ll_gain"] == 1e-12
+    assert observed.loc[0, "cbase_fit_fixed_point_residual"] == 1e-10
+    assert observed.loc[0, "cbase_fit_kkt_residual"] == 1e-9
 
     pairwise.loc[0, "Gene B"] = "C_M"
     pairwise.to_csv(source, index=False)

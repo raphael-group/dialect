@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-DERIVATION_CONTRACT: Final = "focused-provider-complete-family-log-by-bh-v3"
-ROOT_CONTRACT: Final = "focused-32x3-provider-inference-v3"
+DERIVATION_CONTRACT: Final = "focused-provider-complete-family-log-by-bh-v4"
+ROOT_CONTRACT: Final = "focused-32x3-provider-inference-v4"
 RESULT_NAME: Final = "provider_inference.csv"
 COHORT_MANIFEST_NAME: Final = "cohort_manifest.json"
 ROOT_MANIFEST_NAME: Final = "postprocess_manifest.json"
@@ -39,6 +39,20 @@ LOG_MIN_POSITIVE_FLOAT: Final = float(np.log(np.nextafter(0.0, 1.0)))
 PROBABILITY_REPRESENTATION: Final = (
     "natural-log-inference-with-smallest-positive-float-clipped-display"
 )
+FIT_DIAGNOSTIC_FIELDS: Final = (
+    "fit_converged",
+    "fit_iterations",
+    "fit_last_ll_gain",
+    "fit_fixed_point_residual",
+    "fit_kkt_residual",
+)
+RAW_FIT_DIAGNOSTIC_COLUMNS: Final = {
+    "fit_converged": "Fit Converged",
+    "fit_iterations": "Fit Iterations",
+    "fit_last_ll_gain": "Fit Last LL Gain",
+    "fit_fixed_point_residual": "Fit Fixed-Point Residual",
+    "fit_kkt_residual": "Fit KKT Residual",
+}
 
 
 def _canonical_json(value: object) -> bytes:
@@ -262,6 +276,107 @@ def _provider_statistics(
     }
 
 
+def _validated_fit_diagnostics(  # noqa: PLR0913
+    *,
+    fit_converged: pd.Series,
+    fit_iterations: pd.Series,
+    fit_last_ll_gain: pd.Series,
+    fit_fixed_point_residual: pd.Series,
+    fit_kkt_residual: pd.Series,
+    label: str,
+) -> dict[str, np.ndarray]:
+    """Return canonical pair-fit receipts after strict type and range checks."""
+    if not pd.api.types.is_bool_dtype(fit_converged.dtype):
+        msg = f"Pair-fit convergence receipts are not boolean: {label}"
+        raise ValueError(msg)
+    converged = fit_converged.to_numpy(dtype=np.bool_)
+    if not converged.all():
+        msg = f"Pair-fit convergence receipts contain an unaccepted fit: {label}"
+        raise ValueError(msg)
+
+    if not pd.api.types.is_integer_dtype(fit_iterations.dtype):
+        msg = f"Pair-fit iteration receipts are not integers: {label}"
+        raise ValueError(msg)
+    iterations = fit_iterations.to_numpy(dtype=np.int64)
+    if (
+        (iterations < 0).any()
+        or (iterations > core.REQUIRED_PAIR_FIT_MAX_ITER).any()
+    ):
+        msg = f"Pair-fit iteration receipts are outside the frozen range: {label}"
+        raise ValueError(msg)
+
+    numeric_series = {
+        "last log-likelihood gain": fit_last_ll_gain,
+        "fixed-point residual": fit_fixed_point_residual,
+        "KKT residual": fit_kkt_residual,
+    }
+    numeric: dict[str, np.ndarray] = {}
+    for name, series in numeric_series.items():
+        if (
+            not pd.api.types.is_numeric_dtype(series.dtype)
+            or pd.api.types.is_bool_dtype(series.dtype)
+            or pd.api.types.is_complex_dtype(series.dtype)
+        ):
+            msg = f"Pair-fit {name} receipts are not real-valued: {label}"
+            raise ValueError(msg)
+        values = series.to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all() or (values < 0).any():
+            msg = f"Pair-fit {name} receipts are invalid: {label}"
+            raise ValueError(msg)
+        numeric[name] = values
+
+    gains = numeric["last log-likelihood gain"]
+    fixed_point = numeric["fixed-point residual"]
+    kkt = numeric["KKT residual"]
+    if (gains[iterations == 0] != 0).any():
+        msg = f"Zero-iteration pair fits must have zero last gain: {label}"
+        raise ValueError(msg)
+    if (
+        (fixed_point > core.REQUIRED_PAIR_FIT_KKT_TOL).any()
+        or (kkt > core.REQUIRED_PAIR_FIT_KKT_TOL).any()
+    ):
+        msg = f"Pair-fit certificate residual exceeds the frozen tolerance: {label}"
+        raise ValueError(msg)
+    return {
+        "fit_converged": converged,
+        "fit_iterations": iterations,
+        "fit_last_ll_gain": gains,
+        "fit_fixed_point_residual": fixed_point,
+        "fit_kkt_residual": kkt,
+    }
+
+
+def _raw_fit_diagnostics(
+    frame: pd.DataFrame,
+    *,
+    label: str,
+) -> dict[str, np.ndarray]:
+    """Validate and copy the five public diagnostics from one raw pair table."""
+    return _validated_fit_diagnostics(
+        **{
+            field: frame[column]
+            for field, column in RAW_FIT_DIAGNOSTIC_COLUMNS.items()
+        },
+        label=label,
+    )
+
+
+def provider_fit_diagnostics(
+    frame: pd.DataFrame,
+    provider: str,
+    *,
+    label: str,
+) -> dict[str, np.ndarray]:
+    """Validate one provider's embedded public pair-fit diagnostic columns."""
+    return _validated_fit_diagnostics(
+        **{
+            field: frame[f"{provider}_{field}"]
+            for field in FIT_DIAGNOSTIC_FIELDS
+        },
+        label=label,
+    )
+
+
 def result_columns() -> tuple[str, ...]:
     """Return the exact provider-inference table schema."""
     columns = ["gene_a", "gene_b"]
@@ -279,6 +394,7 @@ def result_columns() -> tuple[str, ...]:
                 f"{provider}_direction",
                 f"{provider}_effect_identifiability",
                 f"{provider}_effect_reportable",
+                *(f"{provider}_{field}" for field in FIT_DIAGNOSTIC_FIELDS),
             ],
         )
     return tuple(columns)
@@ -307,6 +423,11 @@ def validate_inference_frame(frame: pd.DataFrame, *, cohort: str) -> None:
         msg = f"Invalid postprocessed inference schema or pair axis: {cohort}"
         raise ValueError(msg)
     for provider in BMRS:
+        diagnostics = provider_fit_diagnostics(
+            frame,
+            provider,
+            label=f"{cohort}/{provider}",
+        )
         expected = _provider_statistics(
             frame[f"{provider}_likelihood_ratio"].to_numpy(dtype=np.float64),
             frame[f"{provider}_rho"],
@@ -318,6 +439,14 @@ def validate_inference_frame(frame: pd.DataFrame, *, cohort: str) -> None:
                 msg = (
                     "Postprocessed inference does not reproduce the complete-family "
                     f"policy: {cohort}/{provider}/{name}"
+                )
+                raise ValueError(msg)
+        for name, values in diagnostics.items():
+            column = f"{provider}_{name}"
+            if not _same_values(frame[column], pd.Series(values, index=frame.index)):
+                msg = (
+                    "Postprocessed fit diagnostics are not canonical: "
+                    f"{cohort}/{provider}/{name}"
                 )
                 raise ValueError(msg)
 
@@ -381,6 +510,10 @@ def _read_provider(run_root: Path, cohort: str, provider: str) -> pd.DataFrame:
         frame["Rho"],
         frame["Effect Identifiability"],
     )
+    fit_diagnostics = _raw_fit_diagnostics(
+        frame,
+        label=f"{cohort}/{provider}",
+    )
     result = pd.DataFrame(
         {
             "gene_a": frame["Gene A"].astype("string"),
@@ -388,6 +521,10 @@ def _read_provider(run_root: Path, cohort: str, provider: str) -> pd.DataFrame:
             **{
                 f"{provider}_{name}": value
                 for name, value in statistics.items()
+            },
+            **{
+                f"{provider}_{name}": value
+                for name, value in fit_diagnostics.items()
             },
         },
     )
