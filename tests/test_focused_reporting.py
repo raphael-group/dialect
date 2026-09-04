@@ -147,6 +147,66 @@ def test_figure_burden_source_reconciles_observed_axis(
     assert source["mutsig_model_expected_selected_event_count"].tolist() == [4.0, 4.0]
 
 
+def test_fit_diagnostics_cover_every_certificate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(reporting.core, "BMRS", ("cbase",))
+    task = tmp_path / "tasks" / "TEST" / "cbase"
+    task.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "Fit Converged": [True, True, True],
+            "Fit Iterations": [0, 2, 4],
+            "Fit Last LL Gain": [0.0, 1e-12, 2e-12],
+            "Fit Fixed-Point Residual": [0.0, 1e-10, 2e-10],
+            "Fit KKT Residual": [0.0, 1e-9, 2e-9],
+            "Effect Identifiability": [
+                "full-affine-rank",
+                "rank-deficient",
+                "full-affine-rank",
+            ],
+        },
+    ).to_csv(task / "pairwise_interaction_results.csv", index=False)
+
+    rows = reporting._fit_diagnostic_rows(tmp_path, ("TEST",))  # noqa: SLF001
+
+    assert rows == [
+        {
+            "scope": "all",
+            "pairwise_rows": 3,
+            "converged_rows": 3,
+            "nonconverged_rows": 0,
+            "iterations_min": 0,
+            "iterations_median": 2.0,
+            "iterations_p95": 3.8,
+            "iterations_max": 4,
+            "minimum_last_ll_gain": 0.0,
+            "maximum_last_ll_gain": 2e-12,
+            "maximum_fixed_point_residual": 2e-10,
+            "maximum_kkt_residual": 2e-9,
+            "full_affine_rank_rows": 2,
+            "rank_deficient_rows": 1,
+        },
+        {
+            "scope": "cbase",
+            "pairwise_rows": 3,
+            "converged_rows": 3,
+            "nonconverged_rows": 0,
+            "iterations_min": 0,
+            "iterations_median": 2.0,
+            "iterations_p95": 3.8,
+            "iterations_max": 4,
+            "minimum_last_ll_gain": 0.0,
+            "maximum_last_ll_gain": 2e-12,
+            "maximum_fixed_point_residual": 2e-10,
+            "maximum_kkt_residual": 2e-9,
+            "full_affine_rank_rows": 2,
+            "rank_deficient_rows": 1,
+        },
+    ]
+
+
 def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     root = tmp_path / "report"
     root.mkdir()
@@ -165,10 +225,27 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
             "cohort": np.repeat(
                 reporting.TCGA_COHORTS,
                 len(reporting.core.BMRS),
-            ),
-            "provider": list(reporting.core.BMRS) * len(reporting.TCGA_COHORTS),
+                ),
+                "provider": list(reporting.core.BMRS) * len(reporting.TCGA_COHORTS),
+                "pairwise_rows": np.ones(
+                    len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS),
+                    dtype=int,
+                ),
+            },
+        ).to_csv(root / "runtime_summary.csv", index=False)
+    pairwise_rows = len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS)
+    pd.DataFrame(
+        {
+            "scope": ["all", *reporting.core.BMRS],
+            "pairwise_rows": [pairwise_rows, *([len(reporting.TCGA_COHORTS)] * 3)],
+            "nonconverged_rows": [0, 0, 0, 0],
+            "full_affine_rank_rows": [
+                pairwise_rows,
+                *([len(reporting.TCGA_COHORTS)] * 3),
+            ],
+            "rank_deficient_rows": [0, 0, 0, 0],
         },
-    ).to_csv(root / "runtime_summary.csv", index=False)
+    ).to_csv(root / "fit_diagnostics_summary.csv", index=False)
     pd.DataFrame(columns=["cohort", "gene_a", "gene_b"]).to_csv(
         root / "top_primary_pairs.csv",
         index=False,
@@ -208,6 +285,7 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         "provider_overlap.csv",
         "top_primary_pairs.csv",
         "runtime_summary.csv",
+        "fit_diagnostics_summary.csv",
         "table_s5.tex",
         "figure6.pdf",
     }

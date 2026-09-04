@@ -311,6 +311,134 @@ def _runtime_rows(run_root: Path, cohorts: Sequence[str]) -> list[dict[str, Any]
     return rows
 
 
+def _fit_diagnostic_rows(
+    run_root: Path,
+    cohorts: Sequence[str],
+) -> list[dict[str, int | float | str]]:
+    """Summarize every production pair-fit certificate without loading all rows."""
+    columns = [
+        "Fit Converged",
+        "Fit Iterations",
+        "Fit Last LL Gain",
+        "Fit Fixed-Point Residual",
+        "Fit KKT Residual",
+        "Effect Identifiability",
+    ]
+    iterations: dict[str, list[np.ndarray]] = {provider: [] for provider in core.BMRS}
+    aggregates = {
+        provider: {
+            "rows": 0,
+            "converged": 0,
+            "minimum_gain": np.inf,
+            "maximum_gain": -np.inf,
+            "maximum_fixed_point": 0.0,
+            "maximum_kkt": 0.0,
+            "full_rank": 0,
+            "rank_deficient": 0,
+        }
+        for provider in core.BMRS
+    }
+    for cohort in cohorts:
+        for provider in core.BMRS:
+            path = (
+                run_root
+                / "tasks"
+                / cohort
+                / provider
+                / "pairwise_interaction_results.csv"
+            )
+            aggregate = aggregates[provider]
+            for chunk in pd.read_csv(
+                path,
+                usecols=columns,
+                chunksize=100_000,
+                float_precision="round_trip",
+            ):
+                chunk_iterations = chunk["Fit Iterations"].to_numpy(dtype=np.int32)
+                gains = chunk["Fit Last LL Gain"].to_numpy(dtype=float)
+                fixed_point = chunk["Fit Fixed-Point Residual"].to_numpy(dtype=float)
+                kkt = chunk["Fit KKT Residual"].to_numpy(dtype=float)
+                convergence = chunk["Fit Converged"]
+                effects = chunk["Effect Identifiability"].astype("string")
+                if (
+                    not convergence.isin([True, False]).all()
+                    or (chunk_iterations < 0).any()
+                    or not np.isfinite(gains).all()
+                    or (gains < -1e-12).any()
+                    or not np.isfinite(fixed_point).all()
+                    or (fixed_point < 0).any()
+                    or not np.isfinite(kkt).all()
+                    or (kkt < 0).any()
+                    or not effects.isin(["full-affine-rank", "rank-deficient"]).all()
+                ):
+                    msg = f"Invalid production fit diagnostics: {cohort}/{provider}"
+                    raise ValueError(msg)
+                converged = convergence.to_numpy(dtype=bool)
+                iterations[provider].append(chunk_iterations)
+                aggregate["rows"] += len(chunk)
+                aggregate["converged"] += int(converged.sum())
+                aggregate["minimum_gain"] = min(
+                    float(aggregate["minimum_gain"]),
+                    float(gains.min()),
+                )
+                aggregate["maximum_gain"] = max(
+                    float(aggregate["maximum_gain"]),
+                    float(gains.max()),
+                )
+                aggregate["maximum_fixed_point"] = max(
+                    float(aggregate["maximum_fixed_point"]),
+                    float(fixed_point.max()),
+                )
+                aggregate["maximum_kkt"] = max(
+                    float(aggregate["maximum_kkt"]),
+                    float(kkt.max()),
+                )
+                aggregate["full_rank"] += int(effects.eq("full-affine-rank").sum())
+                aggregate["rank_deficient"] += int(effects.eq("rank-deficient").sum())
+
+    def summarize(
+        scope: str,
+        providers: Sequence[str],
+    ) -> dict[str, int | float | str]:
+        values = np.concatenate(
+            [array for provider in providers for array in iterations[provider]],
+        )
+        selected = [aggregates[provider] for provider in providers]
+        rows = sum(int(item["rows"]) for item in selected)
+        converged = sum(int(item["converged"]) for item in selected)
+        return {
+            "scope": scope,
+            "pairwise_rows": rows,
+            "converged_rows": converged,
+            "nonconverged_rows": rows - converged,
+            "iterations_min": int(values.min()),
+            "iterations_median": float(np.quantile(values, 0.5)),
+            "iterations_p95": float(np.quantile(values, 0.95)),
+            "iterations_max": int(values.max()),
+            "minimum_last_ll_gain": min(
+                float(item["minimum_gain"]) for item in selected
+            ),
+            "maximum_last_ll_gain": max(
+                float(item["maximum_gain"]) for item in selected
+            ),
+            "maximum_fixed_point_residual": max(
+                float(item["maximum_fixed_point"]) for item in selected
+            ),
+            "maximum_kkt_residual": max(
+                float(item["maximum_kkt"]) for item in selected
+            ),
+            "full_affine_rank_rows": sum(int(item["full_rank"]) for item in selected),
+            "rank_deficient_rows": sum(
+                int(item["rank_deficient"]) for item in selected
+            ),
+        }
+
+    return [
+        summarize("all", core.BMRS),
+        *(summarize(provider, (provider,)) for provider in core.BMRS),
+    ]
+
+
 def _pmf_mean(pmf: Mapping[int, float]) -> float:
     return float(sum(int(key) * float(value) for key, value in pmf.items()))
 
@@ -535,6 +663,7 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         "provider_overlap.csv",
         "top_primary_pairs.csv",
         "runtime_summary.csv",
+        "fit_diagnostics_summary.csv",
         "table_s5.tex",
         "figure6.pdf",
     }
@@ -565,6 +694,7 @@ def validate_report(output_root: Path) -> dict[str, Any]:
     summary = pd.read_csv(output_root / "table_s5.csv")
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
+    fit_diagnostics = pd.read_csv(output_root / "fit_diagnostics_summary.csv")
     cohort_burden = pd.read_csv(output_root / "cohort_burden_source.csv")
     figure_burden = pd.read_csv(output_root / "figure6_burden_source.csv")
     expected_cohort_burden_columns = {
@@ -591,6 +721,13 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         or int(summary["tumors"].sum()) != EXPECTED_TUMOR_COUNT
         or len(overlap) != len(TCGA_COHORTS) * 2
         or len(runtime) != len(TCGA_COHORTS) * len(core.BMRS)
+        or fit_diagnostics["scope"].tolist() != ["all", *core.BMRS]
+        or int(fit_diagnostics.iloc[0]["pairwise_rows"])
+        != int(runtime["pairwise_rows"].sum())
+        or int(fit_diagnostics.iloc[0]["nonconverged_rows"]) != 0
+        or int(fit_diagnostics.iloc[0]["full_affine_rank_rows"])
+        + int(fit_diagnostics.iloc[0]["rank_deficient_rows"])
+        != int(fit_diagnostics.iloc[0]["pairwise_rows"])
         or len(cohort_burden) != EXPECTED_TUMOR_COUNT
         or cohort_burden["cohort"].nunique() != len(TCGA_COHORTS)
         or set(cohort_burden.columns) != expected_cohort_burden_columns
@@ -668,6 +805,7 @@ def build_report(  # noqa: PLR0913
     overlap = pd.DataFrame(overlap_rows)
     top_pairs = pd.concat(top_frames, ignore_index=True)
     runtime = pd.DataFrame(_runtime_rows(run_root, cohorts))
+    fit_diagnostics = pd.DataFrame(_fit_diagnostic_rows(run_root, cohorts))
     cohort_burden_source = _cohort_burden_source(burdens)
     figure6_burden_source = _figure6_burden_source(run_root)
     calibration_table = pd.read_csv(
@@ -689,6 +827,7 @@ def build_report(  # noqa: PLR0913
         "provider_overlap.csv": overlap,
         "top_primary_pairs.csv": top_pairs,
         "runtime_summary.csv": runtime,
+        "fit_diagnostics_summary.csv": fit_diagnostics,
     }
     for name, frame in outputs.items():
         frame.to_csv(staging / name, index=False, lineterminator="\n")
