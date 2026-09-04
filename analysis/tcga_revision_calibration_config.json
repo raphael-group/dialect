@@ -1,50 +1,94 @@
 {
   "schema_version": "1.0.0",
-  "contract": "focused-result-blind-null-calibration-v1",
+  "contract": "focused-result-blind-null-calibration-v2",
   "seed": 20260903,
   "cells": {
-    "cohorts": [
-      "CHOL",
-      "LAML",
-      "PAAD",
-      "SKCM",
-      "UCEC"
-    ],
-    "providers": [
-      "cbase",
-      "dig",
-      "mutsig"
-    ]
+    "primary_gate": {
+      "role": "primary-gate",
+      "cohorts": [
+        "ACC",
+        "BLCA",
+        "BRCA",
+        "CESC",
+        "CHOL",
+        "CRAD",
+        "DLBC",
+        "ESCA",
+        "GBM",
+        "HNSC",
+        "KICH",
+        "KIRC",
+        "KIRP",
+        "LAML",
+        "LGG",
+        "LIHC",
+        "LUAD",
+        "LUSC",
+        "MESO",
+        "OV",
+        "PAAD",
+        "PCPG",
+        "PRAD",
+        "SARC",
+        "SKCM",
+        "STAD",
+        "TGCT",
+        "THCA",
+        "THYM",
+        "UCEC",
+        "UCS",
+        "UVM"
+      ],
+      "providers": [
+        "mutsig"
+      ]
+    },
+    "descriptive": {
+      "role": "descriptive-only",
+      "cohorts": [
+        "CHOL",
+        "LAML",
+        "PAAD",
+        "SKCM",
+        "UCEC"
+      ],
+      "providers": [
+        "cbase",
+        "dig"
+      ]
+    }
   },
   "marginal_lrt": {
     "pair_selection": "64-disjoint-pairs-spanning-the-K500-feature-rank-axis",
+    "sentinel_pair_count": 64,
     "replicates_per_cell": 1000,
     "alphas": [
       0.01,
-      0.05,
-      0.1
-    ],
-    "assessment": "one-sided-exact-binomial-inflation-test-with-bonferroni-0.05"
+      0.05
+    ]
   },
-  "complete_null_family": {
-    "top_k": 30,
-    "replicates_per_cell": 250,
-    "correction": "benjamini-hochberg",
-    "candidate_q_values": [
-      0.1,
-      0.2
-    ],
-    "assessment": "complete-null-Pr-R-positive-with-exact-binomial-intervals"
+  "affirmative_gate": {
+    "provider": "mutsig",
+    "method": "simultaneous-one-sided-hoeffding-upper-bound",
+    "familywise_error": 0.05,
+    "endpoint_count": 64,
+    "acceptance_upper_bounds": {
+      "0.01": 0.02,
+      "0.05": 0.06
+    }
   },
   "reporting_candidates": {
-    "primary_q_threshold": 0.1,
-    "sensitivity_q_threshold": 0.2,
+    "test": "chi-square-one-df-profile-lrt",
+    "primary_adjustment": "benjamini-yekutieli",
+    "primary_q_threshold": 0.01,
+    "sensitivity_adjustment": "benjamini-hochberg",
+    "sensitivity_q_threshold": 0.01,
     "thresholds_selected_from_observed_pairs": false,
-    "retain_chi_square_bh_only_without_detected_inflation": true,
     "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof"
   },
   "resources": {
     "max_jobs": 3,
+    "max_mutsig_jobs": 1,
     "threads_per_job": 1,
     "nice_increment": 10,
     "overwrite_outputs": false
