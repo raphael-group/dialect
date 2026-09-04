@@ -168,7 +168,7 @@ def freeze_rule(
         "postprocess_manifest_sha256": _sha256(
             postprocess_root / postprocess.ROOT_MANIFEST_NAME,
         ),
-        "scope": "one-identical-rule-across-all-32-cancer-types",
+        "scope": "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts",
         "test": candidates["test"],
         "effective_p_policy": summary["effective_p_policy"],
         "multiplicity": "provider-specific-complete-within-cohort-family",
@@ -180,7 +180,7 @@ def freeze_rule(
         "primary_q_threshold": candidates["primary_q_threshold"],
         "sensitivity_q_threshold": candidates["sensitivity_q_threshold"],
         "threshold_comparison": "inclusive-less-than-or-equal",
-        "direction": "primary-provider-rho-sign-after-nondirectional-testing",
+        "direction": "primary-provider-rho-sign-after-nondirectional-rejection",
         "direction_unavailable": (
             "retain-nondirectional-rejection-exclude-from-me-co-lists"
         ),

@@ -711,7 +711,14 @@ def test_reporting_rule_freezes_prespecified_candidates(
         "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
         "overall_gate_pass": True,
     }
-    assert rule["scope"] == "one-identical-rule-across-all-32-cancer-types"
+    assert (
+        rule["scope"]
+        == "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
+    )
+    assert (
+        rule["direction"]
+        == "primary-provider-rho-sign-after-nondirectional-rejection"
+    )
     assert (
         rule["direction_unavailable"]
         == "retain-nondirectional-rejection-exclude-from-me-co-lists"
