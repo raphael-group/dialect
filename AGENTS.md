@@ -1,6 +1,6 @@
 # AGENTS.md — DIALECT
 
-PhD method: EM latent-variable model for **mutually exclusive (ME)** and **co-occurring (CO)** driver pairs. Each somatic count is `C = B + D` (passenger background + latent driver). ME ranked by Marshall–Olkin `ρ`, CO by LRT. **BMR is the load-bearing input.**
+PhD method: latent-variable model for **mutually exclusive (ME)** and **co-occurring (CO)** driver pairs. Each somatic count is `C = B + D` (passenger background + latent driver). The corrected revision uses one profile LRT for dependence and assigns ME/CO direction afterward from Marshall–Olkin `ρ`. **BMR is the load-bearing input.**
 
 Public package: `raphael-group/dialect`. Companion atlas: `atlas/` (this repo).
 
@@ -9,7 +9,9 @@ Public package: `raphael-group/dialect`. Companion atlas: `atlas/` (this repo).
 - **Goal:** journal revision (rebuttal) + usable open-source tool. BMR is the highest-value technical workstream.
 - **CO confound:** many CO calls are per-sample tumor-burden artifacts, not real co-drivers. Better **per-gene** BMR (DIG) does **not** fix CO; **per-sample** BMR (MutSig-style) does. ME biology largely holds.
 - **Do not** propose burden-aware BMR switching (high-TMB vs low-TMB different BMR rules) — rejected as ad-hoc.
-- **BMR framing:** one pluggable framework; CBaSE primary; DIG + MutSigCV2 for robustness / hypermutator CO fix — not a patchwork switcher.
+- **BMR framing:** one pluggable framework; sample-specific MutSigCV2 is the primary inferential background for both ME and CO; CBaSE is the continuity comparison, especially for ME; DIG is supplementary sensitivity. Provider overlap is descriptive, never a voting rule. This is one prospective hierarchy across cohorts and directions, not a burden-dependent switcher.
+- **Revision family:** one matched, participant-unique K=500 universe under all three BMRs; exclude same-base `_M:_N` pairs before fitting; no epsilon prefilter and no probability floor or provider fallback.
+- **Significance:** use one within-cohort family and one calibration-justified global p/q rule for both directions. Never choose a threshold to recover a desired cancer or pair.
 - `research/` is **gitignored** (paper, notes, dissertation) — never commit it.
 - Validate against **CHOL**; top ME should remain `IDH1_M : PBRM1_N`.
 

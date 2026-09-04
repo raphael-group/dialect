@@ -8,6 +8,7 @@ from CBaSE's raw output. It is wrapped by :class:`dialect.bmr.cbase.CBaSEProvide
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -21,6 +22,8 @@ from dialect.bmr.base import SampleAxisError
 from dialect.data.io import check_file_exists
 
 _N_SAMPLES_FLAG = "--n-samples"
+_PMF_ONLY_FLAG = "--pmf-only"
+_GENES_FILE_FLAG = "--genes-file"
 
 
 def _validate_n_samples(n_samples: int | None) -> int | None:
@@ -113,8 +116,16 @@ def _resolve_sample_axis(
 
 def _run_cbase_step(label: str, cmd: list[str]) -> None:
     """Run one CBaSE subprocess step, raising RuntimeError with context on failure."""
+    environment = os.environ.copy()
+    cbase_directory = Path(cmd[1]).resolve().parent
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (cbase_directory.as_posix(), existing_pythonpath)
+        if part
+    )
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=environment)
     except subprocess.CalledProcessError as err:
         msg = (
             f"{label} step failed (exit {err.returncode}).\n"
@@ -141,13 +152,14 @@ def convert_maf_to_cbase_input_file(maf: str, dout: str) -> Path:
     return fout
 
 
-def generate_bmr_using_cbase(
+def generate_bmr_using_cbase(  # noqa: PLR0913
     maf: str,
     out: str,
     reference: str,
     threshold: str,
     *,
     n_samples: int | None = None,
+    pmf_only: bool = False,
 ) -> None:
     """Invoke CBaSE's params + qvals scripts to produce its raw background output.
 
@@ -159,6 +171,8 @@ def generate_bmr_using_cbase(
         n_samples: Complete cohort size, including mutation-free samples. If omitted,
             preserve CBaSE's legacy behavior of inferring the size from samples with
             retained mutations.
+        pmf_only: Compute PMFs only for genes observed in the retained mutation table
+            and skip CBaSE's unrelated simulated gene-selection q-values.
     """
     validated_n_samples = _validate_n_samples(n_samples)
     cbase_input_fn = convert_maf_to_cbase_input_file(maf, out)
@@ -196,11 +210,24 @@ def generate_bmr_using_cbase(
         str(cbase_output_dir),
         str(threshold),
     ]
-    for label, cmd in (
-        ("CBaSE params", cbase_params_cmd),
-        ("CBaSE qvals", cbase_qvals_cmd),
-    ):
-        _run_cbase_step(label, cmd)
+    _run_cbase_step("CBaSE params", cbase_params_cmd)
+    if pmf_only:
+        (cbase_output_dir / "q_values.txt").unlink(missing_ok=True)
+        retained = pd.read_csv(
+            cbase_output_dir / "kept_mutations.csv",
+            sep="\t",
+            usecols=["gene"],
+        )
+        observed_genes = sorted(set(retained["gene"].dropna().astype(str)))
+        if not observed_genes:
+            msg = "CBaSE retained no genes for PMF generation"
+            raise ValueError(msg)
+        genes_path = cbase_output_dir / "observed_genes.txt"
+        genes_path.write_text("\n".join(observed_genes) + "\n", encoding="utf-8")
+        cbase_qvals_cmd.extend(
+            [_PMF_ONLY_FLAG, _GENES_FILE_FLAG, str(genes_path)],
+        )
+    _run_cbase_step("CBaSE qvals", cbase_qvals_cmd)
 
 
 def generate_counts_from_cbase_output(
@@ -317,6 +344,7 @@ def generate_bmr_and_counts(  # noqa: PLR0913
     *,
     n_samples: int | None = None,
     sample_ids: Sequence[str] | str | Path | None = None,
+    pmf_only: bool = False,
 ) -> None:
     """Run CBaSE end-to-end on an optional exact, zero-complete sample axis."""
     sample_axis, resolved_n_samples = _resolve_sample_axis(
@@ -324,12 +352,17 @@ def generate_bmr_and_counts(  # noqa: PLR0913
         sample_ids=sample_ids,
     )
     check_file_exists(maf)
+    cbase_options: dict[str, int | bool | None] = {
+        "n_samples": resolved_n_samples,
+    }
+    if pmf_only:
+        cbase_options["pmf_only"] = True
     generate_bmr_using_cbase(
         maf,
         out,
         reference,
         threshold,
-        n_samples=resolved_n_samples,
+        **cbase_options,
     )
     generate_counts_from_cbase_output(out, sample_ids=sample_axis)
     generate_bmr_files_from_cbase_output(out)

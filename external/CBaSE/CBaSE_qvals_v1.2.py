@@ -1025,6 +1025,20 @@ run_no = 30  # 	No. of simulation replicates used for computing FDR (default 50)
 outname = str(sys.argv[1])  # 	name for the output file containing the q values
 TEMP_DIR = str(sys.argv[2])  #   path to the temp files folder
 THRESHOLD = float(sys.argv[3])  # 	threshold for categorical bmr pmf generation
+extra_args = sys.argv[4:]
+PMF_ONLY = False
+GENES_FILE = None
+if extra_args:
+    if (
+        len(extra_args) != 3
+        or extra_args[0] != "--pmf-only"
+        or extra_args[1] != "--genes-file"
+    ):
+        raise SystemExit(
+            "optional arguments must be --pmf-only --genes-file <path>",
+        )
+    PMF_ONLY = True
+    GENES_FILE = extra_args[2]
 
 # ***********************************************************************************************
 # ***********************************************************************************************
@@ -1117,6 +1131,14 @@ for line in lines[1:]:
         },
     )
 mks_type = sorted(mks_type, key=lambda arg: arg["gene"])
+if PMF_ONLY:
+    with open(GENES_FILE) as genes_handle:
+        requested_genes = {
+            gene.strip() for gene in genes_handle if gene.strip()
+        }
+    mks_type = [gene for gene in mks_type if gene["gene"] in requested_genes]
+    if not mks_type:
+        raise SystemExit("observed-gene PMF filter selected no CBaSE genes")
 
 sys.stderr.write("Computing real p-values.\n")
 pvals_obs = compute_p_values(params, mks_type, [mod_C, 0, 1])
@@ -1124,6 +1146,11 @@ export_pofxgivens_table(pvals_obs, 11, "pofmgivens")
 export_pofxgivens_table(pvals_obs, 12, "pofkgivens")
 export_pofxigivens_table(pvals_obs, 13)
 export_pofxigivens_table(pvals_obs, 14)
+if PMF_ONLY:
+    sys.stderr.write(
+        "PMF-only mode: skipping simulated gene-selection q-values.\n",
+    )
+    raise SystemExit(0)
 sys.stderr.write("Computing simulated p-values.\n")
 sys.stderr.write("Simulation runs\t= %i.\n" % (run_no))
 pvals_sim = compute_p_values(params, mks_type, [mod_C, 1, run_no])

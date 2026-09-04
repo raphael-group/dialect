@@ -22,6 +22,26 @@ from dialect.data.revision_fit_policy import (
     MutSigEffectPagesPolicy,
     MutSigSupportPolicy,
 )
+from dialect.models.interaction import Interaction
+
+
+def test_wald_recomputation_uses_model_tau_order() -> None:
+    """CSV column order must not create a false bitwise Wald mismatch."""
+    csv_taus = [
+        0.8939152440541098,
+        0.05246859089973929,
+        0.026034157595259858,
+        0.027582007450890997,
+    ]
+    interaction = Interaction.__new__(Interaction)
+
+    log_odds, wald = runner._recompute_pair_effect_statistics_from_csv_taus(  # noqa: SLF001
+        interaction,
+        csv_taus,
+    )
+
+    assert log_odds == 2.893150470105523
+    assert wald == 0.2970745343202113
 
 
 def test_secure_runner_read_rejects_hardlinks_and_in_place_mutation(

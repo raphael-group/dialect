@@ -2,7 +2,7 @@
   "record_schema_version": "1.0.0",
   "dependency_id": "cbase-v1.2-dialect-fork",
   "dependency_class": "cbase_source",
-  "recorded_on": "2026-08-30",
+  "recorded_on": "2026-09-03",
   "source": "https://genetics.bwh.harvard.edu/cbase/downloads_v1.2.html",
   "version": "Historical CBaSE v1.2-derived DIALECT fork; exact upstream parent unrecovered",
   "acquisition": "Use the hash-identified tracked DIALECT files; treat the current official CBaSE v1.2 archive only as a comparison and provenance reference; release exactly the four tracked files under the recorded per-file license boundary.",
@@ -46,9 +46,9 @@
     "dialect_license_file_sha256": "3c900e08a49b06523f496c107d6d1548d3da2e45fba6972e628cde67f2251d16",
     "release_files": {
       "external/CBaSE/CBaSE_params_v1.2.py": "d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c",
-      "external/CBaSE/CBaSE_qvals_v1.2.py": "f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff",
+      "external/CBaSE/CBaSE_qvals_v1.2.py": "c1f0eb723f71f7206d9abd76fe81168204b6673bc2c8cdf805b2c72c3e1e81cd",
       "external/CBaSE/cbase_cohort_size.py": "381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69",
-      "external/CBaSE/NOTICE": "ee27cf923bfa65f5a8f09720281d66307ba245e93776e595a0fdd2cc02b48139"
+      "external/CBaSE/NOTICE": "b37c74f3f333fa3efdc5c81b72395cbada205e3fa427a03a5fabed2eb694fe80"
     },
     "release_file_roles": {
       "external/CBaSE/CBaSE_params_v1.2.py": "historical-upstream-derived-fork-with-dialect-modifications",

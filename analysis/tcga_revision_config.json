@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0.0",
+  "analysis": {
+    "cohort_count": 32,
+    "participant_count": 10433,
+    "top_k": 500,
+    "providers": [
+      "cbase",
+      "dig",
+      "mutsig"
+    ],
+    "primary_provider": "mutsig",
+    "continuity_provider": "cbase",
+    "supplementary_providers": [
+      "dig"
+    ],
+    "provider_overlap": "descriptive-only",
+    "feature_universe": "shared-native-count-ranked-within-cohort",
+    "pair_family": "all-unordered-pairs-excluding-same-base-missense-nonsense",
+    "epsilon_prefilter": "none",
+    "probability_floor_or_provider_fallback": "none",
+    "fit": "deterministic-constrained-profile-likelihood",
+    "alternative_optimizer": "exact-simplex-coordinate-ascent",
+    "test": "nondirectional-two-sided-one-df-profile-lrt",
+    "direction": "marshall-olkin-rho-sign-after-testing"
+  },
+  "reporting": {
+    "me": "mutsig-primary-with-cbase-continuity-comparison",
+    "co": "mutsig-primary-with-cbase-and-dig-sensitivity",
+    "claims": "statistical-dependence-and-candidate-interactions",
+    "multiplicity": "freeze-after-calibration",
+    "primary_q_threshold": "freeze-after-calibration",
+    "sensitivity_q_threshold": "freeze-after-calibration",
+    "paad_laml": "never-select-threshold-to-recover-story",
+    "figure_6": "bmr-calibration-and-co-sensitivity-primary"
+  },
+  "execution": {
+    "observed_data_runs": 1,
+    "max_general_jobs": 3,
+    "max_mutsig_jobs": 1,
+    "threads_per_job": 1,
+    "nice_increment": 10,
+    "resume_valid_tasks": true,
+    "overwrite_outputs": false
+  }
+}

@@ -76,10 +76,19 @@ def generate(
         readable=True,
         help="UTF-8 file with one ordered cohort sample ID per line for CBaSE.",
     ),
+    cbase_pmf_only: bool = typer.Option(
+        False,
+        "--cbase-pmf-only",
+        help="Generate observed-gene CBaSE PMFs without gene-selection q-values.",
+    ),
 ) -> None:
     """Generate the background mutation rate and count matrix from a MAF."""
     if bmr == "dig":
-        if cbase_samples is not None or cbase_sample_axis is not None:
+        if (
+            cbase_samples is not None
+            or cbase_sample_axis is not None
+            or cbase_pmf_only
+        ):
             msg = "--bmr dig does not accept CBaSE sample-axis options"
             raise typer.BadParameter(msg)
         if not dig_results or not dig_samples:
@@ -101,14 +110,19 @@ def generate(
             msg = "--cbase-samples must be a positive integer"
             raise typer.BadParameter(msg)
         try:
+            options = {
+                "n_samples": cbase_samples,
+                "sample_ids": cbase_sample_axis,
+            }
+            if cbase_pmf_only:
+                options["pmf_only"] = True
             api.estimate_bmr(
                 maf,
                 out,
                 provider="cbase",
                 reference=reference,
                 threshold=threshold,
-                n_samples=cbase_samples,
-                sample_ids=cbase_sample_axis,
+                **options,
             )
         except api.SampleAxisError as err:
             raise typer.BadParameter(str(err)) from err

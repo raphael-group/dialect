@@ -61,7 +61,7 @@ Tracked release files
   SHA-256 d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c
 - CBaSE_qvals_v1.2.py
   Historical CBaSE-derived fork with DIALECT modifications
-  SHA-256 f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff
+  SHA-256 c1f0eb723f71f7206d9abd76fe81168204b6673bc2c8cdf805b2c72c3e1e81cd
 - cbase_cohort_size.py
   DIALECT-authored cohort-axis helper; not an upstream CBaSE file
   SHA-256 381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69
@@ -70,9 +70,11 @@ Relative to the earliest recoverable DIALECT repository snapshot, later DIALECT
 integration work preserves sample identifiers, repairs the expected tab-delimited
 mutation input, accepts explicit input/output/auxiliary/interpreter paths,
 parameterizes the PMF tail threshold, preserves high-count PMF values through
-arbitrary-precision serialization, and binds the cohort size to the authoritative
-selected sample axis. The last functional cohort-axis boundary is DIALECT commit
-d5883834a6ba52cf19145b5b26beecee9d2feaa2.
+arbitrary-precision serialization, binds the cohort size to the authoritative
+selected sample axis, and permits a PMF-only execution that stops before legacy
+single-gene q-value reporting. The last functional cohort-axis boundary is DIALECT
+commit d5883834a6ba52cf19145b5b26beecee9d2feaa2; the PMF-only execution change is
+recorded by the revision-focused source commit and its run receipts.
 
 License and non-endorsement
 ---------------------------

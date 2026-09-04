@@ -1,6 +1,6 @@
 """DIALECT: mutual exclusivity & co-occurrence between cancer drivers, BMR-aware.
 
-DIALECT is an EM latent-variable model that decomposes each observed somatic count
+DIALECT is a latent-variable model that decomposes each observed somatic count
 into a passenger background (from a pluggable background-mutation-rate provider) and
 a latent driver indicator, then ranks gene pairs for mutual exclusivity and
 co-occurrence. Import the core operations directly::

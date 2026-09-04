@@ -14,6 +14,16 @@ if [ "${PREPARE_ONLY+x}" = "x" ] && [ "$PREPARE_ONLY" != "1" ]; then
   echo "PREPARE_ONLY must be unset or exactly 1" >&2
   exit 64
 fi
+if [ "${DIALECT_FOCUSED_REVISION+x}" = "x" ] \
+  && [ "$DIALECT_FOCUSED_REVISION" != "1" ]; then
+  echo "DIALECT_FOCUSED_REVISION must be unset or exactly 1" >&2
+  exit 64
+fi
+if [ "${DIALECT_FOCUSED_REVISION:-}" = "1" ] \
+  && [ "${PREPARE_ONLY:-}" != "1" ]; then
+  echo "DIALECT_FOCUSED_REVISION requires PREPARE_ONLY=1" >&2
+  exit 64
+fi
 
 C="$1"
 SAMPLE_AXIS_ARG="$2"
@@ -36,7 +46,8 @@ REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 MUTSIG_SOURCE="${REPO}/external/MutSig2CV_src"
 PATCH_FILE="${REPO}/external/mutsig2cv_octave_dialect.patch"
 DEFAULT_PY="/opt/anaconda3/envs/dialect/bin/python"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   : "${DIALECT_PROVIDER_PYTHON:?missing provider Python authority}"
   : "${DIALECT_PROVIDER_PYTHON_SHA256:?missing provider Python SHA-256}"
   : "${DIALECT_PROVIDER_GIT:?missing provider Git authority}"
@@ -199,7 +210,8 @@ if [ "${PREPARE_ONLY:-}" != "1" ]; then
   }
 fi
 
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   GIT_BIN="$DIALECT_PROVIDER_GIT"
   PY_EXECUTABLE_IDENTITY=()
   while IFS= read -r identity_line; do
@@ -309,7 +321,8 @@ export GIT_PAGER=
 export GIT_TERMINAL_PROMPT=0
 
 PATCH_SHA256="$(sha256_file "$PATCH_FILE")"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   : "${DIALECT_PROVIDER_MUTSIG_SOURCE_TREE_SHA256:?missing MutSig source-tree authority}"
   : "${DIALECT_PROVIDER_MUTSIG_SOURCE_FILE_COUNT:?missing MutSig source file-count authority}"
   SOURCE_TREE_SHA256="$DIALECT_PROVIDER_MUTSIG_SOURCE_TREE_SHA256"
@@ -341,7 +354,8 @@ else
   SOURCE_FILE_COUNT="$("$GIT_BIN" --no-pager -C "$MUTSIG_SOURCE" ls-files | line_count_stream)"
 fi
 
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   OCTAVE_BIN="$DIALECT_PROVIDER_OCTAVE"
   JAVA_HOME="$DIALECT_PROVIDER_JAVA_HOME"
   JAVA_BIN="$DIALECT_PROVIDER_JAVA"
@@ -409,7 +423,8 @@ fi
 command -v "$OCTAVE_BIN" >/dev/null 2>&1 || { echo "GNU Octave not found" >&2; exit 69; }
 OCTAVE_VERSION_OUTPUT="$("$OCTAVE_BIN" --no-init-all --no-history --no-gui --version 2>&1)"
 OCTAVE_ID="${OCTAVE_VERSION_OUTPUT%%$'\n'*}"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   [ "$OCTAVE_ID" = "$DIALECT_PROVIDER_OCTAVE_ID" ] || {
     echo "Octave version differs from provider authority" >&2
     exit 70

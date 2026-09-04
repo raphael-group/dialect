@@ -65,7 +65,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from scipy.special import logsumexp
 from scipy.stats import poisson
 
 from analysis.materialize_tcga_revision_inputs import (
@@ -477,6 +476,7 @@ class RunPaths:
     expected_canonical_input_sha256: str | None = None
     provider_input_root: Path | None = None
     expected_provider_input_manifest_sha256: str | None = None
+    focused_config_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4145,7 +4145,12 @@ def build_cohort_contract(
     """Build a deterministic fail-closed contract for one cohort."""
     if top_k == TOP_K:
         _frozen_python_executable()
-    if top_k == TOP_K and not _revision_authority_is_configured(paths):
+    focused_run = paths.focused_config_sha256 is not None
+    if (
+        top_k == TOP_K
+        and not _revision_authority_is_configured(paths)
+        and not focused_run
+    ):
         msg = "Production K=500 contracts require the pinned provider bundle."
         raise ValueError(msg)
     canonical_binding = _canonical_input_binding(paths, cohort)
@@ -4347,9 +4352,14 @@ def build_cohort_contract(
     if canonical_binding is not None:
         contract["revision_input_authority"] = canonical_binding
         contract["provider_input_provenance"] = provider_provenance
+    if focused_run:
+        contract["focused_config_sha256"] = _require_lowercase_sha256(
+            paths.focused_config_sha256,
+            label="focused revision configuration SHA-256",
+        )
     _require_tested_family_contract(
         contract,
-        require_signed_k500=top_k == TOP_K,
+        require_signed_k500=top_k == TOP_K and not focused_run,
     )
     _require_exact_sample_axis(contract)
     _require_full_observation_support(contract)
@@ -5724,6 +5734,18 @@ def _validate_pairwise_rho(
         raise ValueError(msg)
 
 
+def _recompute_pair_effect_statistics_from_csv_taus(
+    interaction: Interaction,
+    csv_taus: Sequence[float],
+) -> tuple[float | None, float | None]:
+    """Recompute LOR and Wald using the model's canonical tau ordering."""
+    model_taus = [csv_taus[0], csv_taus[2], csv_taus[1], csv_taus[3]]
+    return (
+        interaction.compute_log_odds_ratio(model_taus),
+        interaction.compute_wald_statistic(model_taus),
+    )
+
+
 def _validate_pairwise_output_impl(
     raw: bytes,
     contract: dict[str, Any],
@@ -5844,7 +5866,7 @@ def _validate_pairwise_output_impl(
                 actual,
                 effect_identifiable=effect_identifiable,
             )
-            tau_00, tau_10, tau_01, tau_11 = taus
+            _, tau_10, tau_01, tau_11 = taus
             if effect_identifiable:
                 try:
                     tau_1x = float(row["Tau_1X"])
@@ -5865,16 +5887,15 @@ def _validate_pairwise_output_impl(
                 raise ValueError(msg)
             log_odds_defined = effect_identifiable and all(tau > 0 for tau in taus)
             if log_odds_defined:
-                expected_log_odds = float(
-                    math.log(tau_00)
-                    + math.log(tau_11)
-                    - math.log(tau_01)
-                    - math.log(tau_10),
+                expected_log_odds, expected_wald = (
+                    _recompute_pair_effect_statistics_from_csv_taus(
+                        interaction,
+                        taus,
+                    )
                 )
-                expected_wald = float(
-                    expected_log_odds
-                    * math.exp(-0.5 * float(logsumexp(-np.log(taus)))),
-                )
+                if expected_log_odds is None or expected_wald is None:
+                    msg = f"Failed to recompute defined LOR/Wald for pair {actual}."
+                    raise RuntimeError(msg)
                 try:
                     actual_log_odds = float(row["Log Odds Ratio"])
                     actual_wald = float(row["Wald Statistic"])

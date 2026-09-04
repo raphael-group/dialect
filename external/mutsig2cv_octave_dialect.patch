@@ -37,7 +37,7 @@ index 7e009d1..1eb77b4 100644
  Each input is decribed below.
 diff --git a/run_mutsig_persample.m b/run_mutsig_persample.m
 new file mode 100644
-index 0000000..af48256
+index 0000000..550a5f5
 --- /dev/null
 +++ b/run_mutsig_persample.m
 @@ -0,0 +1,37 @@
@@ -55,13 +55,13 @@ index 0000000..af48256
 +  error(['DIALECT requires maf, outdir, and sample_axis_file; refusing the ' ...
 +         'legacy mutation-derived patient axis']);
 +end
-+demand_file(sample_axis_file);
 +
 +here   = fileparts(mfilename('fullpath'));        % .../external/MutSig2CV_src
 +repo   = fileparts(fileparts(here));              % repo root
 +refdir = fullfile(repo, 'external', 'MutSig2CV', 'mutsig2cv', 'reference');
 +
 +addpath(genpath(fullfile(here, 'src')));
++demand_file(sample_axis_file);
 +javaaddpath(fullfile(refdir, 'FixedWidthBinary.jar'));
 +if exist('OCTAVE_VERSION', 'builtin')
 +  pkg load statistics    % binofit, binopdf, hygepdf, ... used throughout MutSig
@@ -79,7 +79,7 @@ index 0000000..af48256
 +fprintf('DIALECT: wrote %s/persample_lambda.f32\n', outdir);
 +end
 diff --git a/src/MutSig_2CV_v3_11_core.m b/src/MutSig_2CV_v3_11_core.m
-index b4b4433..68b0982 100755
+index b4b4433..8a4ba42 100755
 --- a/src/MutSig_2CV_v3_11_core.m
 +++ b/src/MutSig_2CV_v3_11_core.m
 @@ -23,8 +23,8 @@ demand_file(covariates_file);
@@ -274,7 +274,7 @@ index b4b4433..68b0982 100755
    end
    P0(isnan(P0))=1;
    P0(P0>1)=1;
-@@ -1105,8 +1172,28 @@ M.gene.q = calc_fdr_value(M.gene.pmax);
+@@ -1105,8 +1172,33 @@ M.gene.q = calc_fdr_value(M.gene.pmax);
  
  fprintf('%d genes with q<=0.1\n',sum(M.gene.q<=0.1));
  
@@ -299,6 +299,11 @@ index b4b4433..68b0982 100755
 +fclose(fid);
 +fprintf('[DIALECT] wrote persample_lambda.f32 %dx%dx%d\n', ...
 +        size(persample_lambda,1), size(persample_lambda,2), size(persample_lambda,3));
++
++% [DIALECT] The revision consumes only the validated per-sample rate bundle.
++% Avoid legacy result-table serialization, which is unrelated to BMR generation.
++G = struct();
++return;
 +
  % save categories file
  save_struct(M.categ,[output_dir '/mutcategs.txt']);

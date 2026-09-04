@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "contract": "focused-result-blind-null-calibration-v1",
+  "seed": 20260903,
+  "cells": {
+    "cohorts": [
+      "CHOL",
+      "LAML",
+      "PAAD",
+      "SKCM",
+      "UCEC"
+    ],
+    "providers": [
+      "cbase",
+      "dig",
+      "mutsig"
+    ]
+  },
+  "marginal_lrt": {
+    "pair_selection": "64-disjoint-pairs-spanning-the-K500-feature-rank-axis",
+    "replicates_per_cell": 1000,
+    "alphas": [
+      0.01,
+      0.05,
+      0.1
+    ],
+    "assessment": "one-sided-exact-binomial-inflation-test-with-bonferroni-0.05"
+  },
+  "complete_null_family": {
+    "top_k": 30,
+    "replicates_per_cell": 250,
+    "correction": "benjamini-hochberg",
+    "candidate_q_values": [
+      0.1,
+      0.2
+    ],
+    "assessment": "complete-null-Pr-R-positive-with-exact-binomial-intervals"
+  },
+  "reporting_candidates": {
+    "primary_q_threshold": 0.1,
+    "sensitivity_q_threshold": 0.2,
+    "thresholds_selected_from_observed_pairs": false,
+    "retain_chi_square_bh_only_without_detected_inflation": true,
+    "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof"
+  },
+  "resources": {
+    "max_jobs": 3,
+    "threads_per_job": 1,
+    "nice_increment": 10,
+    "overwrite_outputs": false
+  }
+}

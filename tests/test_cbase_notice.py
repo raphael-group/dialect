@@ -25,13 +25,13 @@ _RELEASE_FILES = {
         "d3721916eaffbef7ce138f703a219849780fbcc1171b6e8d6b3833d9fd51474c"
     ),
     "external/CBaSE/CBaSE_qvals_v1.2.py": (
-        "f626d9857db455eecc7b6093b9c23396d22aac92308a3475767871733bb154ff"
+        "c1f0eb723f71f7206d9abd76fe81168204b6673bc2c8cdf805b2c72c3e1e81cd"
     ),
     "external/CBaSE/cbase_cohort_size.py": (
         "381a91aa575c90868ec088b21267c9320a364e2b17ff7fcaeac50c1c527d1d69"
     ),
     "external/CBaSE/NOTICE": (
-        "ee27cf923bfa65f5a8f09720281d66307ba245e93776e595a0fdd2cc02b48139"
+        "b37c74f3f333fa3efdc5c81b72395cbada205e3fa427a03a5fabed2eb694fe80"
     ),
 }
 _OFFICIAL_REFERENCE_MEMBERS = {

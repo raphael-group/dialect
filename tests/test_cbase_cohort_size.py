@@ -438,6 +438,52 @@ def test_cbase_command_adds_named_size_only_when_explicit(
     assert "--n-samples" not in commands[1][1]
 
 
+def test_cbase_pmf_only_limits_qvals_to_observed_genes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cbase_input = tmp_path / "cbase_input.tsv"
+    output = tmp_path / "CBaSE_output"
+    commands = []
+    monkeypatch.setattr(
+        _cbase_run,
+        "convert_maf_to_cbase_input_file",
+        lambda *_args: cbase_input,
+    )
+
+    def fake_run(label, command):
+        commands.append((label, command))
+        if label == "CBaSE params":
+            output.mkdir(exist_ok=True)
+            pd.DataFrame({"gene": ["TP53", "KRAS", "TP53"]}).to_csv(
+                output / "kept_mutations.csv",
+                sep="\t",
+                index=False,
+            )
+            (output / "q_values.txt").write_text("stale\n", encoding="utf-8")
+
+    monkeypatch.setattr(_cbase_run, "_run_cbase_step", fake_run)
+
+    _cbase_run.generate_bmr_using_cbase(
+        "cohort.maf",
+        str(tmp_path),
+        "hg19",
+        "1e-100",
+        pmf_only=True,
+    )
+
+    assert not (output / "q_values.txt").exists()
+    assert (output / "observed_genes.txt").read_text(encoding="utf-8") == (
+        "KRAS\nTP53\n"
+    )
+    qvals_command = commands[1][1]
+    assert qvals_command[-3:] == [
+        "--pmf-only",
+        "--genes-file",
+        str(output / "observed_genes.txt"),
+    ]
+
+
 def test_end_to_end_runner_binds_axis_to_subprocess_and_count_generation(
     tmp_path,
     monkeypatch,

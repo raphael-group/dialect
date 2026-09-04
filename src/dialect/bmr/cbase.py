@@ -32,6 +32,7 @@ class CBaSEProvider:
         *,
         n_samples: int | None = None,
         sample_ids: Sequence[str] | str | Path | None = None,
+        pmf_only: bool = False,
     ) -> None:
         """Configure CBaSE's PMF cutoff and optional exact complete-cohort axis.
 
@@ -44,10 +45,13 @@ class CBaSEProvider:
                 one identifier per line. The generated count matrices are reindexed
                 to this axis. ``None`` preserves CBaSE's retained-mutation sample
                 inference; DIALECT uses that same inferred axis for its count rows.
+            pmf_only: Generate passenger-count PMFs for observed genes without
+                running CBaSE's separate simulated gene-selection q-value stage.
         """
         self.threshold = threshold
         self.n_samples = n_samples
         self.sample_ids = sample_ids
+        self.pmf_only = pmf_only
 
     def estimate(
         self,
@@ -57,13 +61,18 @@ class CBaSEProvider:
         reference: str = "hg19",
     ) -> BMRResult:
         """Run CBaSE on ``maf_path`` and return the background model."""
+        options = {
+            "n_samples": self.n_samples,
+            "sample_ids": self.sample_ids,
+        }
+        if self.pmf_only:
+            options["pmf_only"] = True
         generate_bmr_and_counts(
             maf_path,
             out_dir,
             reference,
             self.threshold,
-            n_samples=self.n_samples,
-            sample_ids=self.sample_ids,
+            **options,
         )
         return self.load(out_dir)
 

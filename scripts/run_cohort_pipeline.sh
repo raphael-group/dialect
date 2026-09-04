@@ -23,6 +23,16 @@ if [ "${PREPARE_ONLY+x}" = "x" ] && [ "$PREPARE_ONLY" != "1" ]; then
   echo "PREPARE_ONLY must be unset or exactly 1" >&2
   exit 64
 fi
+if [ "${DIALECT_FOCUSED_REVISION+x}" = "x" ] \
+  && [ "$DIALECT_FOCUSED_REVISION" != "1" ]; then
+  echo "DIALECT_FOCUSED_REVISION must be unset or exactly 1" >&2
+  exit 64
+fi
+if [ "${DIALECT_FOCUSED_REVISION:-}" = "1" ] \
+  && [ "${PREPARE_ONLY:-}" != "1" ]; then
+  echo "DIALECT_FOCUSED_REVISION requires PREPARE_ONLY=1" >&2
+  exit 64
+fi
 if [ "${PREPARE_ONLY:-}" = "1" ] && [ -n "${SKIP_MUTSIG:-}" ]; then
   echo "PREPARE_ONLY=1 forbids SKIP_MUTSIG" >&2
   exit 64
@@ -48,7 +58,8 @@ TOP_K="${TOP_K:-100}"
 if [ "$TOP_K" = "100" ]; then IDSUF=""; else IDSUF="_k${TOP_K}"; fi
 DIG_RESULTS="external/DIGDriver/run/Pancan.genes.results.txt"
 DEFAULT_PY="/opt/anaconda3/envs/dialect/bin/python"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   : "${DIALECT_PROVIDER_PYTHON:?missing provider Python authority}"
   : "${DIALECT_PROVIDER_PYTHON_SHA256:?missing provider Python SHA-256}"
   : "${DIALECT_PROVIDER_PYTHON_RUNTIME_SHA256:?missing provider Python runtime SHA-256}"
@@ -742,7 +753,8 @@ print(dialect_import["sha256"])
 ' "$DIALECT_PROVIDER_RUNTIME_AUTHORITY_FILE" "$REPO"
 }
 
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   : "${DIALECT_PROVIDER_NICE:?missing provider nice authority}"
   : "${DIALECT_PROVIDER_NICE_SHA256:?missing provider nice SHA-256}"
   : "${DIALECT_PROVIDER_CBASE_INPUTS_TREE_SHA256:?missing CBaSE input-tree authority}"
@@ -765,6 +777,7 @@ if ! DIALECT_SOURCE_SHA256="$(source_tree_sha256 "${REPO}/src/dialect")"; then
   exit 70
 fi
 if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ] \
   && [ "$DIALECT_SOURCE_SHA256" != "$DIALECT_PROVIDER_DIALECT_TREE_SHA256" ]; then
   echo "DIALECT source tree differs from provider authority" >&2
   exit 70
@@ -852,7 +865,8 @@ DIALECT_MODULE_PATH="${PY_IDENTITY[2]}"
 DIALECT_MODULE_SHA256="${PY_IDENTITY[3]}"
 PY_VERSION_ID="${PY_IDENTITY[4]}"
 PY_CORE_RUNTIME_SHA256="${PY_IDENTITY[5]}"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   DIALECT_MODULE_RELATIVE="${DIALECT_MODULE_PATH#${REPO}/}"
   [ "$DIALECT_MODULE_RELATIVE" = "$AUTHORIZED_DIALECT_RELATIVE" ] \
     && [ "$DIALECT_MODULE_SHA256" = "$AUTHORIZED_DIALECT_SHA256" ] || {
@@ -866,7 +880,8 @@ fi
   log "no exact sample axis at ${MUTSIG_SAMPLE_AXIS_FILE}; refusing mutation-derived cohort"
   exit 66
 }
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   [ "$PY_RESOLVED" = "$DIALECT_PROVIDER_PYTHON" ] || {
     echo "resolved Python differs from provider authority" >&2
     exit 70
@@ -925,12 +940,14 @@ fi
 PIPELINE_SHA256="$(sha256_file "${SCRIPT_DIR}/run_cohort_pipeline.sh")"
 MAF_SHA256="$(sha256_file "$MAF")"
 SAMPLE_AXIS_SHA256="$(sha256_file "$MUTSIG_SAMPLE_AXIS_FILE")"
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   CBASE_INPUTS_SHA256="$DIALECT_PROVIDER_CBASE_INPUTS_TREE_SHA256"
 else
   CBASE_INPUTS_SHA256="$(directory_files_sha256 "${REPO}/external/CBaSE")"
 fi
-if [ "${PREPARE_ONLY:-}" = "1" ]; then
+if [ "${PREPARE_ONLY:-}" = "1" ] \
+  && [ "${DIALECT_FOCUSED_REVISION:-}" != "1" ]; then
   PY_RUNTIME_SHA256="$DIALECT_PROVIDER_PYTHON_RUNTIME_SHA256"
 else
   PY_RUNTIME_SHA256="$PY_CORE_RUNTIME_SHA256"
@@ -963,8 +980,13 @@ if receipt_matches "$CBASE_RECEIPT" "$CBASE_INPUT_SHA256" "$CBASE_OUTPUT_SHA256"
 else
   log "CBaSE generate"
   remove_file "$CBASE_RECEIPT"
+  cbase_pmf_arg=()
+  if [ "${DIALECT_FOCUSED_REVISION:-}" = "1" ]; then
+    cbase_pmf_arg=(--cbase-pmf-only)
+  fi
   if ! run_dialect generate -m "$MAF" -o "${ROOT}/${C}" --bmr cbase -r hg19 \
-       --cbase-sample-axis "$MUTSIG_SAMPLE_AXIS_FILE" >>"$LOGF" 2>&1; then
+       --cbase-sample-axis "$MUTSIG_SAMPLE_AXIS_FILE" \
+       "${cbase_pmf_arg[@]}" >>"$LOGF" 2>&1; then
     log "STAGE-FAIL cbase"
     exit 74
   fi
