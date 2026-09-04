@@ -117,7 +117,7 @@ def _document_members(document_root: Path) -> list[Member]:
         msg = "Submission document root may not contain symlinks."
         raise ValueError(msg)
     relative_names = {path.relative_to(document_root).as_posix() for path in files}
-    if relative_names < REQUIRED_DOCUMENTS:
+    if not relative_names >= REQUIRED_DOCUMENTS:
         missing = sorted(REQUIRED_DOCUMENTS - relative_names)
         msg = f"Submission document root is missing required files: {missing}"
         raise ValueError(msg)

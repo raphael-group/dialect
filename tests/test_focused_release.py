@@ -59,6 +59,7 @@ def test_archive_verifier_rejects_payload_drift(tmp_path: Path) -> None:
 
 def test_document_plan_requires_final_submission_files(tmp_path: Path) -> None:
     (tmp_path / "manuscript.pdf").write_bytes(b"%PDF-manuscript")
+    (tmp_path / "optional_figure.tif").write_bytes(b"TIFF")
     with pytest.raises(ValueError, match="missing required files"):
         release._document_members(tmp_path)  # noqa: SLF001
 
