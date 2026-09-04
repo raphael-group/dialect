@@ -844,21 +844,6 @@ def build_report(  # noqa: PLR0913
         "burden_max",
         "high_burden_fraction",
     ]
-    call_columns = [
-        "cohort",
-        "mutsig_primary_me",
-        "mutsig_primary_co",
-        "cbase_primary_me",
-        "cbase_primary_co",
-        "dig_primary_me",
-        "dig_primary_co",
-        "mutsig_sensitivity_me",
-        "mutsig_sensitivity_co",
-        "cbase_sensitivity_me",
-        "cbase_sensitivity_co",
-        "dig_sensitivity_me",
-        "dig_sensitivity_co",
-    ]
     burden_labels = [
         "Cohort",
         "Tumors",
@@ -871,35 +856,38 @@ def build_report(  # noqa: PLR0913
         "Max",
         "High fraction",
     ]
-    call_labels = [
-        "Cohort",
-        "MutSig ME",
-        "MutSig CO",
-        "CBaSE ME",
-        "CBaSE CO",
-        "DIG ME",
-        "DIG CO",
-        "MutSig ME",
-        "MutSig CO",
-        "CBaSE ME",
-        "CBaSE CO",
-        "DIG ME",
-        "DIG CO",
-    ]
     burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
-    call_table = summary.loc[:, call_columns].set_axis(call_labels, axis=1)
-    call_table.columns = pd.MultiIndex.from_arrays(
-        [
-            ["", *("q <= 0.10" for _ in range(6)), *("q <= 0.20" for _ in range(6))],
-            call_labels,
-        ],
-    )
+    call_rows = [
+        {
+            "Cohort": row["cohort"],
+            "Background": PROVIDER_LABELS[provider],
+            "q <= 0.10 total": row[f"{provider}_primary_total"],
+            "q <= 0.10 ME": row[f"{provider}_primary_me"],
+            "q <= 0.10 CO": row[f"{provider}_primary_co"],
+            "q <= 0.10 direction unavailable": (
+                row[f"{provider}_primary_total"]
+                - row[f"{provider}_primary_me"]
+                - row[f"{provider}_primary_co"]
+            ),
+            "q <= 0.20 total": row[f"{provider}_sensitivity_total"],
+            "q <= 0.20 ME": row[f"{provider}_sensitivity_me"],
+            "q <= 0.20 CO": row[f"{provider}_sensitivity_co"],
+            "q <= 0.20 direction unavailable": (
+                row[f"{provider}_sensitivity_total"]
+                - row[f"{provider}_sensitivity_me"]
+                - row[f"{provider}_sensitivity_co"]
+            ),
+        }
+        for row in summary.to_dict(orient="records")
+        for provider in core.BMRS
+    ]
+    call_table = pd.DataFrame(call_rows)
     latex = (
         "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
         + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
         + "\n\\medskip\n"
         + "\\textbf{B. Significant pairs by background and fitted direction}\\par\n"
-        + call_table.to_latex(index=False, escape=True, multicolumn_format="c")
+        + call_table.to_latex(index=False, escape=True, longtable=True)
     )
     (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
     figure_path = staging / "figure6.pdf"
