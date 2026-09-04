@@ -35,7 +35,11 @@ MANIFEST_NAME: Final = "release_manifest.json"
 SOURCE_RECORD_NAME: Final = "provenance/source_commit.json"
 README_NAME: Final = "README.md"
 REQUIRED_DOCUMENTS: Final = {
+    "manuscript.tex",
     "manuscript.pdf",
+    "marked_manuscript.pdf",
+    "response_to_reviewers.pdf",
+    "supporting_information.tex",
     "supporting_information.pdf",
     "rebuttal.md",
 }

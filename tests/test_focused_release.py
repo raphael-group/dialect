@@ -61,3 +61,14 @@ def test_document_plan_requires_final_submission_files(tmp_path: Path) -> None:
     (tmp_path / "manuscript.pdf").write_bytes(b"%PDF-manuscript")
     with pytest.raises(ValueError, match="missing required files"):
         release._document_members(tmp_path)  # noqa: SLF001
+
+
+def test_document_plan_includes_exact_decision_letter_artifacts(tmp_path: Path) -> None:
+    for name in release.REQUIRED_DOCUMENTS:
+        (tmp_path / name).write_text(f"final {name}\n", encoding="utf-8")
+
+    members = release._document_members(tmp_path)  # noqa: SLF001
+
+    assert {member.name for member in members} == {
+        f"documents/{name}" for name in release.REQUIRED_DOCUMENTS
+    }
