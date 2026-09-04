@@ -316,9 +316,48 @@ def test_fit_diagnostics_cover_every_certificate(
     ]
 
 
-def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
+def test_report_validator_binds_inventory_and_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = tmp_path / "report"
     root.mkdir()
+    run_root = tmp_path / "run"
+    provider_root = tmp_path / "providers"
+    postprocess_root = tmp_path / "postprocess"
+    calibration_root = tmp_path / "calibration"
+    for external_root in (
+        run_root,
+        provider_root,
+        postprocess_root,
+        calibration_root,
+    ):
+        external_root.mkdir()
+    external_paths = {
+        "run_completion": run_root / "completion_manifest.json",
+        "provider_manifest": provider_root / "provider_manifest.json",
+        "postprocess_manifest": (
+            postprocess_root / reporting.postprocess.ROOT_MANIFEST_NAME
+        ),
+        "calibration_summary": (
+            calibration_root / reporting.calibration.SUMMARY_NAME
+        ),
+    }
+    for path in external_paths.values():
+        path.write_text("{}\n", encoding="utf-8")
+    rule_path = tmp_path / "reporting_rule.json"
+    rule_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        reporting,
+        "_require_reportable_rule",
+        lambda **_kwargs: {"inference_status": "reportable"},
+    )
+    monkeypatch.setattr(reporting, "validate_provider_root", lambda *_args: {})
+    monkeypatch.setattr(
+        reporting.postprocess,
+        "validate_derived_root",
+        lambda *_args, **_kwargs: {},
+    )
     tumors = [reporting.EXPECTED_TUMOR_COUNT - 31, *([1] * 31)]
     pd.DataFrame(
         {
@@ -443,11 +482,27 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         "sample_level_rows_included": False,
         "burden_source_policy": "fixed-aggregate-bins-and-cohort-summaries-only",
         "inputs": {
-            "run_completion": {},
-            "provider_manifest": {},
-            "postprocess_manifest": {},
-            "calibration_summary": {},
-            "reporting_rule": {},
+            "run_completion": reporting._file_record(  # noqa: SLF001
+                external_paths["run_completion"],
+                relative_to=run_root,
+            ),
+            "provider_manifest": reporting._file_record(  # noqa: SLF001
+                external_paths["provider_manifest"],
+                relative_to=provider_root,
+            ),
+            "postprocess_manifest": reporting._file_record(  # noqa: SLF001
+                external_paths["postprocess_manifest"],
+                relative_to=postprocess_root,
+            ),
+            "calibration_summary": reporting._file_record(  # noqa: SLF001
+                external_paths["calibration_summary"],
+                relative_to=calibration_root,
+            ),
+            "reporting_rule": {
+                "path": rule_path.name,
+                "bytes": rule_path.stat().st_size,
+                "sha256": reporting._sha256(rule_path),  # noqa: SLF001
+            },
         },
         "high_burden_definition": {
             "pooled_tumor_count": reporting.EXPECTED_TUMOR_COUNT,
@@ -460,8 +515,17 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     (root / "report_manifest.json").write_bytes(
         reporting._canonical_json(manifest) + b"\n",  # noqa: SLF001
     )
-    assert reporting.validate_report(root)["contract"] == reporting.REPORT_CONTRACT
+    validate_kwargs = {
+        "run_root": run_root,
+        "provider_root": provider_root,
+        "postprocess_root": postprocess_root,
+        "calibration_root": calibration_root,
+        "rule_path": rule_path,
+    }
+    assert reporting.validate_report(root, **validate_kwargs)["contract"] == (
+        reporting.REPORT_CONTRACT
+    )
 
     (root / "figure6.pdf").write_bytes(b"%PDF-tampered\n")
     with pytest.raises(ValueError, match="output changed"):
-        reporting.validate_report(root)
+        reporting.validate_report(root, **validate_kwargs)

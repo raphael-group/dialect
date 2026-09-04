@@ -55,6 +55,37 @@ def _write_once(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def load_calibration_gate(calibration_root: Path) -> dict[str, object]:
+    """Read only the calibration summary needed to enforce the access gate.
+
+    This deliberately precedes the complete calibration validator: the latter
+    verifies raw fit receipts and may therefore read pairwise fit outputs.  A
+    negative, missing, or malformed gate must stop before that can happen.
+    """
+    summary_path = calibration_root / calibration.SUMMARY_NAME
+    if not summary_path.is_file():
+        msg = f"Calibration summary is missing: {summary_path}"
+        raise FileNotFoundError(msg)
+    if summary_path.is_symlink():
+        msg = f"Calibration summary is unsafe: {summary_path}"
+        raise ValueError(msg)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(summary, dict):
+        msg = "Calibration summary must be a JSON object."
+        raise TypeError(msg)
+    calibration_gate_pass(summary)
+    return summary
+
+
+def calibration_gate_pass(summary: dict[str, object]) -> bool:
+    """Return an exact boolean gate decision or fail closed."""
+    gate_pass = summary.get("overall_gate_pass")
+    if not isinstance(gate_pass, bool):
+        msg = "Calibration summary lacks the affirmative overall gate decision."
+        raise TypeError(msg)
+    return gate_pass
+
+
 def freeze_rule(
     *,
     calibration_root: Path,
@@ -71,20 +102,17 @@ def freeze_rule(
     """
     config = _load_config()
     calibration_config = calibration._load_config()  # noqa: SLF001
-    summary = calibration.validate_summary(
-        calibration_root,
-        run_root=run_root,
-        provider_root=provider_root,
-    )
-    postprocess.validate_derived_root(
-        postprocess_root,
-        TCGA_COHORTS,
-        run_root=run_root,
-    )
-    gate_pass = summary.get("overall_gate_pass")
-    if not isinstance(gate_pass, bool):
-        msg = "Calibration summary lacks the affirmative overall gate decision."
-        raise TypeError(msg)
+    summary = load_calibration_gate(calibration_root)
+    gate_pass = calibration_gate_pass(summary)
+    if gate_pass:
+        summary = calibration.validate_summary(
+            calibration_root,
+            run_root=run_root,
+            provider_root=provider_root,
+        )
+        if calibration_gate_pass(summary) is not True:
+            msg = "Calibration gate changed during complete validation."
+            raise RuntimeError(msg)
     if summary.get("reporting_rule_selected") is not False:
         msg = "Calibration must remain result-blind and must not select a rule."
         raise ValueError(msg)
@@ -115,6 +143,12 @@ def freeze_rule(
     if any(summary.get(key) != value for key, value in expected_summary.items()):
         msg = "Calibration summary violates the prespecified reporting candidates."
         raise ValueError(msg)
+    if gate_pass:
+        postprocess.validate_derived_root(
+            postprocess_root,
+            TCGA_COHORTS,
+            run_root=run_root,
+        )
     inference_status = REPORTABLE_STATUS if gate_pass else WITHHELD_STATUS
     rule = {
         "schema_version": SCHEMA_VERSION,

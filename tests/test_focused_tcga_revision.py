@@ -611,7 +611,23 @@ def test_reporting_rule_freezes_prespecified_candidates(
     postprocess_root.mkdir()
     run_root.mkdir()
     provider_root.mkdir()
-    (calibration_root / calibration.SUMMARY_NAME).write_text("{}\n", encoding="utf-8")
+    summary = {
+        "overall_gate_pass": True,
+        "reporting_rule_selected": False,
+        "gate_provider": "mutsig",
+        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_candidate": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_candidate": 0.01,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+    }
+    (calibration_root / calibration.SUMMARY_NAME).write_text(
+        json.dumps(summary),
+        encoding="utf-8",
+    )
     (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
         "{}\n",
         encoding="utf-8",
@@ -619,19 +635,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
     monkeypatch.setattr(
         calibration,
         "validate_summary",
-        lambda *_args, **_kwargs: {
-            "overall_gate_pass": True,
-            "reporting_rule_selected": False,
-            "gate_provider": "mutsig",
-            "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
-            "primary_adjustment": "benjamini-yekutieli",
-            "primary_q_candidate": 0.01,
-            "sensitivity_adjustment": "benjamini-hochberg",
-            "sensitivity_q_candidate": 0.01,
-            "effective_p_policy": (
-                "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
-            ),
-        },
+        lambda *_args, **_kwargs: summary,
     )
     monkeypatch.setattr(
         postprocess,
@@ -666,3 +670,113 @@ def test_reporting_rule_freezes_prespecified_candidates(
         == "retain-nondirectional-rejection-exclude-from-me-co-lists"
     )
     assert rule["thresholds_selected_from_observed_pairs"] is False
+
+
+def test_failed_gate_freezes_withheld_rule_without_association_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calibration_root = tmp_path / "calibration"
+    postprocess_root = tmp_path / "postprocess"
+    calibration_root.mkdir()
+    postprocess_root.mkdir()
+    summary = {
+        "overall_gate_pass": False,
+        "reporting_rule_selected": False,
+        "gate_provider": "mutsig",
+        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_candidate": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_candidate": 0.01,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+    }
+    (calibration_root / calibration.SUMMARY_NAME).write_text(
+        json.dumps(summary),
+        encoding="utf-8",
+    )
+    (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+
+    def fail_if_association_accessed(*_args, **_kwargs):
+        msg = "association table was accessed"
+        raise AssertionError(msg)
+
+    path_type = type(tmp_path)
+    original_open = path_type.open
+
+    def guarded_open(path, *args, **kwargs):
+        if path.name in {
+            postprocess.RESULT_NAME,
+            "pairwise_interaction_results.csv",
+        }:
+            msg = f"association file was opened: {path}"
+            raise AssertionError(msg)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", guarded_open)
+    monkeypatch.setattr(calibration, "validate_summary", fail_if_association_accessed)
+    monkeypatch.setattr(
+        postprocess,
+        "validate_derived_root",
+        fail_if_association_accessed,
+    )
+    output = tmp_path / "withheld-rule.json"
+    reporting_rule.freeze_rule(
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        run_root=tmp_path / "run",
+        provider_root=tmp_path / "providers",
+        output_path=output,
+    )
+
+    rule = json.loads(output.read_text(encoding="utf-8"))
+    assert rule["calibration_gate"]["overall_gate_pass"] is False
+    assert rule["inference_status"] == reporting_rule.WITHHELD_STATUS
+
+
+@pytest.mark.parametrize(
+    ("summary", "write_summary", "error"),
+    [
+        ({}, True, TypeError),
+        ({"overall_gate_pass": "false"}, True, TypeError),
+        ({}, False, FileNotFoundError),
+    ],
+)
+def test_freeze_rejects_missing_or_malformed_gate_before_association_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    summary: dict[str, object],
+    write_summary: bool,  # noqa: FBT001
+    error: type[Exception],
+) -> None:
+    calibration_root = tmp_path / "calibration"
+    calibration_root.mkdir()
+    if write_summary:
+        (calibration_root / calibration.SUMMARY_NAME).write_text(
+            json.dumps(summary),
+            encoding="utf-8",
+        )
+
+    def fail_if_association_accessed(*_args, **_kwargs):
+        msg = "association table was accessed"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(calibration, "validate_summary", fail_if_association_accessed)
+    monkeypatch.setattr(
+        postprocess,
+        "validate_derived_root",
+        fail_if_association_accessed,
+    )
+    with pytest.raises(error):
+        reporting_rule.freeze_rule(
+            calibration_root=calibration_root,
+            postprocess_root=tmp_path / "postprocess",
+            run_root=tmp_path / "run",
+            provider_root=tmp_path / "providers",
+            output_path=tmp_path / "reporting-rule.json",
+        )

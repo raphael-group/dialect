@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 
 from analysis import calibrate_tcga_revision_focused as calibration
-from analysis import freeze_tcga_revision_reporting_rule as rule_module
 from analysis import postprocess_tcga_revision_focused as postprocess
 from analysis import report_tcga_revision_focused as reporting
 from analysis.prepare_tcga_revision_focused import _parse_cohorts
@@ -207,24 +206,18 @@ def diagnose(  # noqa: PLR0913
     cohorts: Sequence[str],
 ) -> Path:
     """Write fixed-rule counts, directional overlap, and focal audit tables."""
+    rule = reporting._require_reportable_rule(  # noqa: SLF001
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
+        run_root=run_root,
+        provider_root=provider_root,
+        action="diagnostics",
+    )
     source_manifest = postprocess_root / postprocess.ROOT_MANIFEST_NAME
     if not source_manifest.is_file():
         msg = "Focused postprocess manifest is missing."
         raise FileNotFoundError(msg)
-    calibration.validate_summary(
-        calibration_root,
-        run_root=run_root,
-        provider_root=provider_root,
-    )
-    rule = reporting._load_rule(  # noqa: SLF001
-        rule_path,
-        calibration_root,
-        postprocess_root,
-    )
-    if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
-        reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
-        msg = f"Association-level diagnostics are withheld: {reason}"
-        raise RuntimeError(msg)
     postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     if output_root.exists() or output_root.is_symlink():
         msg = f"Refusing to overwrite diagnostic root: {output_root}"

@@ -42,6 +42,10 @@ SOURCE_RECORD_NAME: Final = "provenance/source_boundary.json"
 FIT_ATTESTATION_MEMBER: Final = "provenance/fit_execution_attestation.json"
 DOCUMENT_MANIFEST_NAME: Final = "document_manifest.json"
 README_NAME: Final = "README.md"
+CALIBRATION_SUMMARY_MEMBER: Final = (
+    "results/calibration/calibration_summary.json"
+)
+REPORTING_RULE_MEMBER: Final = "results/reporting_rule.json"
 REQUIRED_DOCUMENTS: Final = {
     "manuscript.tex",
     "manuscript.pdf",
@@ -312,6 +316,14 @@ def _validate_upstream(  # noqa: PLR0913
     release_commit: str,
     runtime_executable: Path,
 ) -> dict[str, Any]:
+    reporting._require_reportable_rule(  # noqa: SLF001
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
+        run_root=run_root,
+        provider_root=provider_root,
+        action="release validation",
+    )
     attestation = provenance.validate_fit_attestation(
         fit_attestation_path,
         repository_root=repository_root,
@@ -327,15 +339,6 @@ def _validate_upstream(  # noqa: PLR0913
         postprocess.validate_derived_root,
         postprocess_root,
         TCGA_COHORTS,
-        run_root=run_root,
-        provider_root=provider_root,
-        input_root=input_root,
-        fit_attestation_path=fit_attestation_path,
-        fit_attestation=fit_attestation_path,
-    )
-    _call_validator(
-        calibration.validate_summary,
-        calibration_root,
         run_root=run_root,
         provider_root=provider_root,
         input_root=input_root,
@@ -393,6 +396,14 @@ def _result_members(  # noqa: PLR0913
     rule_path: Path,
     fit_attestation_path: Path,
 ) -> list[Member]:
+    reporting._require_reportable_rule(  # noqa: SLF001
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
+        run_root=run_root,
+        provider_root=provider_root,
+        action="release assembly",
+    )
     members = [
         _file_member(
             "provenance/config/tcga_revision_config.json",
@@ -681,6 +692,88 @@ def _json_member(archive: tarfile.TarFile, name: str) -> dict[str, Any]:
         msg = f"Release JSON member is not an object: {name}"
         raise TypeError(msg)
     return value
+
+
+def _verified_json_member(
+    archive: tarfile.TarFile,
+    name: str,
+    records: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Read one bounded JSON member only after verifying its manifest digest."""
+    info = archive.getmember(name)
+    if info.size > _JSON_LIMIT_BYTES:
+        msg = f"Release JSON member is unexpectedly large: {name}"
+        raise ValueError(msg)
+    record = records.get(name)
+    if not isinstance(record, dict):
+        msg = f"Release manifest omits gate evidence: {name}"
+        raise TypeError(msg)
+    handle = archive.extractfile(info)
+    if handle is None:
+        msg = f"Release JSON member cannot be read: {name}"
+        raise ValueError(msg)
+    content = handle.read()
+    if (
+        record.get("bytes") != len(content)
+        or record.get("sha256") != hashlib.sha256(content).hexdigest()
+    ):
+        msg = f"Release member digest differs: {name}"
+        raise ValueError(msg)
+    value = json.loads(content.decode("utf-8"))
+    if not isinstance(value, dict):
+        msg = f"Release JSON member is not an object: {name}"
+        raise TypeError(msg)
+    return value
+
+
+def _require_embedded_reportable_gate(
+    archive: tarfile.TarFile,
+    records: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Reject a withheld archive before opening any association result member."""
+    summary = _verified_json_member(
+        archive,
+        CALIBRATION_SUMMARY_MEMBER,
+        records,
+    )
+    summary_gate = summary.get("overall_gate_pass")
+    if not isinstance(summary_gate, bool):
+        msg = "Archived calibration summary lacks an exact boolean gate."
+        raise TypeError(msg)
+    if not summary_gate:
+        msg = "Association-level archive verification is withheld: gate failed."
+        raise RuntimeError(msg)
+
+    rule = _verified_json_member(archive, REPORTING_RULE_MEMBER, records)
+    rule_gate = rule.get("calibration_gate")
+    if not isinstance(rule_gate, dict):
+        msg = "Archived reporting rule lacks a calibration gate object."
+        raise TypeError(msg)
+    rule_gate_pass = rule_gate.get("overall_gate_pass")
+    if not isinstance(rule_gate_pass, bool):
+        msg = "Archived reporting rule lacks an exact boolean calibration gate."
+        raise TypeError(msg)
+    if not rule_gate_pass:
+        msg = "Association-level archive verification is withheld by the rule."
+        raise RuntimeError(msg)
+    if rule.get("inference_status") != rule_module.REPORTABLE_STATUS:
+        msg = "Association-level archive verification requires a reportable rule."
+        raise RuntimeError(msg)
+
+    calibration_binding = rule.get("calibration_summary")
+    if isinstance(calibration_binding, dict):
+        _require_record(
+            calibration_binding,
+            records,
+            CALIBRATION_SUMMARY_MEMBER,
+            label="gate rule to calibration",
+        )
+    elif (
+        rule.get("calibration_summary_sha256")
+        != records[CALIBRATION_SUMMARY_MEMBER].get("sha256")
+    ):
+        msg = "Archived reporting gate is not bound to calibration."
+        raise ValueError(msg)
 
 
 def _assert_aggregate_csv_header(archive: tarfile.TarFile, name: str) -> None:
@@ -1403,6 +1496,7 @@ def verify_archive(path: Path) -> dict[str, Any]:
         ):
             msg = "Release manifest does not cover the exact payload."
             raise ValueError(msg)
+        _require_embedded_reportable_gate(archive, records)
         for name in sorted(payload_names):
             handle = archive.extractfile(name)
             if handle is None:

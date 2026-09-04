@@ -18,6 +18,25 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _guard_association_file_access(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_path: Path,
+) -> None:
+    path_type = type(sample_path)
+    original_open = path_type.open
+
+    def guarded_open(path, *args, **kwargs):
+        if path.name in {
+            postprocess.RESULT_NAME,
+            "pairwise_interaction_results.csv",
+        }:
+            msg = f"association file was opened: {path}"
+            raise AssertionError(msg)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", guarded_open)
+
+
 def test_by_and_bh_are_explicit_complete_family_adjustments() -> None:
     p_values = np.asarray([0.01, 0.04, 0.03, 0.002], dtype=np.float64)
 
@@ -264,85 +283,149 @@ def test_provider_reader_rejects_pair_axis_drift_even_with_updated_receipt(
         postprocess._read_provider(run_root, "TEST", "cbase")  # noqa: SLF001
 
 
-def test_report_builder_stops_before_association_reads_for_withheld_rule(
+@pytest.mark.parametrize(
+    ("gate_value", "write_summary", "error", "message"),
+    [
+        (False, True, RuntimeError, "reporting is withheld"),
+        (None, False, FileNotFoundError, "Calibration summary is missing"),
+        ("false", True, TypeError, "affirmative overall gate decision"),
+    ],
+)
+def test_report_builder_stops_before_association_reads_for_closed_gate(  # noqa: PLR0913
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    gate_value: object,
+    write_summary: bool,  # noqa: FBT001
+    error: type[Exception],
+    message: str,
 ) -> None:
+    _guard_association_file_access(monkeypatch, tmp_path)
+    calibration_root = tmp_path / "calibration"
+    calibration_root.mkdir()
+    if write_summary:
+        (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": gate_value}),
+            encoding="utf-8",
+        )
+
     def fail_if_read(*_args, **_kwargs):
         msg = "association values were read"
         raise AssertionError(msg)
 
     monkeypatch.setattr(reporting, "validate_provider_root", fail_if_read)
     monkeypatch.setattr(reporting.postprocess, "validate_derived_root", fail_if_read)
-    monkeypatch.setattr(
-        reporting.calibration,
-        "validate_summary",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        reporting,
-        "_load_rule",
-        lambda *_args: {
-            "inference_status": reporting.rule_module.WITHHELD_STATUS,
-            "withheld_reason": "prespecified-gate-failed",
-        },
-    )
-
+    monkeypatch.setattr(reporting.calibration, "validate_summary", fail_if_read)
+    monkeypatch.setattr(reporting, "_load_rule", fail_if_read)
     monkeypatch.setattr(reporting, "_burden_values", fail_if_read)
     monkeypatch.setattr(reporting, "_read_inference", fail_if_read)
 
-    with pytest.raises(RuntimeError, match="reporting is withheld"):
+    with pytest.raises(error, match=message):
         reporting.build_report(
             run_root=tmp_path / "run",
             provider_root=tmp_path / "providers",
             postprocess_root=tmp_path / "postprocess",
-            calibration_root=tmp_path / "calibration",
+            calibration_root=calibration_root,
             rule_path=tmp_path / "rule.json",
             output_root=tmp_path / "report",
         )
 
 
-def test_diagnostics_stop_before_association_reads_for_withheld_rule(
+@pytest.mark.parametrize(
+    ("gate_value", "write_summary", "error", "message"),
+    [
+        (False, True, RuntimeError, "diagnostics is withheld"),
+        (None, False, FileNotFoundError, "Calibration summary is missing"),
+        ("false", True, TypeError, "affirmative overall gate decision"),
+    ],
+)
+def test_diagnostics_stop_before_association_reads_for_closed_gate(  # noqa: PLR0913
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    gate_value: object,
+    write_summary: bool,  # noqa: FBT001
+    error: type[Exception],
+    message: str,
 ) -> None:
+    _guard_association_file_access(monkeypatch, tmp_path)
     postprocess_root = tmp_path / "postprocess"
-    postprocess_root.mkdir()
-    (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
-        "{}\n",
-        encoding="utf-8",
-    )
+    calibration_root = tmp_path / "calibration"
+    calibration_root.mkdir()
+    if write_summary:
+        (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": gate_value}),
+            encoding="utf-8",
+        )
 
     def fail_if_read(*_args, **_kwargs):
         msg = "association values were read"
         raise AssertionError(msg)
 
     monkeypatch.setattr(diagnosis.postprocess, "validate_derived_root", fail_if_read)
-    monkeypatch.setattr(
-        diagnosis.calibration,
-        "validate_summary",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        diagnosis.reporting,
-        "_load_rule",
-        lambda *_args: {
-            "inference_status": diagnosis.rule_module.WITHHELD_STATUS,
-            "withheld_reason": "prespecified-gate-failed",
-        },
-    )
+    monkeypatch.setattr(diagnosis.calibration, "validate_summary", fail_if_read)
+    monkeypatch.setattr(diagnosis.reporting, "_load_rule", fail_if_read)
     monkeypatch.setattr(diagnosis.reporting, "_read_inference", fail_if_read)
 
-    with pytest.raises(RuntimeError, match="diagnostics are withheld"):
+    with pytest.raises(error, match=message):
         diagnosis.diagnose(
             run_root=tmp_path / "run",
             provider_root=tmp_path / "providers",
             postprocess_root=postprocess_root,
-            calibration_root=tmp_path / "calibration",
+            calibration_root=calibration_root,
             rule_path=tmp_path / "rule.json",
             output_root=tmp_path / "diagnostics",
             cohorts=("CHOL",),
         )
+
+
+@pytest.mark.parametrize(
+    ("gate_value", "write_summary", "error"),
+    [
+        (False, True, RuntimeError),
+        (None, False, FileNotFoundError),
+        ({"not": "a boolean"}, True, TypeError),
+    ],
+)
+def test_report_validator_checks_gate_before_report_or_association_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gate_value: object,
+    write_summary: bool,  # noqa: FBT001
+    error: type[Exception],
+) -> None:
+    _guard_association_file_access(monkeypatch, tmp_path)
+    calibration_root = tmp_path / "calibration"
+    calibration_root.mkdir()
+    if write_summary:
+        (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": gate_value}),
+            encoding="utf-8",
+        )
+
+    def fail_if_read(*_args, **_kwargs):
+        msg = "association values were read"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(reporting.calibration, "validate_summary", fail_if_read)
+    monkeypatch.setattr(reporting, "_load_rule", fail_if_read)
+    monkeypatch.setattr(reporting, "validate_provider_root", fail_if_read)
+    monkeypatch.setattr(reporting.postprocess, "validate_derived_root", fail_if_read)
+
+    with pytest.raises(error):
+        reporting.validate_report(
+            tmp_path / "report",
+            run_root=tmp_path / "run",
+            provider_root=tmp_path / "providers",
+            postprocess_root=tmp_path / "postprocess",
+            calibration_root=calibration_root,
+            rule_path=tmp_path / "rule.json",
+        )
+
+
+def test_report_validator_requires_gate_inputs_before_report_access(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="required before report access"):
+        reporting.validate_report(tmp_path / "report")
 
 
 def test_labels_are_derived_from_named_adjustment() -> None:

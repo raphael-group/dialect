@@ -175,6 +175,65 @@ def _load_rule(
     return rule
 
 
+def _require_reportable_rule(  # noqa: PLR0913
+    *,
+    calibration_root: Path,
+    postprocess_root: Path,
+    rule_path: Path,
+    run_root: Path,
+    provider_root: Path,
+    action: str,
+) -> dict[str, Any]:
+    """Validate the affirmative gate before any association-capable validator."""
+    gate_summary = rule_module.load_calibration_gate(calibration_root)
+    if not rule_module.calibration_gate_pass(gate_summary):
+        msg = f"Association-level {action} is withheld: calibration gate failed."
+        raise RuntimeError(msg)
+
+    if not rule_path.is_file():
+        msg = f"Frozen reporting rule is missing: {rule_path}"
+        raise FileNotFoundError(msg)
+    if rule_path.is_symlink():
+        msg = f"Frozen reporting rule is unsafe: {rule_path}"
+        raise ValueError(msg)
+    rule_preview = json.loads(rule_path.read_text(encoding="utf-8"))
+    if not isinstance(rule_preview, dict):
+        msg = "Frozen reporting rule must be a JSON object."
+        raise TypeError(msg)
+    preview_gate = rule_preview.get("calibration_gate")
+    if not isinstance(preview_gate, dict):
+        msg = "Frozen reporting rule lacks a calibration gate object."
+        raise TypeError(msg)
+    preview_gate_pass = preview_gate.get("overall_gate_pass")
+    if not isinstance(preview_gate_pass, bool):
+        msg = "Frozen reporting rule lacks an exact boolean calibration gate."
+        raise TypeError(msg)
+    if not preview_gate_pass:
+        reason = rule_preview.get(
+            "withheld_reason",
+            "prespecified-calibration-gate-failure",
+        )
+        msg = f"Association-level {action} is withheld: {reason}"
+        raise RuntimeError(msg)
+    if rule_preview.get("inference_status") != rule_module.REPORTABLE_STATUS:
+        msg = f"Association-level {action} is withheld: rule is not reportable."
+        raise RuntimeError(msg)
+
+    validated_summary = calibration.validate_summary(
+        calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+    )
+    if rule_module.calibration_gate_pass(validated_summary) is not True:
+        msg = "Calibration gate changed during complete validation."
+        raise RuntimeError(msg)
+    rule = _load_rule(rule_path, calibration_root, postprocess_root)
+    if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
+        msg = f"Association-level {action} is withheld: rule is not reportable."
+        raise RuntimeError(msg)
+    return rule
+
+
 def _q_column(provider: str, adjustment: str) -> str:
     """Return the explicit provider q-value column for one named adjustment."""
     try:
@@ -998,11 +1057,17 @@ def validate_report(  # noqa: PLR0913
         calibration_root,
         rule_path,
     )
-    if any(path is not None for path in external_inputs) and not all(
-        path is not None for path in external_inputs
-    ):
-        msg = "All external reporting inputs must be supplied together."
+    if not all(path is not None for path in external_inputs):
+        msg = "All external reporting inputs are required before report access."
         raise ValueError(msg)
+    _require_reportable_rule(
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
+        run_root=run_root,
+        provider_root=provider_root,
+        action="report validation",
+    )
     manifest_path = output_root / "report_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_outputs = {
@@ -1062,52 +1127,42 @@ def validate_report(  # noqa: PLR0913
         ):
             msg = f"Focused reporting output changed: {name}"
             raise ValueError(msg)
-    if run_root is not None:
-        calibration.validate_summary(
-            calibration_root,
-            run_root=run_root,
-            provider_root=provider_root,
-        )
-        rule = _load_rule(rule_path, calibration_root, postprocess_root)
-        if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
-            msg = "A withheld reporting rule cannot validate association-level outputs."
-            raise RuntimeError(msg)
-        validate_provider_root(provider_root, TCGA_COHORTS)
-        postprocess.validate_derived_root(
+    validate_provider_root(provider_root, TCGA_COHORTS)
+    postprocess.validate_derived_root(
+        postprocess_root,
+        TCGA_COHORTS,
+        run_root=run_root,
+    )
+    input_paths = {
+        "run_completion": (
+            run_root / "completion_manifest.json",
+            run_root,
+        ),
+        "provider_manifest": (
+            provider_root / "provider_manifest.json",
+            provider_root,
+        ),
+        "postprocess_manifest": (
+            postprocess_root / postprocess.ROOT_MANIFEST_NAME,
             postprocess_root,
-            TCGA_COHORTS,
-            run_root=run_root,
-        )
-        input_paths = {
-            "run_completion": (
-                run_root / "completion_manifest.json",
-                run_root,
-            ),
-            "provider_manifest": (
-                provider_root / "provider_manifest.json",
-                provider_root,
-            ),
-            "postprocess_manifest": (
-                postprocess_root / postprocess.ROOT_MANIFEST_NAME,
-                postprocess_root,
-            ),
-            "calibration_summary": (
-                calibration_root / calibration.SUMMARY_NAME,
-                calibration_root,
-            ),
-        }
-        for name, (path, root) in input_paths.items():
-            if manifest["inputs"][name] != _file_record(path, relative_to=root):
-                msg = f"Focused report is bound to a different input: {name}"
-                raise ValueError(msg)
-        expected_rule = {
-            "path": rule_path.name,
-            "bytes": rule_path.stat().st_size,
-            "sha256": _sha256(rule_path),
-        }
-        if manifest["inputs"]["reporting_rule"] != expected_rule:
-            msg = "Focused report is bound to a different reporting rule."
+        ),
+        "calibration_summary": (
+            calibration_root / calibration.SUMMARY_NAME,
+            calibration_root,
+        ),
+    }
+    for name, (path, root) in input_paths.items():
+        if manifest["inputs"][name] != _file_record(path, relative_to=root):
+            msg = f"Focused report is bound to a different input: {name}"
             raise ValueError(msg)
+    expected_rule = {
+        "path": rule_path.name,
+        "bytes": rule_path.stat().st_size,
+        "sha256": _sha256(rule_path),
+    }
+    if manifest["inputs"]["reporting_rule"] != expected_rule:
+        msg = "Focused report is bound to a different reporting rule."
+        raise ValueError(msg)
     summary = pd.read_csv(output_root / "table_s5.csv")
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
@@ -1242,16 +1297,14 @@ def build_report(  # noqa: PLR0913
 ) -> Path:
     """Build all result-dependent reporting artifacts once."""
     cohorts = tuple(TCGA_COHORTS)
-    calibration.validate_summary(
-        calibration_root,
+    rule = _require_reportable_rule(
+        calibration_root=calibration_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
         run_root=run_root,
         provider_root=provider_root,
+        action="reporting",
     )
-    rule = _load_rule(rule_path, calibration_root, postprocess_root)
-    if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
-        reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
-        msg = f"Association-level reporting is withheld: {reason}"
-        raise RuntimeError(msg)
     validate_provider_root(provider_root, cohorts)
     postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     postprocess._validate_completion(run_root, cohorts)  # noqa: SLF001

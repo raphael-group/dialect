@@ -21,12 +21,16 @@ def _record(member: release.Member, path: str) -> dict[str, int | str]:
     return {"path": path, "bytes": member.size, "sha256": member.sha256}
 
 
-def _closure_members(  # noqa: C901, PLR0912, PLR0915
+def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     broken_postprocess_source: bool = False,
     broken_provider_artifact: bool = False,
     extra_payload: bool = False,
     sample_level_report: bool = False,
+    calibration_gate: object = True,
+    include_calibration_gate: bool = True,
+    rule_gate: object = True,
+    include_rule_gate: bool = True,
 ) -> list[release.Member]:
     members: dict[str, release.Member] = {}
 
@@ -291,35 +295,43 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0915
     calibration_table_name = "results/calibration/calibration_cells.csv"
     calibration_table = add(calibration_table_name, b"cohort,provider\n")
     calibration_summary_name = "results/calibration/calibration_summary.json"
+    calibration_summary_payload = {
+        "config_sha256": calibration_config.sha256,
+        "cell_count": len(calibration_cells),
+        "run_manifest": _record(calibration_run_member, "run_manifest.json"),
+        "task_manifests": calibration_task_records,
+        "table": _record(calibration_table, calibration.SUMMARY_TABLE_NAME),
+    }
+    if include_calibration_gate:
+        calibration_summary_payload["overall_gate_pass"] = calibration_gate
     calibration_summary = add_json(
         calibration_summary_name,
-        {
-            "config_sha256": calibration_config.sha256,
-            "cell_count": len(calibration_cells),
-            "run_manifest": _record(calibration_run_member, "run_manifest.json"),
-            "task_manifests": calibration_task_records,
-            "table": _record(calibration_table, calibration.SUMMARY_TABLE_NAME),
-        },
+        calibration_summary_payload,
     )
 
     rule_name = "results/reporting_rule.json"
-    rule_member = add_json(
-        rule_name,
-        {
-            "analysis_config_sha256": analysis_config.sha256,
-            "calibration_config_sha256": calibration_config.sha256,
-            "calibration_summary": _record(
-                calibration_summary,
-                calibration.SUMMARY_NAME,
-            ),
-            "postprocess_manifest": _record(
-                post_root_member,
-                postprocess.ROOT_MANIFEST_NAME,
-            ),
-            "primary_q_threshold": 0.01,
-            "primary_adjustment": "BY",
-        },
-    )
+    rule_payload = {
+        "analysis_config_sha256": analysis_config.sha256,
+        "calibration_config_sha256": calibration_config.sha256,
+        "calibration_summary": _record(
+            calibration_summary,
+            calibration.SUMMARY_NAME,
+        ),
+        "postprocess_manifest": _record(
+            post_root_member,
+            postprocess.ROOT_MANIFEST_NAME,
+        ),
+        "primary_q_threshold": 0.01,
+        "primary_adjustment": "BY",
+        "inference_status": (
+            release.rule_module.REPORTABLE_STATUS
+            if rule_gate is True
+            else release.rule_module.WITHHELD_STATUS
+        ),
+    }
+    if include_rule_gate:
+        rule_payload["calibration_gate"] = {"overall_gate_pass": rule_gate}
+    rule_member = add_json(rule_name, rule_payload)
     report_outputs = {}
     for name in release.REQUIRED_REPORT_OUTPUTS:
         if name == "figure6_burden_bins.csv":
@@ -415,19 +427,27 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0915
     return list(members.values())
 
 
-def _write_closure_archive(
+def _write_closure_archive(  # noqa: PLR0913
     path: Path,
     *,
     broken_postprocess_source: bool = False,
     broken_provider_artifact: bool = False,
     extra_payload: bool = False,
     sample_level_report: bool = False,
+    calibration_gate: object = True,
+    include_calibration_gate: bool = True,
+    rule_gate: object = True,
+    include_rule_gate: bool = True,
 ) -> bytes:
     members = _closure_members(
         broken_postprocess_source=broken_postprocess_source,
         broken_provider_artifact=broken_provider_artifact,
         extra_payload=extra_payload,
         sample_level_report=sample_level_report,
+        calibration_gate=calibration_gate,
+        include_calibration_gate=include_calibration_gate,
+        rule_gate=rule_gate,
+        include_rule_gate=include_rule_gate,
     )
     manifest = release._manifest(  # noqa: SLF001
         members,
@@ -467,6 +487,138 @@ def test_archive_is_deterministic_and_semantically_verified(tmp_path: Path) -> N
     assert release.verify_release(first, receipt_path)["release_source_commit"] == (
         "b" * 40
     )
+
+
+@pytest.mark.parametrize(
+    ("gate_kwargs", "error", "message"),
+    [
+        ({"calibration_gate": False}, RuntimeError, "gate failed"),
+        (
+            {"include_calibration_gate": False},
+            TypeError,
+            "exact boolean gate",
+        ),
+        ({"calibration_gate": "true"}, TypeError, "exact boolean gate"),
+        ({"rule_gate": False}, RuntimeError, "withheld by the rule"),
+        (
+            {"include_rule_gate": False},
+            TypeError,
+            "calibration gate object",
+        ),
+        ({"rule_gate": "true"}, TypeError, "boolean calibration gate"),
+    ],
+)
+def test_archive_gate_fails_before_association_member_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gate_kwargs: dict[str, object],
+    error: type[Exception],
+    message: str,
+) -> None:
+    archive_path = tmp_path / "withheld.tar.gz"
+    _write_closure_archive(archive_path, **gate_kwargs)
+    original_extractfile = release.tarfile.TarFile.extractfile
+    opened: list[str] = []
+
+    def guarded_extractfile(self, member):
+        name = member.name if isinstance(member, release.tarfile.TarInfo) else member
+        opened.append(str(name))
+        if str(name).endswith(f"/{postprocess.RESULT_NAME}"):
+            msg = f"association member was opened: {name}"
+            raise AssertionError(msg)
+        return original_extractfile(self, member)
+
+    monkeypatch.setattr(
+        release.tarfile.TarFile,
+        "extractfile",
+        guarded_extractfile,
+    )
+
+    with pytest.raises(error, match=message):
+        release.verify_archive(archive_path)
+
+    assert not any(
+        name.endswith(f"/{postprocess.RESULT_NAME}") for name in opened
+    )
+
+
+@pytest.mark.parametrize(
+    ("gate_value", "write_summary", "error"),
+    [
+        (False, True, RuntimeError),
+        (None, False, FileNotFoundError),
+        ("false", True, TypeError),
+    ],
+)
+def test_local_release_paths_gate_before_raw_or_derived_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gate_value: object,
+    write_summary: bool,  # noqa: FBT001
+    error: type[Exception],
+) -> None:
+    calibration_root = tmp_path / "calibration"
+    calibration_root.mkdir()
+    if write_summary:
+        (calibration_root / calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": gate_value}),
+            encoding="utf-8",
+        )
+
+    def fail_if_association_accessed(*_args, **_kwargs):
+        msg = "raw or derived association table was accessed"
+        raise AssertionError(msg)
+
+    path_type = type(tmp_path)
+    original_open = path_type.open
+
+    def guarded_open(path, *args, **kwargs):
+        if path.name in {
+            postprocess.RESULT_NAME,
+            "pairwise_interaction_results.csv",
+        }:
+            msg = f"association file was opened or hashed: {path}"
+            raise AssertionError(msg)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", guarded_open)
+    monkeypatch.setattr(
+        release.provenance,
+        "validate_fit_attestation",
+        fail_if_association_accessed,
+    )
+    monkeypatch.setattr(
+        release.calibration,
+        "validate_summary",
+        fail_if_association_accessed,
+    )
+    monkeypatch.setattr(
+        release.postprocess,
+        "validate_derived_root",
+        fail_if_association_accessed,
+    )
+    monkeypatch.setattr(release, "_file_member", fail_if_association_accessed)
+    common = {
+        "input_root": tmp_path / "input",
+        "provider_root": tmp_path / "providers",
+        "run_root": tmp_path / "run",
+        "postprocess_root": tmp_path / "postprocess",
+        "calibration_root": calibration_root,
+        "report_root": tmp_path / "report",
+        "rule_path": tmp_path / "rule.json",
+        "fit_attestation_path": tmp_path / "fit-attestation.json",
+    }
+
+    with pytest.raises(error):
+        release._validate_upstream(  # noqa: SLF001
+            repository_root=tmp_path / "repo",
+            fit_commit="a" * 40,
+            release_commit="b" * 40,
+            runtime_executable=tmp_path / "python",
+            **common,
+        )
+    with pytest.raises(error):
+        release._result_members(**common)  # noqa: SLF001
 
 
 def test_archive_verifier_rejects_semantically_broken_rehashed_archive(
