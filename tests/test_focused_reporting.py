@@ -155,19 +155,7 @@ def test_pmf_mean_preserves_native_integer_support() -> None:
     assert reporting._pmf_mean({0: 0.5, 2: 0.25, 4: 0.25}) == 1.5  # noqa: SLF001
 
 
-def test_cohort_burden_source_is_deidentified_and_complete() -> None:
-    values = {
-        cohort: np.asarray([index], dtype=float)
-        for index, cohort in enumerate(reporting.TCGA_COHORTS)
-    }
-    source = reporting._cohort_burden_source(values)  # noqa: SLF001
-
-    assert source["cohort"].tolist() == list(reporting.TCGA_COHORTS)
-    assert source["cohort_row"].tolist() == [1] * len(reporting.TCGA_COHORTS)
-    assert not any("sample" in column.casefold() for column in source.columns)
-
-
-def test_figure_burden_source_reconciles_observed_axis(
+def test_figure_burden_bins_reconcile_observed_axis_without_sample_rows(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -184,21 +172,33 @@ def test_figure_burden_source_reconciles_observed_axis(
         return np.asarray([1.0, 5.0]), np.full(2, expected_by_provider[provider])
 
     monkeypatch.setattr(reporting, "_expected_selected_burden", fake_expected)
-    source = reporting._figure6_burden_source(tmp_path)  # noqa: SLF001
+    source = reporting._figure6_burden_bins(tmp_path)  # noqa: SLF001
 
-    assert source["cohort_row"].tolist() == [1, 2]
-    assert source["observed_selected_event_count"].tolist() == [1.0, 5.0]
-    assert source["mutsig_model_expected_selected_event_count"].tolist() == [4.0, 4.0]
+    assert source.columns.tolist() == list(reporting.BURDEN_BIN_COLUMNS)
+    assert set(source["provider"]) == set(reporting.core.BMRS)
+    assert source.groupby("provider")["tumor_count"].sum().eq(2).all()
+    assert not any(
+        token in column.casefold()
+        for column in source.columns
+        for token in ("sample", "patient", "cohort_row", "tumor_row")
+    )
 
 
 def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> None:
-    burden = pd.DataFrame(
-        {
-            "observed_selected_event_count": [1.0, 3.0],
-            "cbase_model_expected_selected_event_count": [1.0, 2.0],
-            "dig_model_expected_selected_event_count": [1.5, 2.5],
-            "mutsig_model_expected_selected_event_count": [0.8, 2.8],
-        },
+    burden = pd.concat(
+        [
+            reporting._aggregate_burden_bins(  # noqa: SLF001
+                np.asarray([1.0, 3.0]),
+                np.asarray(expected),
+                provider=provider,
+            )
+            for provider, expected in {
+                "cbase": [1.0, 2.0],
+                "dig": [1.5, 2.5],
+                "mutsig": [0.8, 2.8],
+            }.items()
+        ],
+        ignore_index=True,
     )
     summary = pd.DataFrame(
         {
@@ -242,7 +242,7 @@ def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> 
     output = tmp_path / "figure6.pdf"
 
     reporting._plot_figure6(  # noqa: SLF001
-        burden_source=burden,
+        burden_bins=burden,
         summary=summary,
         overlap=overlap,
         calibration_table=calibration,
@@ -403,31 +403,17 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     focal_tumors = tumors[focal_index]
     pd.DataFrame(
         {
-            "cohort": np.repeat(
-                reporting.TCGA_COHORTS,
-                tumors,
-            ),
-            "cohort_row": np.concatenate(
-                [np.arange(1, count + 1) for count in tumors],
-            ),
-            "pre_k_total_nonsynonymous_snv_event_count": np.zeros(
-                reporting.EXPECTED_TUMOR_COUNT,
-            ),
+            "cohort": [reporting.FOCAL_BURDEN_COHORT] * len(reporting.core.BMRS),
+            "provider": list(reporting.core.BMRS),
+            "observed_log10_plus_one_lower": [0.0] * len(reporting.core.BMRS),
+            "observed_log10_plus_one_upper": [0.25] * len(reporting.core.BMRS),
+            "expected_log10_plus_one_lower": [0.0] * len(reporting.core.BMRS),
+            "expected_log10_plus_one_upper": [0.25] * len(reporting.core.BMRS),
+            "tumor_count": [focal_tumors] * len(reporting.core.BMRS),
         },
-    ).to_csv(root / "cohort_burden_source.csv", index=False)
-    pd.DataFrame(
-        {
-            "cohort": [reporting.FOCAL_BURDEN_COHORT] * focal_tumors,
-            "cohort_row": np.arange(1, focal_tumors + 1),
-            "observed_selected_event_count": np.zeros(focal_tumors),
-            "cbase_model_expected_selected_event_count": np.zeros(focal_tumors),
-            "dig_model_expected_selected_event_count": np.zeros(focal_tumors),
-            "mutsig_model_expected_selected_event_count": np.zeros(focal_tumors),
-        },
-    ).to_csv(root / "figure6_burden_source.csv", index=False)
+    ).to_csv(root / "figure6_burden_bins.csv", index=False)
     names = {
-        "cohort_burden_source.csv",
-        "figure6_burden_source.csv",
+        "figure6_burden_bins.csv",
         "table_s5.csv",
         "provider_overlap.csv",
         "top_primary_pairs.csv",
@@ -454,6 +440,8 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         ),
         "threshold_decision_scale": "natural-log-q-values",
         "probability_representation": reporting.postprocess.PROBABILITY_REPRESENTATION,
+        "sample_level_rows_included": False,
+        "burden_source_policy": "fixed-aggregate-bins-and-cohort-summaries-only",
         "inputs": {
             "run_completion": {},
             "provider_manifest": {},

@@ -38,6 +38,17 @@ REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v3"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
+BURDEN_LOG10_MAX: Final = 6.0
+BURDEN_BIN_COUNT: Final = 24
+BURDEN_BIN_COLUMNS: Final = (
+    "cohort",
+    "provider",
+    "observed_log10_plus_one_lower",
+    "observed_log10_plus_one_upper",
+    "expected_log10_plus_one_lower",
+    "expected_log10_plus_one_upper",
+    "tumor_count",
+)
 PROVIDER_LABELS: Final = {
     "cbase": "CBaSE",
     "dig": "DIG",
@@ -268,23 +279,6 @@ def _high_burden_threshold(values: Mapping[str, np.ndarray]) -> float:
         msg = "Cannot define the pooled high-burden threshold."
         raise ValueError(msg)
     return float(np.quantile(pooled, HIGH_BURDEN_QUANTILE, method="higher"))
-
-
-def _cohort_burden_source(values: Mapping[str, np.ndarray]) -> pd.DataFrame:
-    """Return deidentified values underlying every burden summary in Table S5."""
-    frames = []
-    for cohort in TCGA_COHORTS:
-        burdens = np.asarray(values[cohort], dtype=float)
-        frames.append(
-            pd.DataFrame(
-                {
-                    "cohort": cohort,
-                    "cohort_row": np.arange(1, len(burdens) + 1, dtype=np.int64),
-                    "pre_k_total_nonsynonymous_snv_event_count": burdens,
-                },
-            ),
-        )
-    return pd.concat(frames, ignore_index=True)
 
 
 def _cohort_summary_row(  # noqa: PLR0913
@@ -687,39 +681,84 @@ def _expected_selected_burden(
     return selected.sum(axis=1).to_numpy(dtype=float), expected
 
 
-def _figure6_burden_source(run_root: Path) -> pd.DataFrame:
-    """Return the deidentified numeric values plotted in Figure 6 panel A."""
-    frame: pd.DataFrame | None = None
+def _aggregate_burden_bins(
+    observed: np.ndarray,
+    expected: np.ndarray,
+    *,
+    provider: str,
+) -> pd.DataFrame:
+    """Aggregate tumor burdens into one fixed, non-sample-level 2D grid."""
+    observed_values = np.asarray(observed, dtype=np.float64)
+    expected_values = np.asarray(expected, dtype=np.float64)
+    if (
+        provider not in core.BMRS
+        or observed_values.ndim != 1
+        or expected_values.shape != observed_values.shape
+        or not np.isfinite(observed_values).all()
+        or not np.isfinite(expected_values).all()
+        or (observed_values < 0).any()
+        or (expected_values < 0).any()
+    ):
+        msg = f"Invalid burden values for aggregate Figure 6 bins: {provider}"
+        raise ValueError(msg)
+    observed_log = np.log10(observed_values + 1.0)
+    expected_log = np.log10(expected_values + 1.0)
+    if (
+        (observed_log > BURDEN_LOG10_MAX).any()
+        or (expected_log > BURDEN_LOG10_MAX).any()
+    ):
+        msg = "Figure 6 burden exceeds the frozen aggregate-bin domain."
+        raise ValueError(msg)
+    edges = np.linspace(0.0, BURDEN_LOG10_MAX, BURDEN_BIN_COUNT + 1)
+    histogram, observed_edges, expected_edges = np.histogram2d(
+        observed_log,
+        expected_log,
+        bins=(edges, edges),
+    )
+    rows = []
+    for observed_index, expected_index in np.argwhere(histogram > 0):
+        rows.append(
+            {
+                "cohort": FOCAL_BURDEN_COHORT,
+                "provider": provider,
+                "observed_log10_plus_one_lower": observed_edges[observed_index],
+                "observed_log10_plus_one_upper": observed_edges[observed_index + 1],
+                "expected_log10_plus_one_lower": expected_edges[expected_index],
+                "expected_log10_plus_one_upper": expected_edges[expected_index + 1],
+                "tumor_count": int(histogram[observed_index, expected_index]),
+            },
+        )
+    return pd.DataFrame(rows, columns=BURDEN_BIN_COLUMNS)
+
+
+def _figure6_burden_bins(run_root: Path) -> pd.DataFrame:
+    """Return fixed aggregate bins underlying Figure 6 panel A."""
+    observed_axis: np.ndarray | None = None
+    frames = []
     for provider in core.BMRS:
         observed, expected = _expected_selected_burden(
             run_root=run_root,
             cohort=FOCAL_BURDEN_COHORT,
             provider=provider,
         )
-        if frame is None:
-            frame = pd.DataFrame(
-                {
-                    "cohort": FOCAL_BURDEN_COHORT,
-                    "cohort_row": np.arange(1, len(observed) + 1, dtype=np.int64),
-                    "observed_selected_event_count": observed,
-                },
-            )
+        if observed_axis is None:
+            observed_axis = observed
         elif not np.array_equal(
-            frame["observed_selected_event_count"].to_numpy(dtype=float),
+            observed_axis,
             observed,
         ):
             msg = "Observed selected burden differs between providers."
             raise ValueError(msg)
-        frame[f"{provider}_model_expected_selected_event_count"] = expected
-    if frame is None:
-        msg = "Figure 6 burden source could not be constructed."
+        frames.append(_aggregate_burden_bins(observed, expected, provider=provider))
+    if observed_axis is None:
+        msg = "Figure 6 aggregate burden source could not be constructed."
         raise RuntimeError(msg)
-    return frame
+    return pd.concat(frames, ignore_index=True)
 
 
 def _plot_figure6(  # noqa: PLR0913
     *,
-    burden_source: pd.DataFrame,
+    burden_bins: pd.DataFrame,
     summary: pd.DataFrame,
     overlap: pd.DataFrame,
     calibration_table: pd.DataFrame,
@@ -738,16 +777,28 @@ def _plot_figure6(  # noqa: PLR0913
     figure, axes = plt.subplots(2, 2, figsize=(13, 12), constrained_layout=True)
 
     ax = axes[0, 0]
-    observed = burden_source["observed_selected_event_count"].to_numpy(dtype=float)
     for provider in core.BMRS:
-        expected = burden_source[
-            f"{provider}_model_expected_selected_event_count"
-        ].to_numpy(dtype=float)
+        selected_bins = burden_bins.loc[burden_bins["provider"].eq(provider)]
+        observed = 10 ** (
+            (
+                selected_bins["observed_log10_plus_one_lower"]
+                + selected_bins["observed_log10_plus_one_upper"]
+            )
+            / 2
+        )
+        expected = 10 ** (
+            (
+                selected_bins["expected_log10_plus_one_lower"]
+                + selected_bins["expected_log10_plus_one_upper"]
+            )
+            / 2
+        )
+        counts = selected_bins["tumor_count"].to_numpy(dtype=float)
         ax.scatter(
-            observed + 1,
-            expected + 1,
-            s=10,
-            alpha=0.45,
+            observed,
+            expected,
+            s=8 + 7 * np.sqrt(counts),
+            alpha=0.55,
             color=PROVIDER_COLORS[provider],
             label=PROVIDER_LABELS[provider],
         )
@@ -954,8 +1005,7 @@ def validate_report(  # noqa: PLR0913
     manifest_path = output_root / "report_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_outputs = {
-        "cohort_burden_source.csv",
-        "figure6_burden_source.csv",
+        "figure6_burden_bins.csv",
         "table_s5.csv",
         "provider_overlap.csv",
         "top_primary_pairs.csv",
@@ -982,6 +1032,9 @@ def validate_report(  # noqa: PLR0913
         or manifest.get("threshold_decision_scale") != "natural-log-q-values"
         or manifest.get("probability_representation")
         != postprocess.PROBABILITY_REPRESENTATION
+        or manifest.get("sample_level_rows_included") is not False
+        or manifest.get("burden_source_policy")
+        != "fixed-aggregate-bins-and-cohort-summaries-only"
         or set(manifest.get("inputs", {}))
         != {
             "run_completion",
@@ -1058,19 +1111,7 @@ def validate_report(  # noqa: PLR0913
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
     fit_diagnostics = pd.read_csv(output_root / "fit_diagnostics_summary.csv")
-    cohort_burden = pd.read_csv(output_root / "cohort_burden_source.csv")
-    figure_burden = pd.read_csv(output_root / "figure6_burden_source.csv")
-    expected_cohort_burden_columns = {
-        "cohort",
-        "cohort_row",
-        "pre_k_total_nonsynonymous_snv_event_count",
-    }
-    expected_figure_burden_columns = {
-        "cohort",
-        "cohort_row",
-        "observed_selected_event_count",
-        *(f"{provider}_model_expected_selected_event_count" for provider in core.BMRS),
-    }
+    figure_burden = pd.read_csv(output_root / "figure6_burden_bins.csv")
     expected_overlap_columns = [
         "cohort",
         "direction",
@@ -1093,13 +1134,24 @@ def validate_report(  # noqa: PLR0913
     )
     expected_overlap_cohorts = np.repeat(TCGA_COHORTS, 2).tolist()
     expected_overlap_directions = ["ME", "CO"] * len(TCGA_COHORTS)
-    expected_rows = cohort_burden.groupby("cohort", sort=False).cumcount() + 1
-    cohort_burden_values = cohort_burden[
-        "pre_k_total_nonsynonymous_snv_event_count"
-    ].to_numpy(dtype=float)
-    figure_burden_values = figure_burden.drop(
-        columns=["cohort", "cohort_row"],
-    ).to_numpy(dtype=float)
+    figure_burden_schema_valid = (
+        figure_burden.columns.tolist() == list(BURDEN_BIN_COLUMNS)
+    )
+    figure_burden_numeric_columns = list(BURDEN_BIN_COLUMNS[2:])
+    figure_burden_values = (
+        figure_burden.loc[:, figure_burden_numeric_columns].to_numpy(dtype=float)
+        if figure_burden_schema_valid
+        else np.empty((0, len(figure_burden_numeric_columns)), dtype=float)
+    )
+    figure_counts = (
+        figure_burden["tumor_count"].to_numpy(dtype=float)
+        if figure_burden_schema_valid
+        else np.empty(0, dtype=float)
+    )
+    expected_focal_tumors = int(
+        summary.set_index("cohort").loc[FOCAL_BURDEN_COHORT, "tumors"],
+    )
+    forbidden_axis_tokens = ("sample", "patient", "cohort_row", "tumor_row")
     if (
         len(summary) != len(TCGA_COHORTS)
         or summary["cohort"].tolist() != list(TCGA_COHORTS)
@@ -1136,27 +1188,41 @@ def validate_report(  # noqa: PLR0913
         + int(fit_diagnostics.iloc[0]["rank_deficient_rows"])
         + int(fit_diagnostics.iloc[0]["rank_not_certified_underflow_rows"])
         != int(fit_diagnostics.iloc[0]["pairwise_rows"])
-        or len(cohort_burden) != EXPECTED_TUMOR_COUNT
-        or cohort_burden["cohort"].nunique() != len(TCGA_COHORTS)
-        or set(cohort_burden.columns) != expected_cohort_burden_columns
-        or set(figure_burden.columns) != expected_figure_burden_columns
-        or not cohort_burden["cohort_row"].eq(expected_rows).all()
-        or not summary.set_index("cohort")["tumors"].eq(
-            cohort_burden["cohort"].value_counts(sort=False),
-        ).all()
+        or not figure_burden_schema_valid
         or set(figure_burden["cohort"]) != {FOCAL_BURDEN_COHORT}
-        or len(figure_burden)
-        != int(summary.set_index("cohort").loc[FOCAL_BURDEN_COHORT, "tumors"])
-        or not figure_burden["cohort_row"].eq(
-            np.arange(1, len(figure_burden) + 1),
-        ).all()
-        or not np.isfinite(cohort_burden_values).all()
-        or (cohort_burden_values < 0).any()
-        or not np.equal(cohort_burden_values, np.floor(cohort_burden_values)).all()
+        or set(figure_burden["provider"]) != set(core.BMRS)
+        or figure_burden.duplicated(
+            subset=list(BURDEN_BIN_COLUMNS[:-1]),
+        ).any()
         or not np.isfinite(figure_burden_values).all()
         or (figure_burden_values < 0).any()
-        or "sample" in " ".join(cohort_burden.columns).casefold()
-        or "sample" in " ".join(figure_burden.columns).casefold()
+        or (figure_counts < 1).any()
+        or not np.equal(figure_counts, np.floor(figure_counts)).all()
+        or not all(
+            int(
+                figure_burden.loc[
+                    figure_burden["provider"].eq(provider),
+                    "tumor_count",
+                ].sum(),
+            )
+            == expected_focal_tumors
+            for provider in core.BMRS
+        )
+        or not (
+            figure_burden["observed_log10_plus_one_lower"]
+            < figure_burden["observed_log10_plus_one_upper"]
+        ).all()
+        or not (
+            figure_burden["expected_log10_plus_one_lower"]
+            < figure_burden["expected_log10_plus_one_upper"]
+        ).all()
+        or (figure_burden["observed_log10_plus_one_upper"] > BURDEN_LOG10_MAX).any()
+        or (figure_burden["expected_log10_plus_one_upper"] > BURDEN_LOG10_MAX).any()
+        or any(
+            token in column.casefold()
+            for column in figure_burden.columns
+            for token in forbidden_axis_tokens
+        )
         or (output_root / "figure6.pdf").read_bytes()[:5] != b"%PDF-"
     ):
         msg = "Focused reporting tables or PDF failed dimensional validation."
@@ -1236,8 +1302,7 @@ def build_report(  # noqa: PLR0913
     top_pairs = pd.concat(top_frames, ignore_index=True)
     runtime = pd.DataFrame(_runtime_rows(run_root, cohorts))
     fit_diagnostics = pd.DataFrame(_fit_diagnostic_rows(run_root, cohorts))
-    cohort_burden_source = _cohort_burden_source(burdens)
-    figure6_burden_source = _figure6_burden_source(run_root)
+    figure6_burden_bins = _figure6_burden_bins(run_root)
     calibration_table = pd.read_csv(
         calibration_root / calibration.SUMMARY_TABLE_NAME,
         float_precision="round_trip",
@@ -1251,8 +1316,7 @@ def build_report(  # noqa: PLR0913
         ),
     )
     outputs = {
-        "cohort_burden_source.csv": cohort_burden_source,
-        "figure6_burden_source.csv": figure6_burden_source,
+        "figure6_burden_bins.csv": figure6_burden_bins,
         "table_s5.csv": summary,
         "provider_overlap.csv": overlap,
         "top_primary_pairs.csv": top_pairs,
@@ -1344,7 +1408,7 @@ def build_report(  # noqa: PLR0913
     (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
     figure_path = staging / "figure6.pdf"
     _plot_figure6(
-        burden_source=figure6_burden_source,
+        burden_bins=figure6_burden_bins,
         summary=summary,
         overlap=overlap,
         calibration_table=calibration_table,
@@ -1368,6 +1432,8 @@ def build_report(  # noqa: PLR0913
         ),
         "threshold_decision_scale": "natural-log-q-values",
         "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
+        "sample_level_rows_included": False,
+        "burden_source_policy": "fixed-aggregate-bins-and-cohort-summaries-only",
         "high_burden_definition": {
             "measure": "pre-K total nonsynonymous SNV event count per tumor",
             "reference": "pooled 10,433-tumor 32-cohort analysis population",
