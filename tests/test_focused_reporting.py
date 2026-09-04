@@ -57,6 +57,7 @@ def test_cohort_summary_uses_global_rule_for_every_provider() -> None:
     assert row["mutsig_primary_total"] == 2
     assert row["mutsig_primary_me"] == 1
     assert row["mutsig_primary_co"] == 1
+    assert row["mutsig_primary_direction_unavailable"] == 0
     assert row["cbase_primary_total"] == 2
     assert row["dig_primary_total"] == 2
 

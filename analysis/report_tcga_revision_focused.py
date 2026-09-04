@@ -219,6 +219,12 @@ def _cohort_summary_row(  # noqa: PLR0913
             row[f"{provider}_{label}_co"] = int(
                 (significant & directions.eq("CO").to_numpy()).sum(),
             )
+            row[f"{provider}_{label}_direction_unavailable"] = int(
+                (
+                    significant
+                    & ~directions.isin(["ME", "CO"]).to_numpy()
+                ).sum(),
+            )
     return row
 
 
@@ -865,17 +871,13 @@ def build_report(  # noqa: PLR0913
             "q <= 0.10 ME": row[f"{provider}_primary_me"],
             "q <= 0.10 CO": row[f"{provider}_primary_co"],
             "q <= 0.10 direction unavailable": (
-                row[f"{provider}_primary_total"]
-                - row[f"{provider}_primary_me"]
-                - row[f"{provider}_primary_co"]
+                row[f"{provider}_primary_direction_unavailable"]
             ),
             "q <= 0.20 total": row[f"{provider}_sensitivity_total"],
             "q <= 0.20 ME": row[f"{provider}_sensitivity_me"],
             "q <= 0.20 CO": row[f"{provider}_sensitivity_co"],
             "q <= 0.20 direction unavailable": (
-                row[f"{provider}_sensitivity_total"]
-                - row[f"{provider}_sensitivity_me"]
-                - row[f"{provider}_sensitivity_co"]
+                row[f"{provider}_sensitivity_direction_unavailable"]
             ),
         }
         for row in summary.to_dict(orient="records")
