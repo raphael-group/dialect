@@ -420,25 +420,36 @@ def _plot_figure6(
     ax.set_yscale("log")
     ax.set_xlabel("Observed selected-event count per tumor + 1")
     ax.set_ylabel("Model-expected count per tumor + 1")
-    ax.set_title("A  Sample-specific background follows UCEC burden", loc="left")
+    ax.set_title("A  UCEC burden across background models", loc="left")
     ax.legend(frameon=False)
 
     ax = axes[0, 1]
     ordered = summary.sort_values("mutsig_primary_co", ascending=True)
     positions = np.arange(len(ordered))
     offsets = {"cbase": -0.22, "dig": 0.0, "mutsig": 0.22}
+    provider_counts = []
     for provider in core.BMRS:
+        counts = ordered[f"{provider}_primary_co"].to_numpy(dtype=float)
+        provider_counts.append(counts)
         ax.scatter(
-            ordered[f"{provider}_primary_co"].to_numpy(dtype=float),
+            np.log10(counts + 1),
             positions + offsets[provider],
             s=24,
             color=PROVIDER_COLORS[provider],
             label=PROVIDER_LABELS[provider],
         )
     ax.set_yticks(positions, ordered["cohort"])
-    ax.set_xscale("symlog", linthresh=1)
+    maximum_count = max(float(values.max()) for values in provider_counts)
+    candidate_ticks = np.asarray([0, 1, 10, 100, 1_000, 10_000, 100_000])
+    count_ticks = candidate_ticks[candidate_ticks <= maximum_count]
+    if len(count_ticks) == 0 or count_ticks[-1] < maximum_count:
+        count_ticks = np.append(count_ticks, int(np.ceil(maximum_count)))
+    ax.set_xticks(
+        np.log10(count_ticks + 1),
+        [f"{value:,}" for value in count_ticks],
+    )
     ax.set_xlabel(f"CO pairs at q <= {primary_q:g}")
-    ax.set_title("B  Co-occurrence calls depend on the background", loc="left")
+    ax.set_title("B  Co-occurrence calls across background models", loc="left")
     ax.grid(axis="x", alpha=0.2)
 
     ax = axes[1, 0]
