@@ -165,6 +165,23 @@ def _high_burden_threshold(values: Mapping[str, np.ndarray]) -> float:
     return float(np.quantile(pooled, HIGH_BURDEN_QUANTILE, method="higher"))
 
 
+def _cohort_burden_source(values: Mapping[str, np.ndarray]) -> pd.DataFrame:
+    """Return deidentified values underlying every burden summary in Table S5."""
+    frames = []
+    for cohort in TCGA_COHORTS:
+        burdens = np.asarray(values[cohort], dtype=float)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "cohort": cohort,
+                    "cohort_row": np.arange(1, len(burdens) + 1, dtype=np.int64),
+                    "pre_k_total_nonsynonymous_snv_event_count": burdens,
+                },
+            ),
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
 def _cohort_summary_row(  # noqa: PLR0913
     *,
     cohort: str,
@@ -335,9 +352,39 @@ def _expected_selected_burden(
     return selected.sum(axis=1).to_numpy(dtype=float), expected
 
 
+def _figure6_burden_source(run_root: Path) -> pd.DataFrame:
+    """Return the deidentified numeric values plotted in Figure 6 panel A."""
+    frame: pd.DataFrame | None = None
+    for provider in core.BMRS:
+        observed, expected = _expected_selected_burden(
+            run_root=run_root,
+            cohort=FOCAL_BURDEN_COHORT,
+            provider=provider,
+        )
+        if frame is None:
+            frame = pd.DataFrame(
+                {
+                    "cohort": FOCAL_BURDEN_COHORT,
+                    "cohort_row": np.arange(1, len(observed) + 1, dtype=np.int64),
+                    "observed_selected_event_count": observed,
+                },
+            )
+        elif not np.array_equal(
+            frame["observed_selected_event_count"].to_numpy(dtype=float),
+            observed,
+        ):
+            msg = "Observed selected burden differs between providers."
+            raise ValueError(msg)
+        frame[f"{provider}_model_expected_selected_event_count"] = expected
+    if frame is None:
+        msg = "Figure 6 burden source could not be constructed."
+        raise RuntimeError(msg)
+    return frame
+
+
 def _plot_figure6(
     *,
-    run_root: Path,
+    burden_source: pd.DataFrame,
     summary: pd.DataFrame,
     calibration_table: pd.DataFrame,
     primary_q: float,
@@ -354,20 +401,13 @@ def _plot_figure6(
     figure, axes = plt.subplots(2, 2, figsize=(13, 12), constrained_layout=True)
 
     ax = axes[0, 0]
-    observed = None
+    observed = burden_source["observed_selected_event_count"].to_numpy(dtype=float)
     for provider in core.BMRS:
-        current_observed, expected = _expected_selected_burden(
-            run_root=run_root,
-            cohort=FOCAL_BURDEN_COHORT,
-            provider=provider,
-        )
-        if observed is None:
-            observed = current_observed
-        elif not np.array_equal(observed, current_observed):
-            msg = "Observed selected burden differs between providers."
-            raise ValueError(msg)
+        expected = burden_source[
+            f"{provider}_model_expected_selected_event_count"
+        ].to_numpy(dtype=float)
         ax.scatter(
-            current_observed + 1,
+            observed + 1,
             expected + 1,
             s=10,
             alpha=0.45,
@@ -478,6 +518,8 @@ def validate_report(output_root: Path) -> dict[str, Any]:
     manifest_path = output_root / "report_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_outputs = {
+        "cohort_burden_source.csv",
+        "figure6_burden_source.csv",
         "table_s5.csv",
         "provider_overlap.csv",
         "top_primary_pairs.csv",
@@ -512,12 +554,40 @@ def validate_report(output_root: Path) -> dict[str, Any]:
     summary = pd.read_csv(output_root / "table_s5.csv")
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
+    cohort_burden = pd.read_csv(output_root / "cohort_burden_source.csv")
+    figure_burden = pd.read_csv(output_root / "figure6_burden_source.csv")
+    expected_cohort_burden_columns = {
+        "cohort",
+        "cohort_row",
+        "pre_k_total_nonsynonymous_snv_event_count",
+    }
+    expected_figure_burden_columns = {
+        "cohort",
+        "cohort_row",
+        "observed_selected_event_count",
+        *(f"{provider}_model_expected_selected_event_count" for provider in core.BMRS),
+    }
+    expected_rows = cohort_burden.groupby("cohort", sort=False).cumcount() + 1
     if (
         len(summary) != len(TCGA_COHORTS)
         or summary["cohort"].tolist() != list(TCGA_COHORTS)
         or int(summary["tumors"].sum()) != EXPECTED_TUMOR_COUNT
         or len(overlap) != len(TCGA_COHORTS) * 2
         or len(runtime) != len(TCGA_COHORTS) * len(core.BMRS)
+        or len(cohort_burden) != EXPECTED_TUMOR_COUNT
+        or cohort_burden["cohort"].nunique() != len(TCGA_COHORTS)
+        or set(cohort_burden.columns) != expected_cohort_burden_columns
+        or set(figure_burden.columns) != expected_figure_burden_columns
+        or not cohort_burden["cohort_row"].eq(expected_rows).all()
+        or not summary.set_index("cohort")["tumors"].eq(
+            cohort_burden["cohort"].value_counts(sort=False),
+        ).all()
+        or set(figure_burden["cohort"]) != {FOCAL_BURDEN_COHORT}
+        or not figure_burden["cohort_row"].eq(
+            np.arange(1, len(figure_burden) + 1),
+        ).all()
+        or "sample" in " ".join(cohort_burden.columns).casefold()
+        or "sample" in " ".join(figure_burden.columns).casefold()
         or (output_root / "figure6.pdf").read_bytes()[:5] != b"%PDF-"
     ):
         msg = "Focused reporting tables or PDF failed dimensional validation."
@@ -574,6 +644,8 @@ def build_report(  # noqa: PLR0913
     overlap = pd.DataFrame(overlap_rows)
     top_pairs = pd.concat(top_frames, ignore_index=True)
     runtime = pd.DataFrame(_runtime_rows(run_root, cohorts))
+    cohort_burden_source = _cohort_burden_source(burdens)
+    figure6_burden_source = _figure6_burden_source(run_root)
     calibration_table = pd.read_csv(
         calibration_root / calibration.SUMMARY_TABLE_NAME,
         float_precision="round_trip",
@@ -587,6 +659,8 @@ def build_report(  # noqa: PLR0913
         ),
     )
     outputs = {
+        "cohort_burden_source.csv": cohort_burden_source,
+        "figure6_burden_source.csv": figure6_burden_source,
         "table_s5.csv": summary,
         "provider_overlap.csv": overlap,
         "top_primary_pairs.csv": top_pairs,
@@ -614,7 +688,7 @@ def build_report(  # noqa: PLR0913
     (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
     figure_path = staging / "figure6.pdf"
     _plot_figure6(
-        run_root=run_root,
+        burden_source=figure6_burden_source,
         summary=summary,
         calibration_table=calibration_table,
         primary_q=primary_q,

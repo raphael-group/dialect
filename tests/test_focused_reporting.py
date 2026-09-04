@@ -111,10 +111,46 @@ def test_pmf_mean_preserves_native_integer_support() -> None:
     assert reporting._pmf_mean({0: 0.5, 2: 0.25, 4: 0.25}) == 1.5  # noqa: SLF001
 
 
+def test_cohort_burden_source_is_deidentified_and_complete() -> None:
+    values = {
+        cohort: np.asarray([index], dtype=float)
+        for index, cohort in enumerate(reporting.TCGA_COHORTS)
+    }
+    source = reporting._cohort_burden_source(values)  # noqa: SLF001
+
+    assert source["cohort"].tolist() == list(reporting.TCGA_COHORTS)
+    assert source["cohort_row"].tolist() == [1] * len(reporting.TCGA_COHORTS)
+    assert not any("sample" in column.casefold() for column in source.columns)
+
+
+def test_figure_burden_source_reconciles_observed_axis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    expected_by_provider = {"cbase": 2.0, "dig": 3.0, "mutsig": 4.0}
+
+    def fake_expected(
+        *,
+        run_root: Path,
+        cohort: str,
+        provider: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        assert run_root == tmp_path
+        assert cohort == reporting.FOCAL_BURDEN_COHORT
+        return np.asarray([1.0, 5.0]), np.full(2, expected_by_provider[provider])
+
+    monkeypatch.setattr(reporting, "_expected_selected_burden", fake_expected)
+    source = reporting._figure6_burden_source(tmp_path)  # noqa: SLF001
+
+    assert source["cohort_row"].tolist() == [1, 2]
+    assert source["observed_selected_event_count"].tolist() == [1.0, 5.0]
+    assert source["mutsig_model_expected_selected_event_count"].tolist() == [4.0, 4.0]
+
+
 def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     root = tmp_path / "report"
     root.mkdir()
-    tumors = [reporting.EXPECTED_TUMOR_COUNT, *([0] * 31)]
+    tumors = [reporting.EXPECTED_TUMOR_COUNT - 31, *([1] * 31)]
     pd.DataFrame(
         {"cohort": list(reporting.TCGA_COHORTS), "tumors": tumors},
     ).to_csv(root / "table_s5.csv", index=False)
@@ -139,7 +175,33 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     )
     (root / "table_s5.tex").write_text("table\n", encoding="utf-8")
     (root / "figure6.pdf").write_bytes(b"%PDF-synthetic\n")
+    pd.DataFrame(
+        {
+            "cohort": np.repeat(
+                reporting.TCGA_COHORTS,
+                tumors,
+            ),
+            "cohort_row": np.concatenate(
+                [np.arange(1, count + 1) for count in tumors],
+            ),
+            "pre_k_total_nonsynonymous_snv_event_count": np.zeros(
+                reporting.EXPECTED_TUMOR_COUNT,
+            ),
+        },
+    ).to_csv(root / "cohort_burden_source.csv", index=False)
+    pd.DataFrame(
+        {
+            "cohort": [reporting.FOCAL_BURDEN_COHORT],
+            "cohort_row": [1],
+            "observed_selected_event_count": [0],
+            "cbase_model_expected_selected_event_count": [0],
+            "dig_model_expected_selected_event_count": [0],
+            "mutsig_model_expected_selected_event_count": [0],
+        },
+    ).to_csv(root / "figure6_burden_source.csv", index=False)
     names = {
+        "cohort_burden_source.csv",
+        "figure6_burden_source.csv",
         "table_s5.csv",
         "provider_overlap.csv",
         "top_primary_pairs.csv",
