@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ PROVENANCE_ROOT = (
 EXTERNAL_README = PROVENANCE_ROOT.parents[1] / "external" / "README.md"
 PROVENANCE_README = PROVENANCE_ROOT / "README.md"
 SCHEMA_PATH = PROVENANCE_ROOT / "record.schema.json"
+MUTSIG_PATCH_PATH = (
+    PROVENANCE_ROOT.parents[1] / "external" / "mutsig2cv_octave_dialect.patch"
+)
 
 EXPECTED_RECORDS = {
     "atlas-code-v2.3.1-563ae0f": "atlas_code",
@@ -457,6 +461,15 @@ def test_dependency_release_boundary_is_exact(
         assert record["redistribution"] == "exclude"
         assert record["included_in_public_release"] is False
         assert record["unresolved"]
+
+
+def test_mutsig_patch_record_matches_retained_bytes() -> None:
+    """Bind the excluded patch record to the exact retained execution artifact."""
+    record = _load_json(PROVENANCE_ROOT / "mutsig2cv-patch-1e0aa209.json")
+    patch_bytes = MUTSIG_PATCH_PATH.read_bytes()
+
+    assert record["identity"]["patch_bytes"] == len(patch_bytes)
+    assert record["identity"]["patch_sha256"] == sha256(patch_bytes).hexdigest()
 
 
 def test_schema_rejects_atlas_release_boundary_escalation() -> None:
