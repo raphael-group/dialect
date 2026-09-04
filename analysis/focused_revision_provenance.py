@@ -59,13 +59,21 @@ FIT_SOURCE_FILES: Final = tuple(
 RELEASE_PIPELINE_FILES: Final = (
     Path("analysis/build_tcga_revision_focused_release.py"),
     Path("analysis/calibrate_tcga_revision_focused.py"),
+    Path("analysis/calibration_batch.py"),
     Path("analysis/focused_revision_provenance.py"),
     Path("analysis/freeze_tcga_revision_reporting_rule.py"),
     Path("analysis/postprocess_tcga_revision_focused.py"),
     Path("analysis/report_tcga_revision_focused.py"),
     Path("analysis/tcga_revision_calibration_config.json"),
 )
-RUNTIME_DISTRIBUTIONS: Final = ("numpy", "pandas", "scipy", "scikit-learn")
+RUNTIME_DISTRIBUTIONS: Final = (
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "threadpoolctl",
+)
 
 
 def _canonical_json(value: object) -> bytes:

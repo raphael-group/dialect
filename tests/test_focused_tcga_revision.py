@@ -15,6 +15,7 @@ from analysis import calibrate_tcga_revision_focused as calibration
 from analysis import freeze_tcga_revision_reporting_rule as reporting_rule
 from analysis import postprocess_tcga_revision_focused as postprocess
 from analysis import prepare_tcga_revision_focused as preparation
+from analysis import report_tcga_revision_focused as reporting
 from analysis import run_tcga_revision_focused as runner
 
 if TYPE_CHECKING:
@@ -724,6 +725,23 @@ def test_reporting_rule_freezes_prespecified_candidates(
         == "retain-nondirectional-rejection-exclude-from-me-co-lists"
     )
     assert rule["thresholds_selected_from_observed_pairs"] is False
+    assert (
+        reporting._load_rule(  # noqa: SLF001
+            output,
+            calibration_root,
+            postprocess_root,
+        )
+        == rule
+    )
+
+    rule["direction"] = "rho-sign"
+    output.write_text(json.dumps(rule), encoding="utf-8")
+    with pytest.raises(ValueError, match="Frozen reporting rule"):
+        reporting._load_rule(  # noqa: SLF001
+            output,
+            calibration_root,
+            postprocess_root,
+        )
 
 
 def test_failed_gate_freezes_withheld_rule_without_association_validation(

@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 import pandas as pd
-from scipy.stats import beta, chi2
+from scipy.special import log_ndtr
+from scipy.stats import beta
 from threadpoolctl import threadpool_limits
 
 from analysis import run_tcga_revision_focused as focused_runner
@@ -659,11 +660,11 @@ def _fit_pair_scalar_reference(
     return _fit_pair(cell, indices, counts)
 
 
-def _effective_p_values(
+def _effective_log_p_values(
     likelihood_ratios: np.ndarray,
     reportable: np.ndarray,
 ) -> np.ndarray:
-    """Apply the production nonidentifiable-pair p=1 policy."""
+    """Apply the production stable log-p and nonidentifiable-pair policy."""
     values = np.asarray(likelihood_ratios, dtype=np.float64)
     mask = np.asarray(reportable)
     if (
@@ -674,9 +675,20 @@ def _effective_p_values(
     ):
         msg = "Calibration LRT/reportability arrays are invalid."
         raise ValueError(msg)
-    result = np.ones(values.shape, dtype=np.float64)
-    result[mask] = chi2.sf(values[mask], df=1)
+    result = np.zeros(values.shape, dtype=np.float64)
+    result[mask] = np.log(2.0) + log_ndtr(-np.sqrt(values[mask]))
+    if np.isnan(result).any() or np.isposinf(result).any() or (result > 0).any():
+        msg = "Stable calibration chi-square log-survival evaluation failed."
+        raise ValueError(msg)
     return result
+
+
+def _effective_p_values(
+    likelihood_ratios: np.ndarray,
+    reportable: np.ndarray,
+) -> np.ndarray:
+    """Return display p-values derived from the stable production log-p path."""
+    return np.exp(_effective_log_p_values(likelihood_ratios, reportable))
 
 
 def _sentinel_pairs(features: Sequence[str], count: int = 32) -> np.ndarray:
@@ -1588,10 +1600,13 @@ def _summary_frame(
         task_manifests.append(task_manifest_record)
         with np.load(task_root / TASK_DATA_NAME, allow_pickle=False) as arrays:
             reportable = arrays["marginal_reportable"]
-            p_values = _effective_p_values(arrays["marginal_lrt"], reportable)
+            log_p_values = _effective_log_p_values(
+                arrays["marginal_lrt"],
+                reportable,
+            )
             nonreportable_fit_count += int(reportable.size - reportable.sum())
-            for pair_index in range(p_values.shape[1]):
-                pair_p_values = p_values[:, pair_index]
+            for pair_index in range(log_p_values.shape[1]):
+                pair_log_p_values = log_p_values[:, pair_index]
                 pair_reportable = reportable[:, pair_index]
                 reportable_trials = int(pair_reportable.sum())
                 nonreportable_trials = int(
@@ -1599,8 +1614,8 @@ def _summary_frame(
                 )
                 for raw_alpha in config["marginal_lrt"]["alphas"]:
                     alpha = float(raw_alpha)
-                    successes = int((pair_p_values <= alpha).sum())
-                    trials = int(pair_p_values.size)
+                    successes = int((pair_log_p_values <= np.log(alpha)).sum())
+                    trials = int(pair_log_p_values.size)
                     row: dict[str, Any] = {
                         "cohort": cell.cohort,
                         "provider": cell.provider,

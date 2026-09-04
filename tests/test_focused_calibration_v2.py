@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import postprocess_tcga_revision_focused as postprocess
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -122,6 +123,24 @@ def test_effective_p_values_set_nonreportable_fits_to_one() -> None:
     assert observed[0, 1] == 1.0
     assert observed[1, 0] == 1.0
     assert 0 < observed[1, 1] < 0.1
+
+
+def test_calibration_threshold_uses_reporting_log_survival_boundary() -> None:
+    threshold = 0.05
+    statistic = np.nextafter(3.841458820694124, -np.inf)
+    observed = calibration._effective_log_p_values(  # noqa: SLF001
+        np.asarray([[statistic]]),
+        np.asarray([[True]]),
+    )
+
+    reporting = postprocess._log_chi_square_one_df_survival(  # noqa: SLF001
+        np.asarray([statistic]),
+    )
+
+    np.testing.assert_array_equal(observed.ravel(), reporting)
+    assert (observed[0, 0] <= np.log(threshold)) == (
+        reporting[0] <= np.log(threshold)
+    )
 
 
 def test_result_blindness_receipt_discloses_integrity_hashing() -> None:

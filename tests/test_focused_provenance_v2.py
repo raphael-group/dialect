@@ -30,6 +30,20 @@ def _record(path: Path, *, relative_to: Path) -> dict[str, int | str]:
     }
 
 
+def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None:
+    expected = (
+        provenance.Path("analysis/build_tcga_revision_focused_release.py"),
+        provenance.Path("analysis/calibrate_tcga_revision_focused.py"),
+        provenance.Path("analysis/calibration_batch.py"),
+        provenance.Path("analysis/focused_revision_provenance.py"),
+        provenance.Path("analysis/freeze_tcga_revision_reporting_rule.py"),
+        provenance.Path("analysis/postprocess_tcga_revision_focused.py"),
+        provenance.Path("analysis/report_tcga_revision_focused.py"),
+        provenance.Path("analysis/tcga_revision_calibration_config.json"),
+    )
+    assert expected == provenance.RELEASE_PIPELINE_FILES
+
+
 def _raw_chain_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
