@@ -832,21 +832,74 @@ def build_report(  # noqa: PLR0913
     for name, frame in outputs.items():
         frame.to_csv(staging / name, index=False, lineterminator="\n")
 
-    display_columns = [
+    burden_columns = [
         "cohort",
         "tumors",
+        "selected_events",
         "tested_pairs",
+        "burden_median",
+        "burden_q25",
+        "burden_q75",
+        "burden_p95",
+        "burden_max",
         "high_burden_fraction",
-        "mutsig_primary_total",
+    ]
+    call_columns = [
+        "cohort",
         "mutsig_primary_me",
         "mutsig_primary_co",
-        "cbase_primary_total",
-        "dig_primary_total",
+        "cbase_primary_me",
+        "cbase_primary_co",
+        "dig_primary_me",
+        "dig_primary_co",
+        "mutsig_sensitivity_me",
+        "mutsig_sensitivity_co",
+        "cbase_sensitivity_me",
+        "cbase_sensitivity_co",
+        "dig_sensitivity_me",
+        "dig_sensitivity_co",
     ]
-    latex = summary.loc[:, display_columns].to_latex(
-        index=False,
-        float_format="%.3f",
-        escape=True,
+    burden_labels = [
+        "Cohort",
+        "Tumors",
+        "Events",
+        "Pairs",
+        "Median",
+        "Q25",
+        "Q75",
+        "P95",
+        "Max",
+        "High fraction",
+    ]
+    call_labels = [
+        "Cohort",
+        "MutSig ME",
+        "MutSig CO",
+        "CBaSE ME",
+        "CBaSE CO",
+        "DIG ME",
+        "DIG CO",
+        "MutSig ME",
+        "MutSig CO",
+        "CBaSE ME",
+        "CBaSE CO",
+        "DIG ME",
+        "DIG CO",
+    ]
+    burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
+    call_table = summary.loc[:, call_columns].set_axis(call_labels, axis=1)
+    call_table.columns = pd.MultiIndex.from_arrays(
+        [
+            ["", *("q <= 0.10" for _ in range(6)), *("q <= 0.20" for _ in range(6))],
+            call_labels,
+        ],
+    )
+    latex = (
+        "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
+        + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
+        + "\n\\medskip\n"
+        + "\\textbf{B. Significant pairs by background and fitted direction}\\par\n"
+        + call_table.to_latex(index=False, escape=True, multicolumn_format="c")
     )
     (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
     figure_path = staging / "figure6.pdf"
