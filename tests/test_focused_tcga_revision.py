@@ -321,6 +321,7 @@ def _write_calibration_task(
     *,
     cohort: str = "CHOL",
     provider: str = "cbase",
+    run_completion_sha256: str = "a" * 64,
 ) -> dict[str, object]:
     config = calibration._load_config()  # noqa: SLF001
     task_root.mkdir(parents=True)
@@ -338,6 +339,7 @@ def _write_calibration_task(
         "cohort": cohort,
         "provider": provider,
         "config_sha256": calibration._sha256(calibration.CONFIG_PATH),  # noqa: SLF001
+        "run_completion_sha256": run_completion_sha256,
         "seed": calibration._seed(int(config["seed"]), cohort, provider),  # noqa: SLF001
         "marginal_replicates": 1000,
         "sentinel_pair_count": 64,
@@ -379,6 +381,7 @@ def test_calibration_task_validation_binds_coordinates(tmp_path: Path) -> None:
         config,
         cohort="CHOL",
         provider="cbase",
+        run_completion_sha256="a" * 64,
     )
     manifest["provider"] = "dig"
     (task_root / calibration.TASK_MANIFEST_NAME).write_text(
@@ -392,6 +395,22 @@ def test_calibration_task_validation_binds_coordinates(tmp_path: Path) -> None:
             config,
             cohort="CHOL",
             provider="cbase",
+            run_completion_sha256="a" * 64,
+        )
+
+
+def test_calibration_task_validation_rejects_other_run(tmp_path: Path) -> None:
+    config = calibration._load_config()  # noqa: SLF001
+    task_root = tmp_path / "task"
+    _write_calibration_task(task_root)
+
+    with pytest.raises(ValueError, match="manifest validation"):
+        calibration._validate_task(  # noqa: SLF001
+            task_root,
+            config,
+            cohort="CHOL",
+            provider="cbase",
+            run_completion_sha256="b" * 64,
         )
 
 

@@ -337,12 +337,48 @@ def _task_root(output_root: Path, cohort: str, provider: str) -> Path:
     return output_root / "tasks" / cohort / provider
 
 
+def _run_completion_sha256(output_root: Path, config: Mapping[str, Any]) -> str:
+    manifest = json.loads(
+        (output_root / RUN_MANIFEST_NAME).read_text(encoding="utf-8"),
+    )
+    run_completion = manifest.get("run_completion", {})
+    provider_manifest = manifest.get("provider_manifest", {})
+    digest = run_completion.get("sha256")
+    if (
+        manifest.get("schema_version") != SCHEMA_VERSION
+        or manifest.get("contract") != RUN_CONTRACT
+        or manifest.get("config", {}).get("sha256") != _sha256(CONFIG_PATH)
+        or manifest.get("cohorts") != config["cells"]["cohorts"]
+        or manifest.get("providers") != list(core.BMRS)
+        or manifest.get("observed_pair_statistics_opened") is not False
+        or run_completion.get("path") != "completion_manifest.json"
+        or not isinstance(run_completion.get("bytes"), int)
+        or run_completion["bytes"] <= 0
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or provider_manifest.get("path") != "provider_manifest.json"
+        or not isinstance(provider_manifest.get("bytes"), int)
+        or provider_manifest["bytes"] <= 0
+        or not isinstance(provider_manifest.get("sha256"), str)
+        or len(provider_manifest["sha256"]) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in provider_manifest["sha256"]
+        )
+    ):
+        msg = "Calibration run manifest is invalid."
+        raise ValueError(msg)
+    return digest
+
+
 def _validate_task(
     task_root: Path,
     config: Mapping[str, Any],
     *,
     cohort: str,
     provider: str,
+    run_completion_sha256: str,
 ) -> dict[str, Any]:
     manifest = json.loads((task_root / TASK_MANIFEST_NAME).read_text(encoding="utf-8"))
     data = task_root / TASK_DATA_NAME
@@ -352,6 +388,7 @@ def _validate_task(
         or manifest.get("cohort") != cohort
         or manifest.get("provider") != provider
         or manifest.get("config_sha256") != _sha256(CONFIG_PATH)
+        or manifest.get("run_completion_sha256") != run_completion_sha256
         or manifest.get("seed") != _seed(int(config["seed"]), cohort, provider)
         or manifest.get("marginal_replicates")
         != int(config["marginal_lrt"]["replicates_per_cell"])
@@ -416,8 +453,15 @@ def run_task(  # noqa: PLR0913
     """Run and publish one prespecified cohort/provider calibration cell."""
     config = _load_config()
     task_root = _task_root(output_root, cohort, provider)
+    run_completion_sha256 = _sha256(run_root / "completion_manifest.json")
     if task_root.exists():
-        _validate_task(task_root, config, cohort=cohort, provider=provider)
+        _validate_task(
+            task_root,
+            config,
+            cohort=cohort,
+            provider=provider,
+            run_completion_sha256=run_completion_sha256,
+        )
         return "already-complete"
     if nice_increment:
         os.nice(nice_increment)
@@ -482,7 +526,7 @@ def run_task(  # noqa: PLR0913
         "cohort": cohort,
         "provider": provider,
         "config_sha256": _sha256(CONFIG_PATH),
-        "run_completion_sha256": _sha256(run_root / "completion_manifest.json"),
+        "run_completion_sha256": run_completion_sha256,
         "seed": _seed(int(config["seed"]), cohort, provider),
         "marginal_replicates": marginal_replicates,
         "sentinel_pair_count": len(sentinel_pairs),
@@ -497,7 +541,13 @@ def run_task(  # noqa: PLR0913
         msg = f"Calibration task output appeared during execution: {task_root}"
         raise FileExistsError(msg)
     staging.replace(task_root)
-    _validate_task(task_root, config, cohort=cohort, provider=provider)
+    _validate_task(
+        task_root,
+        config,
+        cohort=cohort,
+        provider=provider,
+        run_completion_sha256=run_completion_sha256,
+    )
     return "complete"
 
 
@@ -651,6 +701,7 @@ def summarize(*, output_root: Path) -> Path:
         msg = "Refusing to overwrite calibration summary artifacts."
         raise FileExistsError(msg)
     config = _load_config()
+    run_completion_sha256 = _run_completion_sha256(output_root, config)
     marginal_tests = len(config["cells"]["cohorts"]) * len(core.BMRS) * len(
         config["marginal_lrt"]["alphas"],
     )
@@ -668,6 +719,7 @@ def summarize(*, output_root: Path) -> Path:
                 config,
                 cohort=cohort,
                 provider=provider,
+                run_completion_sha256=run_completion_sha256,
             )
             task_manifests.append(
                 _file_record(
@@ -784,6 +836,7 @@ def validate_summary(output_root: Path) -> dict[str, Any]:
     table_record = summary.get("table", {})
     run_path = output_root / RUN_MANIFEST_NAME
     run_record = summary.get("run_manifest", {})
+    run_completion_sha256 = _run_completion_sha256(output_root, config)
     if (
         summary.get("schema_version") != SCHEMA_VERSION
         or summary.get("contract") != SUMMARY_CONTRACT
@@ -820,6 +873,7 @@ def validate_summary(output_root: Path) -> dict[str, Any]:
             config,
             cohort=cohort,
             provider=provider,
+            run_completion_sha256=run_completion_sha256,
         )
         relative = f"tasks/{cohort}/{provider}/{TASK_MANIFEST_NAME}"
         record = records.get(relative, {})
