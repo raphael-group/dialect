@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v2"
+REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v3"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
@@ -50,6 +51,10 @@ PROVIDER_COLORS: Final = {
 ADJUSTMENT_COLUMNS: Final = {
     "benjamini-yekutieli": "by_q_value",
     "benjamini-hochberg": "bh_q_value",
+}
+LOG_ADJUSTMENT_COLUMNS: Final = {
+    "benjamini-yekutieli": "log_by_q_value",
+    "benjamini-hochberg": "log_bh_q_value",
 }
 ADJUSTMENT_LABELS: Final = {
     "benjamini-yekutieli": "BY",
@@ -168,6 +173,32 @@ def _q_column(provider: str, adjustment: str) -> str:
     return f"{provider}_{suffix}"
 
 
+def _log_q_column(provider: str, adjustment: str) -> str:
+    """Return the inferential log-q column for one named adjustment."""
+    try:
+        suffix = LOG_ADJUSTMENT_COLUMNS[adjustment]
+    except KeyError as error:
+        msg = f"Unsupported multiplicity adjustment: {adjustment}"
+        raise ValueError(msg) from error
+    return f"{provider}_{suffix}"
+
+
+def _threshold_crossing(
+    frame: pd.DataFrame,
+    provider: str,
+    adjustment: str,
+    threshold: float,
+) -> np.ndarray:
+    """Return inclusive threshold crossings using inferential log q-values."""
+    if not math.isfinite(threshold) or not 0 < threshold <= 1:
+        msg = "A q-value threshold must be finite and lie in (0, 1]."
+        raise ValueError(msg)
+    return (
+        frame[_log_q_column(provider, adjustment)].to_numpy(dtype=np.float64)
+        <= math.log(threshold)
+    )
+
+
 def _threshold_label(adjustment: str, threshold: float) -> str:
     """Return one compact label derived from the frozen reporting rule."""
     try:
@@ -178,71 +209,27 @@ def _threshold_label(adjustment: str, threshold: float) -> str:
     return f"{label} q <= {threshold:g}"
 
 
+def _decision_prefix(provider: str, analysis: str) -> str:
+    """Name exported decisions without promoting descriptive providers to inference."""
+    if provider not in core.BMRS:
+        msg = f"Unsupported background provider: {provider}"
+        raise ValueError(msg)
+    if analysis == "primary":
+        if provider == "mutsig":
+            return "mutsig_primary_rejection"
+        return f"{provider}_descriptive_primary_rule_crossing"
+    if analysis == "sensitivity":
+        return f"{provider}_descriptive_sensitivity_rule_crossing"
+    msg = f"Unsupported reporting analysis: {analysis}"
+    raise ValueError(msg)
+
+
 def _read_inference(postprocess_root: Path, cohort: str) -> pd.DataFrame:
     frame = pd.read_csv(
         postprocess_root / cohort / postprocess.RESULT_NAME,
         float_precision="round_trip",
     )
-    expected_columns = ["gene_a", "gene_b"]
-    for provider in core.BMRS:
-        expected_columns.extend(
-            [
-                f"{provider}_likelihood_ratio",
-                f"{provider}_p_value",
-                f"{provider}_by_q_value",
-                f"{provider}_bh_q_value",
-                f"{provider}_rho",
-                f"{provider}_direction",
-                f"{provider}_effect_identifiability",
-                f"{provider}_effect_reportable",
-            ],
-        )
-    bounded_columns = [
-        f"{provider}_{suffix}"
-        for provider in core.BMRS
-        for suffix in ("p_value", "by_q_value", "bh_q_value")
-    ]
-    bounded = frame.loc[:, bounded_columns].to_numpy(dtype=np.float64)
-    if (
-        frame.columns.tolist() != expected_columns
-        or frame[["gene_a", "gene_b"]].duplicated().any()
-        or not np.isfinite(bounded).all()
-        or (bounded < 0).any()
-        or (bounded > 1).any()
-    ):
-        msg = f"Invalid postprocessed inference table: {cohort}"
-        raise ValueError(msg)
-    for provider in core.BMRS:
-        reportable = frame[f"{provider}_effect_reportable"]
-        identifiability = frame[f"{provider}_effect_identifiability"].astype("string")
-        direction = frame[f"{provider}_direction"].astype("string")
-        rho = frame[f"{provider}_rho"]
-        p_values = frame[f"{provider}_p_value"].to_numpy(dtype=float)
-        by_q_values = frame[f"{provider}_by_q_value"].to_numpy(dtype=float)
-        bh_q_values = frame[f"{provider}_bh_q_value"].to_numpy(dtype=float)
-        if (
-            not reportable.isin([True, False]).all()
-            or not identifiability.isin(
-                [
-                    "full-affine-rank",
-                    "rank-deficient",
-                    "rank-not-certified-underflow",
-                ],
-            ).all()
-            or not direction.isin(["ME", "CO", "neutral", "unavailable"]).all()
-            or not reportable.eq(identifiability.eq("full-affine-rank")).all()
-            or not frame.loc[~reportable, f"{provider}_p_value"].eq(1.0).all()
-            or not frame.loc[~reportable, f"{provider}_by_q_value"].eq(1.0).all()
-            or not frame.loc[~reportable, f"{provider}_bh_q_value"].eq(1.0).all()
-            or not direction.loc[~reportable].eq("unavailable").all()
-            or not rho.loc[~reportable].isna().all()
-            or not np.isfinite(rho.loc[reportable].to_numpy(dtype=float)).all()
-            or not direction.eq(postprocess._direction(rho)).all()  # noqa: SLF001
-            or (bh_q_values + 1e-14 < p_values).any()
-            or (by_q_values + 1e-14 < bh_q_values).any()
-        ):
-            msg = f"Invalid inferential annotations: {cohort}/{provider}"
-            raise ValueError(msg)
+    postprocess.validate_inference_frame(frame, cohort=cohort)
     return frame
 
 
@@ -318,7 +305,7 @@ def _cohort_summary_row(  # noqa: PLR0913
         "sensitivity_adjustment": ADJUSTMENT_LABELS[sensitivity_adjustment],
         "sensitivity_q_threshold": sensitivity_q,
         "tumors": len(burdens),
-        "selected_events": 500,
+        "selected_features": 500,
         "tested_pairs": len(frame),
         "burden_median": float(np.median(burdens)),
         "burden_q25": float(np.quantile(burdens, 0.25)),
@@ -334,18 +321,18 @@ def _cohort_summary_row(  # noqa: PLR0913
             ("primary", primary_adjustment, primary_q),
             ("sensitivity", sensitivity_adjustment, sensitivity_q),
         ):
-            q_values = frame[_q_column(provider, adjustment)].to_numpy(dtype=float)
-            significant = q_values <= threshold
-            row[f"{provider}_{label}_total"] = int(significant.sum())
-            row[f"{provider}_{label}_me"] = int(
-                (significant & directions.eq("ME").to_numpy()).sum(),
+            crossing = _threshold_crossing(frame, provider, adjustment, threshold)
+            prefix = _decision_prefix(provider, label)
+            row[f"{prefix}_total"] = int(crossing.sum())
+            row[f"{prefix}_me"] = int(
+                (crossing & directions.eq("ME").to_numpy()).sum(),
             )
-            row[f"{provider}_{label}_co"] = int(
-                (significant & directions.eq("CO").to_numpy()).sum(),
+            row[f"{prefix}_co"] = int(
+                (crossing & directions.eq("CO").to_numpy()).sum(),
             )
-            row[f"{provider}_{label}_direction_unavailable"] = int(
+            row[f"{prefix}_direction_unavailable"] = int(
                 (
-                    significant
+                    crossing
                     & ~directions.isin(["ME", "CO"]).to_numpy()
                 ).sum(),
             )
@@ -361,16 +348,21 @@ def _top_primary_pairs(
     per_direction: int = 10,
 ) -> pd.DataFrame:
     provider = "mutsig"
-    primary_column = _q_column(provider, primary_adjustment)
-    significant = frame[primary_column] <= primary_q
+    primary_log_column = _log_q_column(provider, primary_adjustment)
+    rejected = _threshold_crossing(
+        frame,
+        provider,
+        primary_adjustment,
+        primary_q,
+    )
     parts = []
     for direction in ("ME", "CO"):
         selected = frame.loc[
-            significant & frame[f"{provider}_direction"].eq(direction),
+            rejected & frame[f"{provider}_direction"].eq(direction),
         ].copy()
         selected["absolute_mutsig_rho"] = selected["mutsig_rho"].abs()
         selected = selected.sort_values(
-            [primary_column, "mutsig_p_value", "absolute_mutsig_rho"],
+            [primary_log_column, "mutsig_log_p_value", "absolute_mutsig_rho"],
             ascending=[True, True, False],
             kind="stable",
         ).head(per_direction)
@@ -381,24 +373,35 @@ def _top_primary_pairs(
     result.insert(1, "primary_adjustment", ADJUSTMENT_LABELS[primary_adjustment])
     result.insert(2, "primary_q_threshold", primary_q)
     for provider in core.BMRS:
-        crossing = result[_q_column(provider, primary_adjustment)] <= primary_q
+        crossing = _threshold_crossing(
+            result,
+            provider,
+            primary_adjustment,
+            primary_q,
+        )
         provider_direction = result[f"{provider}_direction"].astype("string")
         directional = provider_direction.isin(["ME", "CO"])
         concordant = crossing & provider_direction.eq(result["direction"])
         discordant = crossing & directional & ~concordant
-        result[f"{provider}_primary_threshold_crossing"] = crossing
-        result[f"{provider}_primary_direction_concordant"] = concordant
-        result[f"{provider}_primary_direction_discordant"] = discordant
-        result[f"{provider}_primary_direction_unavailable"] = (
-            crossing & ~directional
-        )
-    result["provider_support"] = sum(
-        result[f"{provider}_primary_direction_concordant"].astype(np.int8)
-        for provider in core.BMRS
+        prefix = _decision_prefix(provider, "primary")
+        result[prefix] = crossing
+        result[f"{prefix}_direction_concordant"] = concordant
+        result[f"{prefix}_direction_discordant"] = discordant
+        result[f"{prefix}_direction_unavailable"] = crossing & ~directional
+    descriptive_providers = tuple(
+        provider for provider in core.BMRS if provider != "mutsig"
     )
-    result["provider_discordance"] = sum(
-        result[f"{provider}_primary_direction_discordant"].astype(np.int8)
-        for provider in core.BMRS
+    result["descriptive_direction_concordant_provider_count"] = sum(
+        result[
+            f"{_decision_prefix(provider, 'primary')}_direction_concordant"
+        ].astype(np.int8)
+        for provider in descriptive_providers
+    )
+    result["descriptive_direction_discordant_provider_count"] = sum(
+        result[
+            f"{_decision_prefix(provider, 'primary')}_direction_discordant"
+        ].astype(np.int8)
+        for provider in descriptive_providers
     )
     return result.drop(columns="absolute_mutsig_rho")
 
@@ -413,9 +416,11 @@ def _overlap_rows(
     rows = []
     for direction in ("ME", "CO"):
         crossings = {
-            provider: (
-                frame[_q_column(provider, primary_adjustment)].to_numpy(dtype=float)
-                <= primary_q
+            provider: _threshold_crossing(
+                frame,
+                provider,
+                primary_adjustment,
+                primary_q,
             )
             for provider in core.BMRS
         }
@@ -446,15 +451,21 @@ def _overlap_rows(
                 "direction": direction,
                 "adjustment": ADJUSTMENT_LABELS[primary_adjustment],
                 "q_threshold": primary_q,
-                "cbase": int(masks["cbase"].sum()),
-                "dig": int(masks["dig"].sum()),
-                "mutsig": int(masks["mutsig"].sum()),
-                "mutsig_cbase_concordant": int(
+                "mutsig_primary_rejection_count": int(masks["mutsig"].sum()),
+                "cbase_descriptive_crossing_count": int(masks["cbase"].sum()),
+                "dig_descriptive_crossing_count": int(masks["dig"].sum()),
+                "mutsig_rejection_cbase_concordant_crossing_count": int(
                     (mutsig & masks["cbase"]).sum(),
                 ),
-                "mutsig_cbase_discordant": int((mutsig & cbase_opposite).sum()),
-                "mutsig_dig_concordant": int((mutsig & masks["dig"]).sum()),
-                "mutsig_dig_discordant": int((mutsig & dig_opposite).sum()),
+                "mutsig_rejection_cbase_discordant_crossing_count": int(
+                    (mutsig & cbase_opposite).sum(),
+                ),
+                "mutsig_rejection_dig_concordant_crossing_count": int(
+                    (mutsig & masks["dig"]).sum(),
+                ),
+                "mutsig_rejection_dig_discordant_crossing_count": int(
+                    (mutsig & dig_opposite).sum(),
+                ),
             },
         )
     return rows
@@ -750,12 +761,17 @@ def _plot_figure6(  # noqa: PLR0913
     ax.legend(frameon=False)
 
     ax = axes[0, 1]
-    ordered = summary.sort_values("mutsig_primary_co", ascending=True)
+    ordered = summary.sort_values(
+        f"{_decision_prefix('mutsig', 'primary')}_co",
+        ascending=True,
+    )
     positions = np.arange(len(ordered))
     offsets = {"cbase": -0.22, "dig": 0.0, "mutsig": 0.22}
     provider_counts = []
     for provider in core.BMRS:
-        counts = ordered[f"{provider}_primary_co"].to_numpy(dtype=float)
+        counts = ordered[
+            f"{_decision_prefix(provider, 'primary')}_co"
+        ].to_numpy(dtype=float)
         provider_counts.append(counts)
         ax.scatter(
             np.log10(counts + 1),
@@ -775,8 +791,11 @@ def _plot_figure6(  # noqa: PLR0913
         [f"{value:,}" for value in count_ticks],
     )
     threshold_label = _threshold_label(primary_adjustment, primary_q)
-    ax.set_xlabel(f"CO pairs at {threshold_label}")
-    ax.set_title("B  Co-occurrence calls across background models", loc="left")
+    ax.set_xlabel(f"CO-direction pairs at {threshold_label}")
+    ax.set_title(
+        "B  Primary MutSig rejections and descriptive crossings",
+        loc="left",
+    )
     ax.grid(axis="x", alpha=0.2)
 
     ax = axes[1, 0]
@@ -842,26 +861,30 @@ def _plot_figure6(  # noqa: PLR0913
     ax = axes[1, 1]
     aggregate = overlap.groupby("direction", sort=False)[
         [
-            "mutsig",
-            "mutsig_cbase_concordant",
-            "mutsig_dig_concordant",
-            "mutsig_cbase_discordant",
-            "mutsig_dig_discordant",
+            "mutsig_primary_rejection_count",
+            "mutsig_rejection_cbase_concordant_crossing_count",
+            "mutsig_rejection_dig_concordant_crossing_count",
+            "mutsig_rejection_cbase_discordant_crossing_count",
+            "mutsig_rejection_dig_discordant_crossing_count",
         ]
     ].sum()
     directions = ["ME", "CO"]
     positions = np.arange(len(directions), dtype=float)
     widths = 0.24
     series = (
-        ("mutsig", "MutSig", PROVIDER_COLORS["mutsig"]),
         (
-            "mutsig_cbase_concordant",
-            "MutSig + CBaSE, same direction",
+            "mutsig_primary_rejection_count",
+            "Primary MutSig rejections",
+            PROVIDER_COLORS["mutsig"],
+        ),
+        (
+            "mutsig_rejection_cbase_concordant_crossing_count",
+            "With descriptive CBaSE crossing, same direction",
             PROVIDER_COLORS["cbase"],
         ),
         (
-            "mutsig_dig_concordant",
-            "MutSig + DIG, same direction",
+            "mutsig_rejection_dig_concordant_crossing_count",
+            "With descriptive DIG crossing, same direction",
             PROVIDER_COLORS["dig"],
         ),
     )
@@ -872,13 +895,17 @@ def _plot_figure6(  # noqa: PLR0913
     ):
         values = aggregate.reindex(directions, fill_value=0)[column].to_numpy()
         ax.bar(positions + offset, values, width=widths, color=color, label=label)
-    cbase_discordant = int(aggregate["mutsig_cbase_discordant"].sum())
-    dig_discordant = int(aggregate["mutsig_dig_discordant"].sum())
+    cbase_discordant = int(
+        aggregate["mutsig_rejection_cbase_discordant_crossing_count"].sum(),
+    )
+    dig_discordant = int(
+        aggregate["mutsig_rejection_dig_discordant_crossing_count"].sum(),
+    )
     ax.text(
         0.02,
         0.98,
         (
-            "Opposite-direction threshold crossings among MutSig calls: "
+            "Opposite-direction crossings among primary MutSig rejections: "
             f"CBaSE {cbase_discordant:,}; DIG {dig_discordant:,}"
         ),
         transform=ax.transAxes,
@@ -952,6 +979,9 @@ def validate_report(  # noqa: PLR0913
         or manifest.get("sensitivity_q_threshold") != 0.01
         or manifest.get("provider_overlap")
         != "direction-concordant-descriptive-only-not-an-inferential-vote"
+        or manifest.get("threshold_decision_scale") != "natural-log-q-values"
+        or manifest.get("probability_representation")
+        != postprocess.PROBABILITY_REPRESENTATION
         or set(manifest.get("inputs", {}))
         != {
             "run_completion",
@@ -979,18 +1009,21 @@ def validate_report(  # noqa: PLR0913
             msg = f"Focused reporting output changed: {name}"
             raise ValueError(msg)
     if run_root is not None:
+        calibration.validate_summary(
+            calibration_root,
+            run_root=run_root,
+            provider_root=provider_root,
+        )
+        rule = _load_rule(rule_path, calibration_root, postprocess_root)
+        if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
+            msg = "A withheld reporting rule cannot validate association-level outputs."
+            raise RuntimeError(msg)
         validate_provider_root(provider_root, TCGA_COHORTS)
         postprocess.validate_derived_root(
             postprocess_root,
             TCGA_COHORTS,
             run_root=run_root,
         )
-        calibration.validate_summary(
-            calibration_root,
-            run_root=run_root,
-            provider_root=provider_root,
-        )
-        _load_rule(rule_path, calibration_root, postprocess_root)
         input_paths = {
             "run_completion": (
                 run_root / "completion_manifest.json",
@@ -1043,13 +1076,13 @@ def validate_report(  # noqa: PLR0913
         "direction",
         "adjustment",
         "q_threshold",
-        "cbase",
-        "dig",
-        "mutsig",
-        "mutsig_cbase_concordant",
-        "mutsig_cbase_discordant",
-        "mutsig_dig_concordant",
-        "mutsig_dig_discordant",
+        "mutsig_primary_rejection_count",
+        "cbase_descriptive_crossing_count",
+        "dig_descriptive_crossing_count",
+        "mutsig_rejection_cbase_concordant_crossing_count",
+        "mutsig_rejection_cbase_discordant_crossing_count",
+        "mutsig_rejection_dig_concordant_crossing_count",
+        "mutsig_rejection_dig_discordant_crossing_count",
     ]
     overlap_count_columns = expected_overlap_columns[4:]
     overlap_schema_valid = overlap.columns.tolist() == expected_overlap_columns
@@ -1085,14 +1118,14 @@ def validate_report(  # noqa: PLR0913
         or (overlap_counts < 0).any()
         or not np.equal(overlap_counts, np.floor(overlap_counts)).all()
         or (
-            overlap["mutsig_cbase_concordant"]
-            + overlap["mutsig_cbase_discordant"]
-            > overlap["mutsig"]
+            overlap["mutsig_rejection_cbase_concordant_crossing_count"]
+            + overlap["mutsig_rejection_cbase_discordant_crossing_count"]
+            > overlap["mutsig_primary_rejection_count"]
         ).any()
         or (
-            overlap["mutsig_dig_concordant"]
-            + overlap["mutsig_dig_discordant"]
-            > overlap["mutsig"]
+            overlap["mutsig_rejection_dig_concordant_crossing_count"]
+            + overlap["mutsig_rejection_dig_discordant_crossing_count"]
+            > overlap["mutsig_primary_rejection_count"]
         ).any()
         or len(runtime) != len(TCGA_COHORTS) * len(core.BMRS)
         or fit_diagnostics["scope"].tolist() != ["all", *core.BMRS]
@@ -1142,8 +1175,6 @@ def build_report(  # noqa: PLR0913
 ) -> Path:
     """Build all result-dependent reporting artifacts once."""
     cohorts = tuple(TCGA_COHORTS)
-    validate_provider_root(provider_root, cohorts)
-    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     calibration.validate_summary(
         calibration_root,
         run_root=run_root,
@@ -1154,6 +1185,8 @@ def build_report(  # noqa: PLR0913
         reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
         msg = f"Association-level reporting is withheld: {reason}"
         raise RuntimeError(msg)
+    validate_provider_root(provider_root, cohorts)
+    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     postprocess._validate_completion(run_root, cohorts)  # noqa: SLF001
     if output_root.exists() or output_root.is_symlink():
         msg = f"Refusing to overwrite reporting root: {output_root}"
@@ -1232,7 +1265,7 @@ def build_report(  # noqa: PLR0913
     burden_columns = [
         "cohort",
         "tumors",
-        "selected_events",
+        "selected_features",
         "tested_pairs",
         "burden_median",
         "burden_q25",
@@ -1244,7 +1277,7 @@ def build_report(  # noqa: PLR0913
     burden_labels = [
         "Cohort",
         "Tumors",
-        "Events",
+        "Selected features",
         "Pairs",
         "Median",
         "Q25",
@@ -1260,17 +1293,38 @@ def build_report(  # noqa: PLR0913
         {
             "Cohort": row["cohort"],
             "Background": PROVIDER_LABELS[provider],
-            f"{primary_label} total": row[f"{provider}_primary_total"],
-            f"{primary_label} ME": row[f"{provider}_primary_me"],
-            f"{primary_label} CO": row[f"{provider}_primary_co"],
-            f"{primary_label} direction unavailable": (
-                row[f"{provider}_primary_direction_unavailable"]
+            "Primary-rule interpretation": (
+                "primary MutSig rejection"
+                if provider == "mutsig"
+                else "descriptive threshold crossing"
             ),
-            f"{sensitivity_label} total": row[f"{provider}_sensitivity_total"],
-            f"{sensitivity_label} ME": row[f"{provider}_sensitivity_me"],
-            f"{sensitivity_label} CO": row[f"{provider}_sensitivity_co"],
-            f"{sensitivity_label} direction unavailable": (
-                row[f"{provider}_sensitivity_direction_unavailable"]
+            f"{primary_label} decisions total": row[
+                f"{_decision_prefix(provider, 'primary')}_total"
+            ],
+            f"{primary_label} decisions ME": row[
+                f"{_decision_prefix(provider, 'primary')}_me"
+            ],
+            f"{primary_label} decisions CO": row[
+                f"{_decision_prefix(provider, 'primary')}_co"
+            ],
+            f"{primary_label} decisions direction unavailable": (
+                row[
+                    f"{_decision_prefix(provider, 'primary')}_direction_unavailable"
+                ]
+            ),
+            f"{sensitivity_label} sensitivity crossings total": (
+                row[f"{_decision_prefix(provider, 'sensitivity')}_total"]
+            ),
+            f"{sensitivity_label} sensitivity crossings ME": (
+                row[f"{_decision_prefix(provider, 'sensitivity')}_me"]
+            ),
+            f"{sensitivity_label} sensitivity crossings CO": (
+                row[f"{_decision_prefix(provider, 'sensitivity')}_co"]
+            ),
+            f"{sensitivity_label} sensitivity crossings direction unavailable": (
+                row[
+                    f"{_decision_prefix(provider, 'sensitivity')}_direction_unavailable"
+                ]
             ),
         }
         for row in summary.to_dict(orient="records")
@@ -1281,7 +1335,10 @@ def build_report(  # noqa: PLR0913
         "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
         + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
         + "\n\\medskip\n"
-        + "\\textbf{B. Significant pairs by background and fitted direction}\\par\n"
+        + (
+            "\\textbf{B. Primary MutSig rejections and descriptive background "
+            "crossings by fitted direction}\\par\n"
+        )
         + call_table.to_latex(index=False, escape=True, longtable=True)
     )
     (staging / "table_s5.tex").write_text(latex, encoding="utf-8")
@@ -1309,6 +1366,8 @@ def build_report(  # noqa: PLR0913
         "provider_overlap": (
             "direction-concordant-descriptive-only-not-an-inferential-vote"
         ),
+        "threshold_decision_scale": "natural-log-q-values",
+        "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
         "high_burden_definition": {
             "measure": "pre-K total nonsynonymous SNV event count per tumor",
             "reference": "pooled 10,433-tumor 32-cohort analysis population",

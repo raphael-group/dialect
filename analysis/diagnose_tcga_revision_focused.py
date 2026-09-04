@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v2"
+DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v3"
 FOCAL_COHORTS: Final = ("LAML", "PAAD")
 
 
@@ -68,34 +68,65 @@ def _provider_record(  # noqa: PLR0913
     adjustment: str,
     threshold: float,
 ) -> dict[str, int | float | str | bool]:
-    """Return fixed-rule counts and numerical-underflow diagnostics."""
+    """Return fixed-rule crossings and positive-display clipping diagnostics."""
+    log_p_values = frame[f"{provider}_log_p_value"].to_numpy(dtype=np.float64)
     p_values = frame[f"{provider}_p_value"].to_numpy(dtype=np.float64)
+    log_q_values = frame[
+        reporting._log_q_column(provider, adjustment)  # noqa: SLF001
+    ].to_numpy(dtype=np.float64)
     q_values = frame[reporting._q_column(provider, adjustment)].to_numpy(  # noqa: SLF001
         dtype=np.float64,
     )
     directions = frame[f"{provider}_direction"].astype("string")
     identifiability = frame[f"{provider}_effect_identifiability"].astype("string")
-    significant = q_values <= threshold
+    crossing = reporting._threshold_crossing(  # noqa: SLF001
+        frame,
+        provider,
+        adjustment,
+        threshold,
+    )
+    interpretation = (
+        "primary-MutSig-rejection"
+        if provider == "mutsig" and analysis == "primary"
+        else "descriptive-threshold-crossing"
+    )
     return {
         "cohort": cohort,
         "provider": provider,
         "analysis": analysis,
+        "evidence_role": (
+            "primary-inference"
+            if provider == "mutsig" and analysis == "primary"
+            else "descriptive"
+        ),
         "adjustment": reporting.ADJUSTMENT_LABELS[adjustment],
         "q_threshold": threshold,
+        "interpretation": interpretation,
         "pair_count": len(frame),
-        "min_p_value": float(p_values.min()),
-        "min_q_value": float(q_values.min()),
-        "exact_zero_p_value_count": int((p_values == 0).sum()),
+        "min_log_p_value": float(log_p_values.min()),
+        "min_display_p_value": float(p_values.min()),
+        "min_log_q_value": float(log_q_values.min()),
+        "min_display_q_value": float(q_values.min()),
+        "p_display_clipped_count": int(
+            (log_p_values < postprocess.LOG_MIN_POSITIVE_FLOAT).sum(),
+        ),
+        "q_display_clipped_count": int(
+            (log_q_values < postprocess.LOG_MIN_POSITIVE_FLOAT).sum(),
+        ),
         "all_q_values_one": bool((q_values == 1).all()),
         "non_full_rank_count": int(identifiability.ne("full-affine-rank").sum()),
         "rank_not_certified_underflow_count": int(
             identifiability.eq("rank-not-certified-underflow").sum(),
         ),
-        "significant_count": int(significant.sum()),
-        "me_count": int((significant & directions.eq("ME").to_numpy()).sum()),
-        "co_count": int((significant & directions.eq("CO").to_numpy()).sum()),
+        "decision_count": int(crossing.sum()),
+        "me_direction_decision_count": int(
+            (crossing & directions.eq("ME").to_numpy()).sum(),
+        ),
+        "co_direction_decision_count": int(
+            (crossing & directions.eq("CO").to_numpy()).sum(),
+        ),
         "unavailable_direction_count": int(
-            (significant & ~directions.isin(["ME", "CO"]).to_numpy()).sum(),
+            (crossing & ~directions.isin(["ME", "CO"]).to_numpy()).sum(),
         ),
     }
 
@@ -110,11 +141,14 @@ def _focal_top_pairs(  # noqa: PLR0913
     sensitivity_q: float,
 ) -> pd.DataFrame:
     """Return a fixed-size MutSig-ranked audit table without tuning a threshold."""
-    primary_column = reporting._q_column("mutsig", primary_adjustment)  # noqa: SLF001
+    primary_column = reporting._log_q_column(  # noqa: SLF001
+        "mutsig",
+        primary_adjustment,
+    )
     ranked = frame.assign(
         _absolute_mutsig_rho=frame["mutsig_rho"].abs().fillna(-1.0),
     ).sort_values(
-        [primary_column, "mutsig_p_value", "_absolute_mutsig_rho"],
+        [primary_column, "mutsig_log_p_value", "_absolute_mutsig_rho"],
         ascending=[True, True, False],
         kind="stable",
     )
@@ -140,16 +174,20 @@ def _focal_top_pairs(  # noqa: PLR0913
             ("primary", primary_adjustment, primary_q),
             ("sensitivity", sensitivity_adjustment, sensitivity_q),
         ):
-            crossing = result[
-                reporting._q_column(provider, adjustment)  # noqa: SLF001
-            ].le(threshold)
-            result[f"{provider}_{label}_threshold_crossing"] = crossing
-            result[f"{provider}_{label}_direction_concordant"] = (
+            crossing = reporting._threshold_crossing(  # noqa: SLF001
+                result,
+                provider,
+                adjustment,
+                threshold,
+            )
+            prefix = reporting._decision_prefix(provider, label)  # noqa: SLF001
+            result[prefix] = crossing
+            result[f"{prefix}_direction_concordant"] = (
                 crossing
                 & mutsig_direction.isin(["ME", "CO"])
                 & provider_direction.eq(mutsig_direction)
             )
-            result[f"{provider}_{label}_direction_discordant"] = (
+            result[f"{prefix}_direction_discordant"] = (
                 crossing
                 & mutsig_direction.isin(["ME", "CO"])
                 & provider_direction.isin(["ME", "CO"])
@@ -173,7 +211,6 @@ def diagnose(  # noqa: PLR0913
     if not source_manifest.is_file():
         msg = "Focused postprocess manifest is missing."
         raise FileNotFoundError(msg)
-    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     calibration.validate_summary(
         calibration_root,
         run_root=run_root,
@@ -188,6 +225,7 @@ def diagnose(  # noqa: PLR0913
         reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
         msg = f"Association-level diagnostics are withheld: {reason}"
         raise RuntimeError(msg)
+    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
     if output_root.exists() or output_root.is_symlink():
         msg = f"Refusing to overwrite diagnostic root: {output_root}"
         raise FileExistsError(msg)
@@ -277,6 +315,8 @@ def diagnose(  # noqa: PLR0913
         "interpretation": (
             "direction-concordant-provider-overlap-is-descriptive-not-a-vote"
         ),
+        "threshold_decision_scale": "natural-log-q-values",
+        "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
         "outputs": {
             path.name: {"bytes": path.stat().st_size, "sha256": _sha256(path)}
             for path in (counts_path, overlap_path, focal_path)

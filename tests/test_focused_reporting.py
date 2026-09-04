@@ -20,24 +20,33 @@ def _inference_frame() -> pd.DataFrame:
             "gene_a": ["A_M", "B_M", "C_M", "D_M"],
             "gene_b": ["B_M", "C_M", "D_M", "E_M"],
             "cbase_likelihood_ratio": [10.0, 9.0, 2.0, 0.1],
+            "cbase_log_p_value": np.log([0.001, 0.0015, 0.003, 0.9]),
             "cbase_p_value": [0.001, 0.0015, 0.003, 0.9],
+            "cbase_log_by_q_value": np.log([0.005, 0.006, 0.5, 1.0]),
             "cbase_by_q_value": [0.005, 0.006, 0.5, 1.0],
+            "cbase_log_bh_q_value": np.log([0.004, 0.005, 0.009, 1.0]),
             "cbase_bh_q_value": [0.004, 0.005, 0.009, 1.0],
             "cbase_rho": [-0.5, -0.4, -0.2, 0.1],
             "cbase_direction": ["ME", "ME", "ME", "CO"],
             "cbase_effect_identifiability": ["full-affine-rank"] * 4,
             "cbase_effect_reportable": [True] * 4,
             "dig_likelihood_ratio": [9.0, 8.0, 1.0, 0.2],
+            "dig_log_p_value": np.log([0.001, 0.002, 0.015, 0.7]),
             "dig_p_value": [0.001, 0.002, 0.015, 0.7],
+            "dig_log_by_q_value": np.log([0.006, 0.007, 0.8, 1.0]),
             "dig_by_q_value": [0.006, 0.007, 0.8, 1.0],
+            "dig_log_bh_q_value": np.log([0.005, 0.006, 0.02, 1.0]),
             "dig_bh_q_value": [0.005, 0.006, 0.02, 1.0],
             "dig_rho": [-0.4, 0.3, -0.1, 0.2],
             "dig_direction": ["ME", "CO", "ME", "CO"],
             "dig_effect_identifiability": ["full-affine-rank"] * 4,
             "dig_effect_reportable": [True] * 4,
             "mutsig_likelihood_ratio": [15.0, 12.0, 3.0, 0.1],
+            "mutsig_log_p_value": np.log([0.0001, 0.001, 0.002, 0.8]),
             "mutsig_p_value": [0.0001, 0.001, 0.002, 0.8],
+            "mutsig_log_by_q_value": np.log([0.001, 0.004, 0.4, 0.9]),
             "mutsig_by_q_value": [0.001, 0.004, 0.4, 0.9],
+            "mutsig_log_bh_q_value": np.log([0.0005, 0.003, 0.008, 0.8]),
             "mutsig_bh_q_value": [0.0005, 0.003, 0.008, 0.8],
             "mutsig_rho": [-0.7, 0.6, -0.3, 0.2],
             "mutsig_direction": ["ME", "CO", "ME", "CO"],
@@ -68,12 +77,27 @@ def test_cohort_summary_uses_global_rule_for_every_provider() -> None:
     )
     assert row["tested_pairs"] == 4
     assert row["high_burden_fraction"] == 0.25
-    assert row["mutsig_primary_total"] == 2
-    assert row["mutsig_primary_me"] == 1
-    assert row["mutsig_primary_co"] == 1
-    assert row["mutsig_primary_direction_unavailable"] == 0
-    assert row["cbase_primary_total"] == 2
-    assert row["dig_primary_total"] == 2
+    assert row["mutsig_primary_rejection_total"] == 2
+    assert row["mutsig_primary_rejection_me"] == 1
+    assert row["mutsig_primary_rejection_co"] == 1
+    assert row["mutsig_primary_rejection_direction_unavailable"] == 0
+    assert row["cbase_descriptive_primary_rule_crossing_total"] == 2
+    assert row["dig_descriptive_primary_rule_crossing_total"] == 2
+    assert row["mutsig_descriptive_sensitivity_rule_crossing_total"] == 3
+
+
+def test_threshold_decisions_use_log_q_not_clipped_display_values() -> None:
+    frame = _inference_frame()
+    frame["mutsig_by_q_value"] = 1.0
+
+    crossing = reporting._threshold_crossing(  # noqa: SLF001
+        frame,
+        "mutsig",
+        "benjamini-yekutieli",
+        0.01,
+    )
+
+    assert crossing.tolist() == [True, True, False, False]
 
 
 def test_primary_pair_ranking_and_overlap_are_descriptive() -> None:
@@ -88,8 +112,8 @@ def test_primary_pair_ranking_and_overlap_are_descriptive() -> None:
         ["A_M", "B_M"],
         ["B_M", "C_M"],
     ]
-    assert top["provider_support"].tolist() == [3, 2]
-    assert top["provider_discordance"].tolist() == [0, 1]
+    assert top["descriptive_direction_concordant_provider_count"].tolist() == [2, 1]
+    assert top["descriptive_direction_discordant_provider_count"].tolist() == [0, 1]
 
     overlap = reporting._overlap_rows(  # noqa: SLF001
         frame,
@@ -103,26 +127,26 @@ def test_primary_pair_ranking_and_overlap_are_descriptive() -> None:
             "direction": "ME",
             "adjustment": "BY",
             "q_threshold": 0.01,
-            "cbase": 2,
-            "dig": 1,
-            "mutsig": 1,
-            "mutsig_cbase_concordant": 1,
-            "mutsig_cbase_discordant": 0,
-            "mutsig_dig_concordant": 1,
-            "mutsig_dig_discordant": 0,
+            "mutsig_primary_rejection_count": 1,
+            "cbase_descriptive_crossing_count": 2,
+            "dig_descriptive_crossing_count": 1,
+            "mutsig_rejection_cbase_concordant_crossing_count": 1,
+            "mutsig_rejection_cbase_discordant_crossing_count": 0,
+            "mutsig_rejection_dig_concordant_crossing_count": 1,
+            "mutsig_rejection_dig_discordant_crossing_count": 0,
         },
         {
             "cohort": "TEST",
             "direction": "CO",
             "adjustment": "BY",
             "q_threshold": 0.01,
-            "cbase": 0,
-            "dig": 1,
-            "mutsig": 1,
-            "mutsig_cbase_concordant": 0,
-            "mutsig_cbase_discordant": 1,
-            "mutsig_dig_concordant": 1,
-            "mutsig_dig_discordant": 0,
+            "mutsig_primary_rejection_count": 1,
+            "cbase_descriptive_crossing_count": 0,
+            "dig_descriptive_crossing_count": 1,
+            "mutsig_rejection_cbase_concordant_crossing_count": 0,
+            "mutsig_rejection_cbase_discordant_crossing_count": 1,
+            "mutsig_rejection_dig_concordant_crossing_count": 1,
+            "mutsig_rejection_dig_discordant_crossing_count": 0,
         },
     ]
 
@@ -179,19 +203,19 @@ def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> 
     summary = pd.DataFrame(
         {
             "cohort": ["A", "B"],
-            "cbase_primary_co": [2, 1],
-            "dig_primary_co": [1, 1],
-            "mutsig_primary_co": [1, 0],
+            "cbase_descriptive_primary_rule_crossing_co": [2, 1],
+            "dig_descriptive_primary_rule_crossing_co": [1, 1],
+            "mutsig_primary_rejection_co": [1, 0],
         },
     )
     overlap = pd.DataFrame(
         {
             "direction": ["ME", "CO", "ME", "CO"],
-            "mutsig": [2, 1, 1, 0],
-            "mutsig_cbase_concordant": [1, 1, 1, 0],
-            "mutsig_dig_concordant": [2, 0, 0, 0],
-            "mutsig_cbase_discordant": [0, 0, 0, 0],
-            "mutsig_dig_discordant": [0, 1, 1, 0],
+            "mutsig_primary_rejection_count": [2, 1, 1, 0],
+            "mutsig_rejection_cbase_concordant_crossing_count": [1, 1, 1, 0],
+            "mutsig_rejection_dig_concordant_crossing_count": [2, 0, 0, 0],
+            "mutsig_rejection_cbase_discordant_crossing_count": [0, 0, 0, 0],
+            "mutsig_rejection_dig_discordant_crossing_count": [0, 1, 1, 0],
         },
     )
     calibration = pd.DataFrame(
@@ -312,22 +336,31 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
             "direction": ["ME", "CO"] * len(reporting.TCGA_COHORTS),
             "adjustment": ["BY"] * (len(reporting.TCGA_COHORTS) * 2),
             "q_threshold": [0.01] * (len(reporting.TCGA_COHORTS) * 2),
-            "cbase": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
-            "dig": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
-            "mutsig": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
-            "mutsig_cbase_concordant": np.zeros(
+            "mutsig_primary_rejection_count": np.zeros(
                 len(reporting.TCGA_COHORTS) * 2,
                 dtype=int,
             ),
-            "mutsig_cbase_discordant": np.zeros(
+            "cbase_descriptive_crossing_count": np.zeros(
                 len(reporting.TCGA_COHORTS) * 2,
                 dtype=int,
             ),
-            "mutsig_dig_concordant": np.zeros(
+            "dig_descriptive_crossing_count": np.zeros(
                 len(reporting.TCGA_COHORTS) * 2,
                 dtype=int,
             ),
-            "mutsig_dig_discordant": np.zeros(
+            "mutsig_rejection_cbase_concordant_crossing_count": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_rejection_cbase_discordant_crossing_count": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_rejection_dig_concordant_crossing_count": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_rejection_dig_discordant_crossing_count": np.zeros(
                 len(reporting.TCGA_COHORTS) * 2,
                 dtype=int,
             ),
@@ -419,6 +452,8 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         "provider_overlap": (
             "direction-concordant-descriptive-only-not-an-inferential-vote"
         ),
+        "threshold_decision_scale": "natural-log-q-values",
+        "probability_representation": reporting.postprocess.PROBABILITY_REPRESENTATION,
         "inputs": {
             "run_completion": {},
             "provider_manifest": {},

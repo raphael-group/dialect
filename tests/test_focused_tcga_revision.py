@@ -506,13 +506,24 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
     cohort_root = output_root / "CHOL"
     cohort_root.mkdir(parents=True)
     result_path = cohort_root / postprocess.RESULT_NAME
-    result_path.write_text("gene_a,gene_b\nA_M,B_M\n", encoding="utf-8")
+    frame = pd.DataFrame({"gene_a": ["A_M"], "gene_b": ["B_M"]})
+    for provider in postprocess.BMRS:
+        statistics = postprocess._provider_statistics(  # noqa: SLF001
+            np.asarray([1.0]),
+            pd.Series([-0.1]),
+            pd.Series(["full-affine-rank"]),
+        )
+        for name, values in statistics.items():
+            frame[f"{provider}_{name}"] = values
+    frame.to_csv(result_path, index=False)
     diagnostics = {
         provider: {
             "full_affine_rank_count": 1,
             "rank_deficient_count": 0,
             "rank_not_certified_underflow_count": 0,
-            "exact_zero_p_value_count": 0,
+            "p_display_clipped_count": 0,
+            "by_display_clipped_count": 0,
+            "bh_display_clipped_count": 0,
         }
         for provider in postprocess.BMRS
     }
@@ -521,7 +532,9 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
         "contract": postprocess.DERIVATION_CONTRACT,
         "cohort": "CHOL",
         "providers": list(postprocess.BMRS),
+        "sources": {provider: {} for provider in postprocess.BMRS},
         "pair_count": 1,
+        "family": "all-matched-unordered-pairs-excluding-same-base-M:N",
         "multiplicity": {
             "primary": "provider-specific-BY-over-complete-within-cohort-family",
             "nominal_sensitivity": (
@@ -529,6 +542,7 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
             ),
         },
         "non_full_rank": "retain-in-family-with-p-one-and-no-directional-effect",
+        "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
         "reporting_threshold_selected": False,
         "diagnostics": diagnostics,
         "output": postprocess._file_record(  # noqa: SLF001
@@ -546,13 +560,16 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
         "cohorts": ["CHOL"],
         "cohort_count": 1,
         "provider_family_count": 3,
+        "pair_count_per_provider": 1,
         "effective_p_policy": (
             "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
         ),
+        "probability_representation": postprocess.PROBABILITY_REPRESENTATION,
         "multiplicity": {
             "primary": "benjamini-yekutieli",
             "nominal_sensitivity": "benjamini-hochberg",
         },
+        "reporting_threshold_selected": False,
         "cohort_manifests": [
             postprocess._file_record(  # noqa: SLF001
                 cohort_manifest_path,
@@ -565,7 +582,18 @@ def test_postprocess_root_validation_detects_table_drift(tmp_path: Path) -> None
     )
 
     postprocess.validate_derived_root(output_root, ("CHOL",))
-    result_path.write_text("gene_a,gene_b\nA_M,C_M\n", encoding="utf-8")
+    root_manifest["pair_count_per_provider"] = 2
+    (output_root / postprocess.ROOT_MANIFEST_NAME).write_bytes(
+        postprocess._canonical_json(root_manifest) + b"\n",  # noqa: SLF001
+    )
+    with pytest.raises(ValueError, match="aggregate pair count"):
+        postprocess.validate_derived_root(output_root, ("CHOL",))
+    root_manifest["pair_count_per_provider"] = 1
+    (output_root / postprocess.ROOT_MANIFEST_NAME).write_bytes(
+        postprocess._canonical_json(root_manifest) + b"\n",  # noqa: SLF001
+    )
+    frame.loc[0, "gene_b"] = "C_M"
+    frame.to_csv(result_path, index=False)
 
     with pytest.raises(ValueError, match="derived cohort output"):
         postprocess.validate_derived_root(output_root, ("CHOL",))
