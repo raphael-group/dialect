@@ -1,4 +1,4 @@
-"""Summarize focused K=500 provider results and diagnose PAAD/LAML q-values."""
+"""Summarize the frozen focused K=500 reporting rule and PAAD/LAML results."""
 
 from __future__ import annotations
 
@@ -13,11 +13,10 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
-from analysis.postprocess_tcga_revision_focused import (
-    RESULT_NAME,
-    ROOT_MANIFEST_NAME,
-    validate_derived_root,
-)
+from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import freeze_tcga_revision_reporting_rule as rule_module
+from analysis import postprocess_tcga_revision_focused as postprocess
+from analysis import report_tcga_revision_focused as reporting
 from analysis.prepare_tcga_revision_focused import _parse_cohorts
 from analysis.run_tcga_revision_k500 import BMRS
 
@@ -25,8 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v1"
-THRESHOLDS: Final = (0.01, 0.05, 0.1, 0.2)
+DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v2"
 FOCAL_COHORTS: Final = ("LAML", "PAAD")
 
 
@@ -61,48 +59,192 @@ def _write_atomic(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _provider_record(
+def _provider_record(  # noqa: PLR0913
     frame: pd.DataFrame,
+    *,
     cohort: str,
     provider: str,
+    analysis: str,
+    adjustment: str,
     threshold: float,
 ) -> dict[str, int | float | str | bool]:
+    """Return fixed-rule counts and numerical-underflow diagnostics."""
     p_values = frame[f"{provider}_p_value"].to_numpy(dtype=np.float64)
-    q_values = frame[f"{provider}_q_value"].to_numpy(dtype=np.float64)
+    q_values = frame[reporting._q_column(provider, adjustment)].to_numpy(  # noqa: SLF001
+        dtype=np.float64,
+    )
     directions = frame[f"{provider}_direction"].astype("string")
+    identifiability = frame[f"{provider}_effect_identifiability"].astype("string")
     significant = q_values <= threshold
     return {
         "cohort": cohort,
         "provider": provider,
-        "threshold": threshold,
+        "analysis": analysis,
+        "adjustment": reporting.ADJUSTMENT_LABELS[adjustment],
+        "q_threshold": threshold,
         "pair_count": len(frame),
         "min_p_value": float(p_values.min()),
         "min_q_value": float(q_values.min()),
+        "exact_zero_p_value_count": int((p_values == 0).sum()),
         "all_q_values_one": bool((q_values == 1).all()),
+        "non_full_rank_count": int(identifiability.ne("full-affine-rank").sum()),
+        "rank_not_certified_underflow_count": int(
+            identifiability.eq("rank-not-certified-underflow").sum(),
+        ),
         "significant_count": int(significant.sum()),
         "me_count": int((significant & directions.eq("ME").to_numpy()).sum()),
         "co_count": int((significant & directions.eq("CO").to_numpy()).sum()),
         "unavailable_direction_count": int(
-            (significant & directions.eq("unavailable").to_numpy()).sum(),
+            (significant & ~directions.isin(["ME", "CO"]).to_numpy()).sum(),
         ),
     }
 
 
-def diagnose(
+def _focal_top_pairs(  # noqa: PLR0913
+    frame: pd.DataFrame,
     *,
+    cohort: str,
+    primary_adjustment: str,
+    primary_q: float,
+    sensitivity_adjustment: str,
+    sensitivity_q: float,
+) -> pd.DataFrame:
+    """Return a fixed-size MutSig-ranked audit table without tuning a threshold."""
+    primary_column = reporting._q_column("mutsig", primary_adjustment)  # noqa: SLF001
+    ranked = frame.assign(
+        _absolute_mutsig_rho=frame["mutsig_rho"].abs().fillna(-1.0),
+    ).sort_values(
+        [primary_column, "mutsig_p_value", "_absolute_mutsig_rho"],
+        ascending=[True, True, False],
+        kind="stable",
+    )
+    result = ranked.head(50).drop(columns="_absolute_mutsig_rho").copy()
+    result.insert(0, "mutsig_primary_rank", np.arange(1, len(result) + 1))
+    result.insert(0, "cohort", cohort)
+    result.insert(
+        1,
+        "primary_adjustment",
+        reporting.ADJUSTMENT_LABELS[primary_adjustment],
+    )
+    result.insert(2, "primary_q_threshold", primary_q)
+    result.insert(
+        3,
+        "sensitivity_adjustment",
+        reporting.ADJUSTMENT_LABELS[sensitivity_adjustment],
+    )
+    result.insert(4, "sensitivity_q_threshold", sensitivity_q)
+    mutsig_direction = result["mutsig_direction"].astype("string")
+    for provider in BMRS:
+        provider_direction = result[f"{provider}_direction"].astype("string")
+        for label, adjustment, threshold in (
+            ("primary", primary_adjustment, primary_q),
+            ("sensitivity", sensitivity_adjustment, sensitivity_q),
+        ):
+            crossing = result[
+                reporting._q_column(provider, adjustment)  # noqa: SLF001
+            ].le(threshold)
+            result[f"{provider}_{label}_threshold_crossing"] = crossing
+            result[f"{provider}_{label}_direction_concordant"] = (
+                crossing
+                & mutsig_direction.isin(["ME", "CO"])
+                & provider_direction.eq(mutsig_direction)
+            )
+            result[f"{provider}_{label}_direction_discordant"] = (
+                crossing
+                & mutsig_direction.isin(["ME", "CO"])
+                & provider_direction.isin(["ME", "CO"])
+                & provider_direction.ne(mutsig_direction)
+            )
+    return result
+
+
+def diagnose(  # noqa: PLR0913
+    *,
+    run_root: Path,
+    provider_root: Path,
     postprocess_root: Path,
+    calibration_root: Path,
+    rule_path: Path,
     output_root: Path,
     cohorts: Sequence[str],
 ) -> Path:
-    """Write compact provider counts, overlap, and PAAD/LAML top-pair tables."""
-    source_manifest = postprocess_root / ROOT_MANIFEST_NAME
+    """Write fixed-rule counts, directional overlap, and focal audit tables."""
+    source_manifest = postprocess_root / postprocess.ROOT_MANIFEST_NAME
     if not source_manifest.is_file():
         msg = "Focused postprocess manifest is missing."
         raise FileNotFoundError(msg)
-    validate_derived_root(postprocess_root, cohorts)
+    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
+    calibration.validate_summary(
+        calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+    )
+    rule = reporting._load_rule(  # noqa: SLF001
+        rule_path,
+        calibration_root,
+        postprocess_root,
+    )
+    if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
+        reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
+        msg = f"Association-level diagnostics are withheld: {reason}"
+        raise RuntimeError(msg)
     if output_root.exists() or output_root.is_symlink():
         msg = f"Refusing to overwrite diagnostic root: {output_root}"
         raise FileExistsError(msg)
+
+    primary_adjustment = str(rule["primary_adjustment"])
+    sensitivity_adjustment = str(rule["sensitivity_adjustment"])
+    primary_q = float(rule["primary_q_threshold"])
+    sensitivity_q = float(rule["sensitivity_q_threshold"])
+    count_records = []
+    overlap_records = []
+    focal_tables = []
+    for cohort in cohorts:
+        frame = reporting._read_inference(postprocess_root, cohort)  # noqa: SLF001
+        for analysis, adjustment, threshold in (
+            ("primary", primary_adjustment, primary_q),
+            ("nominal_sensitivity", sensitivity_adjustment, sensitivity_q),
+        ):
+            count_records.extend(
+                [
+                    _provider_record(
+                        frame,
+                        cohort=cohort,
+                        provider=provider,
+                        analysis=analysis,
+                        adjustment=adjustment,
+                        threshold=threshold,
+                    )
+                    for provider in BMRS
+                ],
+            )
+        overlap_records.extend(
+            reporting._overlap_rows(  # noqa: SLF001
+                frame,
+                cohort=cohort,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+            ),
+        )
+        if cohort in FOCAL_COHORTS:
+            focal_tables.append(
+                _focal_top_pairs(
+                    frame,
+                    cohort=cohort,
+                    primary_adjustment=primary_adjustment,
+                    primary_q=primary_q,
+                    sensitivity_adjustment=sensitivity_adjustment,
+                    sensitivity_q=sensitivity_q,
+                ),
+            )
+
+    counts = pd.DataFrame(count_records)
+    overlap = pd.DataFrame(overlap_records)
+    focal = (
+        pd.concat(focal_tables, ignore_index=True)
+        if focal_tables
+        else pd.DataFrame()
+    )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(
@@ -110,81 +252,6 @@ def diagnose(
             dir=output_root.parent,
         ),
     )
-    count_records = []
-    overlap_records = []
-    focal_tables = []
-    for cohort in cohorts:
-        frame = pd.read_csv(
-            postprocess_root / cohort / RESULT_NAME,
-            float_precision="round_trip",
-        )
-        expected_columns = ["gene_a", "gene_b"]
-        for provider in BMRS:
-            expected_columns.extend(
-                [
-                    f"{provider}_likelihood_ratio",
-                    f"{provider}_p_value",
-                    f"{provider}_q_value",
-                    f"{provider}_rho",
-                    f"{provider}_direction",
-                    f"{provider}_effect_identifiability",
-                ],
-            )
-        bounded_columns = [
-            f"{provider}_{suffix}"
-            for provider in BMRS
-            for suffix in ("p_value", "q_value")
-        ]
-        bounded = frame.loc[:, bounded_columns].to_numpy(dtype=np.float64)
-        if (
-            frame.columns.tolist() != expected_columns
-            or frame[["gene_a", "gene_b"]].duplicated().any()
-            or not np.isfinite(bounded).all()
-            or (bounded < 0).any()
-            or (bounded > 1).any()
-        ):
-            msg = f"Invalid focused postprocess table: {cohort}"
-            raise ValueError(msg)
-        for threshold in THRESHOLDS:
-            masks = {}
-            for provider in BMRS:
-                count_records.append(
-                    _provider_record(frame, cohort, provider, threshold),
-                )
-                masks[provider] = (
-                    frame[f"{provider}_q_value"].to_numpy(dtype=np.float64)
-                    <= threshold
-                ) & frame[f"{provider}_direction"].isin(["ME", "CO"]).to_numpy()
-            support = sum(mask.astype(np.int8) for mask in masks.values())
-            overlap_records.append(
-                {
-                    "cohort": cohort,
-                    "threshold": threshold,
-                    "at_least_1_provider": int((support >= 1).sum()),
-                    "at_least_2_providers": int((support >= 2).sum()),
-                    "all_3_providers": int((support == 3).sum()),
-                },
-            )
-        if cohort in FOCAL_COHORTS:
-            for provider in BMRS:
-                columns = [
-                    "gene_a",
-                    "gene_b",
-                    f"{provider}_likelihood_ratio",
-                    f"{provider}_p_value",
-                    f"{provider}_q_value",
-                    f"{provider}_rho",
-                    f"{provider}_direction",
-                    f"{provider}_effect_identifiability",
-                ]
-                top = frame.nsmallest(50, f"{provider}_p_value").loc[:, columns].copy()
-                top.insert(0, "provider", provider)
-                top.insert(0, "cohort", cohort)
-                focal_tables.append(top)
-
-    counts = pd.DataFrame(count_records)
-    overlap = pd.DataFrame(overlap_records)
-    focal = pd.concat(focal_tables, ignore_index=True)
     counts_path = staging / "cohort_provider_counts.csv"
     overlap_path = staging / "provider_overlap_counts.csv"
     focal_path = staging / "paad_laml_top_pairs.csv"
@@ -195,10 +262,21 @@ def diagnose(
         "schema_version": SCHEMA_VERSION,
         "contract": DIAGNOSTIC_CONTRACT,
         "postprocess_manifest_sha256": _sha256(source_manifest),
+        "calibration_summary_sha256": _sha256(
+            calibration_root / calibration.SUMMARY_NAME,
+        ),
+        "reporting_rule_sha256": _sha256(rule_path),
+        "inference_status": rule["inference_status"],
+        "effective_p_policy": rule["effective_p_policy"],
         "cohorts": list(cohorts),
-        "thresholds": list(THRESHOLDS),
+        "primary_adjustment": primary_adjustment,
+        "primary_q_threshold": primary_q,
+        "sensitivity_adjustment": sensitivity_adjustment,
+        "sensitivity_q_threshold": sensitivity_q,
         "focal_cohorts": list(FOCAL_COHORTS),
-        "interpretation": "descriptive-provider-overlap-not-formal-consensus",
+        "interpretation": (
+            "direction-concordant-provider-overlap-is-descriptive-not-a-vote"
+        ),
         "outputs": {
             path.name: {"bytes": path.stat().st_size, "sha256": _sha256(path)}
             for path in (counts_path, overlap_path, focal_path)
@@ -214,7 +292,11 @@ def diagnose(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--provider-root", type=Path, required=True)
     parser.add_argument("--postprocess-root", type=Path, required=True)
+    parser.add_argument("--calibration-root", type=Path, required=True)
+    parser.add_argument("--reporting-rule", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--cohorts")
     return parser
@@ -224,7 +306,11 @@ def main() -> None:
     """Run focused result diagnostics."""
     args = _parser().parse_args()
     diagnose(
+        run_root=args.run_root.resolve(),
+        provider_root=args.provider_root.resolve(),
         postprocess_root=args.postprocess_root.resolve(),
+        calibration_root=args.calibration_root.resolve(),
+        rule_path=args.reporting_rule.resolve(),
         output_root=args.output_root.absolute(),
         cohorts=_parse_cohorts(args.cohorts),
     )

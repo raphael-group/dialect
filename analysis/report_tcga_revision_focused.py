@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v1"
+REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v2"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
@@ -46,6 +46,14 @@ PROVIDER_COLORS: Final = {
     "cbase": "#6B7280",
     "dig": "#0072B2",
     "mutsig": "#D55E00",
+}
+ADJUSTMENT_COLUMNS: Final = {
+    "benjamini-yekutieli": "by_q_value",
+    "benjamini-hochberg": "bh_q_value",
+}
+ADJUSTMENT_LABELS: Final = {
+    "benjamini-yekutieli": "BY",
+    "benjamini-hochberg": "BH",
 }
 
 
@@ -93,6 +101,15 @@ def _load_rule(
     postprocess_root: Path,
 ) -> dict[str, Any]:
     rule = json.loads(rule_path.read_text(encoding="utf-8"))
+    primary_q = rule.get("primary_q_threshold")
+    sensitivity_q = rule.get("sensitivity_q_threshold")
+    gate = rule.get("calibration_gate", {})
+    gate_pass = gate.get("overall_gate_pass") if isinstance(gate, dict) else None
+    expected_status = (
+        rule_module.REPORTABLE_STATUS
+        if gate_pass is True
+        else rule_module.WITHHELD_STATUS
+    )
     if (
         rule.get("schema_version") != SCHEMA_VERSION
         or rule.get("contract") != rule_module.RULE_CONTRACT
@@ -100,10 +117,37 @@ def _load_rule(
         or rule.get("primary_provider") != "mutsig"
         or rule.get("continuity_provider") != "cbase"
         or rule.get("supplementary_providers") != ["dig"]
+        or rule.get("test") != "chi-square-one-df-profile-lrt"
+        or rule.get("effective_p_policy")
+        != "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        or rule.get("multiplicity")
+        != "provider-specific-complete-within-cohort-family"
+        or rule.get("primary_adjustment") != "benjamini-yekutieli"
+        or rule.get("sensitivity_adjustment") != "benjamini-hochberg"
+        or not isinstance(primary_q, (int, float))
+        or not isinstance(sensitivity_q, (int, float))
+        or float(primary_q) != 0.01
+        or float(sensitivity_q) != 0.01
         or rule.get("threshold_comparison") != "inclusive-less-than-or-equal"
         or rule.get("direction_unavailable")
         != "retain-nondirectional-rejection-exclude-from-me-co-lists"
         or rule.get("thresholds_selected_from_observed_pairs") is not False
+        or rule.get("calibration_interpretation")
+        != "finite-scenario-stress-not-formal-uniform-FDR-proof"
+        or not isinstance(gate_pass, bool)
+        or gate.get("provider") != "mutsig"
+        or gate.get("method")
+        != "simultaneous-one-sided-hoeffding-upper-bound"
+        or rule.get("inference_status") != expected_status
+        or (
+            rule.get("inference_status") == rule_module.REPORTABLE_STATUS
+            and rule.get("withheld_reason") is not None
+        )
+        or (
+            rule.get("inference_status") == rule_module.WITHHELD_STATUS
+            and rule.get("withheld_reason")
+            != "prespecified-finite-scenario-calibration-gate-failed"
+        )
         or rule.get("calibration_summary_sha256")
         != _sha256(calibration_root / calibration.SUMMARY_NAME)
         or rule.get("postprocess_manifest_sha256")
@@ -111,12 +155,27 @@ def _load_rule(
     ):
         msg = "Frozen reporting rule is invalid or bound to different inputs."
         raise ValueError(msg)
-    for key in ("primary_q_threshold", "sensitivity_q_threshold"):
-        value = rule.get(key)
-        if not isinstance(value, (int, float)) or not 0 < float(value) < 1:
-            msg = f"Frozen reporting rule has invalid {key}."
-            raise ValueError(msg)
     return rule
+
+
+def _q_column(provider: str, adjustment: str) -> str:
+    """Return the explicit provider q-value column for one named adjustment."""
+    try:
+        suffix = ADJUSTMENT_COLUMNS[adjustment]
+    except KeyError as error:
+        msg = f"Unsupported multiplicity adjustment: {adjustment}"
+        raise ValueError(msg) from error
+    return f"{provider}_{suffix}"
+
+
+def _threshold_label(adjustment: str, threshold: float) -> str:
+    """Return one compact label derived from the frozen reporting rule."""
+    try:
+        label = ADJUSTMENT_LABELS[adjustment]
+    except KeyError as error:
+        msg = f"Unsupported multiplicity adjustment: {adjustment}"
+        raise ValueError(msg) from error
+    return f"{label} q <= {threshold:g}"
 
 
 def _read_inference(postprocess_root: Path, cohort: str) -> pd.DataFrame:
@@ -124,9 +183,66 @@ def _read_inference(postprocess_root: Path, cohort: str) -> pd.DataFrame:
         postprocess_root / cohort / postprocess.RESULT_NAME,
         float_precision="round_trip",
     )
-    if frame[["gene_a", "gene_b"]].duplicated().any():
-        msg = f"Duplicate pair in postprocessed results: {cohort}"
+    expected_columns = ["gene_a", "gene_b"]
+    for provider in core.BMRS:
+        expected_columns.extend(
+            [
+                f"{provider}_likelihood_ratio",
+                f"{provider}_p_value",
+                f"{provider}_by_q_value",
+                f"{provider}_bh_q_value",
+                f"{provider}_rho",
+                f"{provider}_direction",
+                f"{provider}_effect_identifiability",
+                f"{provider}_effect_reportable",
+            ],
+        )
+    bounded_columns = [
+        f"{provider}_{suffix}"
+        for provider in core.BMRS
+        for suffix in ("p_value", "by_q_value", "bh_q_value")
+    ]
+    bounded = frame.loc[:, bounded_columns].to_numpy(dtype=np.float64)
+    if (
+        frame.columns.tolist() != expected_columns
+        or frame[["gene_a", "gene_b"]].duplicated().any()
+        or not np.isfinite(bounded).all()
+        or (bounded < 0).any()
+        or (bounded > 1).any()
+    ):
+        msg = f"Invalid postprocessed inference table: {cohort}"
         raise ValueError(msg)
+    for provider in core.BMRS:
+        reportable = frame[f"{provider}_effect_reportable"]
+        identifiability = frame[f"{provider}_effect_identifiability"].astype("string")
+        direction = frame[f"{provider}_direction"].astype("string")
+        rho = frame[f"{provider}_rho"]
+        p_values = frame[f"{provider}_p_value"].to_numpy(dtype=float)
+        by_q_values = frame[f"{provider}_by_q_value"].to_numpy(dtype=float)
+        bh_q_values = frame[f"{provider}_bh_q_value"].to_numpy(dtype=float)
+        if (
+            not reportable.isin([True, False]).all()
+            or not identifiability.isin(
+                [
+                    "full-affine-rank",
+                    "rank-deficient",
+                    "rank-not-certified-underflow",
+                ],
+            ).all()
+            or not direction.isin(["ME", "CO", "neutral", "unavailable"]).all()
+            or not reportable.eq(identifiability.eq("full-affine-rank")).all()
+            or not frame.loc[~reportable, f"{provider}_p_value"].eq(1.0).all()
+            or not frame.loc[~reportable, f"{provider}_by_q_value"].eq(1.0).all()
+            or not frame.loc[~reportable, f"{provider}_bh_q_value"].eq(1.0).all()
+            or not direction.loc[~reportable].eq("unavailable").all()
+            or not rho.loc[~reportable].isna().all()
+            or not np.isfinite(rho.loc[reportable].to_numpy(dtype=float)).all()
+            or not direction.eq(postprocess._direction(rho)).all()  # noqa: SLF001
+            or (bh_q_values + 1e-14 < p_values).any()
+            or (by_q_values + 1e-14 < bh_q_values).any()
+        ):
+            msg = f"Invalid inferential annotations: {cohort}/{provider}"
+            raise ValueError(msg)
     return frame
 
 
@@ -190,11 +306,17 @@ def _cohort_summary_row(  # noqa: PLR0913
     frame: pd.DataFrame,
     burdens: np.ndarray,
     high_burden_threshold: float,
+    primary_adjustment: str,
     primary_q: float,
+    sensitivity_adjustment: str,
     sensitivity_q: float,
 ) -> dict[str, int | float | str]:
     row: dict[str, int | float | str] = {
         "cohort": cohort,
+        "primary_adjustment": ADJUSTMENT_LABELS[primary_adjustment],
+        "primary_q_threshold": primary_q,
+        "sensitivity_adjustment": ADJUSTMENT_LABELS[sensitivity_adjustment],
+        "sensitivity_q_threshold": sensitivity_q,
         "tumors": len(burdens),
         "selected_events": 500,
         "tested_pairs": len(frame),
@@ -207,12 +329,12 @@ def _cohort_summary_row(  # noqa: PLR0913
         "high_burden_fraction": float((burdens >= high_burden_threshold).mean()),
     }
     for provider in core.BMRS:
-        q_values = frame[f"{provider}_q_value"].to_numpy(dtype=float)
         directions = frame[f"{provider}_direction"].astype("string")
-        for label, threshold in (
-            ("primary", primary_q),
-            ("sensitivity", sensitivity_q),
+        for label, adjustment, threshold in (
+            ("primary", primary_adjustment, primary_q),
+            ("sensitivity", sensitivity_adjustment, sensitivity_q),
         ):
+            q_values = frame[_q_column(provider, adjustment)].to_numpy(dtype=float)
             significant = q_values <= threshold
             row[f"{provider}_{label}_total"] = int(significant.sum())
             row[f"{provider}_{label}_me"] = int(
@@ -234,11 +356,13 @@ def _top_primary_pairs(
     frame: pd.DataFrame,
     *,
     cohort: str,
+    primary_adjustment: str,
     primary_q: float,
     per_direction: int = 10,
 ) -> pd.DataFrame:
     provider = "mutsig"
-    significant = frame[f"{provider}_q_value"] <= primary_q
+    primary_column = _q_column(provider, primary_adjustment)
+    significant = frame[primary_column] <= primary_q
     parts = []
     for direction in ("ME", "CO"):
         selected = frame.loc[
@@ -246,7 +370,7 @@ def _top_primary_pairs(
         ].copy()
         selected["absolute_mutsig_rho"] = selected["mutsig_rho"].abs()
         selected = selected.sort_values(
-            ["mutsig_q_value", "mutsig_p_value", "absolute_mutsig_rho"],
+            [primary_column, "mutsig_p_value", "absolute_mutsig_rho"],
             ascending=[True, True, False],
             kind="stable",
         ).head(per_direction)
@@ -254,12 +378,26 @@ def _top_primary_pairs(
         parts.append(selected)
     result = pd.concat(parts, ignore_index=True)
     result.insert(0, "cohort", cohort)
+    result.insert(1, "primary_adjustment", ADJUSTMENT_LABELS[primary_adjustment])
+    result.insert(2, "primary_q_threshold", primary_q)
     for provider in core.BMRS:
-        result[f"{provider}_primary_significant"] = (
-            result[f"{provider}_q_value"] <= primary_q
+        crossing = result[_q_column(provider, primary_adjustment)] <= primary_q
+        provider_direction = result[f"{provider}_direction"].astype("string")
+        directional = provider_direction.isin(["ME", "CO"])
+        concordant = crossing & provider_direction.eq(result["direction"])
+        discordant = crossing & directional & ~concordant
+        result[f"{provider}_primary_threshold_crossing"] = crossing
+        result[f"{provider}_primary_direction_concordant"] = concordant
+        result[f"{provider}_primary_direction_discordant"] = discordant
+        result[f"{provider}_primary_direction_unavailable"] = (
+            crossing & ~directional
         )
     result["provider_support"] = sum(
-        result[f"{provider}_primary_significant"].astype(np.int8)
+        result[f"{provider}_primary_direction_concordant"].astype(np.int8)
+        for provider in core.BMRS
+    )
+    result["provider_discordance"] = sum(
+        result[f"{provider}_primary_direction_discordant"].astype(np.int8)
         for provider in core.BMRS
     )
     return result.drop(columns="absolute_mutsig_rho")
@@ -269,30 +407,54 @@ def _overlap_rows(
     frame: pd.DataFrame,
     *,
     cohort: str,
+    primary_adjustment: str,
     primary_q: float,
 ) -> list[dict[str, int | float | str]]:
     rows = []
     for direction in ("ME", "CO"):
-        masks = {
+        crossings = {
             provider: (
-                (frame[f"{provider}_q_value"].to_numpy(dtype=float) <= primary_q)
-                & frame[f"{provider}_direction"].eq(direction).to_numpy()
+                frame[_q_column(provider, primary_adjustment)].to_numpy(dtype=float)
+                <= primary_q
             )
             for provider in core.BMRS
         }
-        support = sum(mask.astype(np.int8) for mask in masks.values())
+        directions = {
+            provider: frame[f"{provider}_direction"].astype("string")
+            for provider in core.BMRS
+        }
+        masks = {
+            provider: crossings[provider]
+            & directions[provider].eq(direction).to_numpy()
+            for provider in core.BMRS
+        }
+        mutsig = masks["mutsig"]
+        cbase_opposite = (
+            crossings["cbase"]
+            & directions["cbase"].isin(["ME", "CO"]).to_numpy()
+            & ~directions["cbase"].eq(direction).to_numpy()
+        )
+        dig_opposite = (
+            crossings["dig"]
+            & directions["dig"].isin(["ME", "CO"]).to_numpy()
+            & ~directions["dig"].eq(direction).to_numpy()
+        )
+
         rows.append(
             {
                 "cohort": cohort,
                 "direction": direction,
+                "adjustment": ADJUSTMENT_LABELS[primary_adjustment],
                 "q_threshold": primary_q,
                 "cbase": int(masks["cbase"].sum()),
                 "dig": int(masks["dig"].sum()),
                 "mutsig": int(masks["mutsig"].sum()),
-                "at_least_one": int((support >= 1).sum()),
-                "at_least_two": int((support >= 2).sum()),
-                "all_three": int((support == 3).sum()),
-                "mutsig_and_cbase": int((masks["mutsig"] & masks["cbase"]).sum()),
+                "mutsig_cbase_concordant": int(
+                    (mutsig & masks["cbase"]).sum(),
+                ),
+                "mutsig_cbase_discordant": int((mutsig & cbase_opposite).sum()),
+                "mutsig_dig_concordant": int((mutsig & masks["dig"]).sum()),
+                "mutsig_dig_discordant": int((mutsig & dig_opposite).sum()),
             },
         )
     return rows
@@ -343,6 +505,7 @@ def _fit_diagnostic_rows(
             "maximum_kkt": 0.0,
             "full_rank": 0,
             "rank_deficient": 0,
+            "rank_underflow": 0,
         }
         for provider in core.BMRS
     }
@@ -377,7 +540,13 @@ def _fit_diagnostic_rows(
                     or (fixed_point < 0).any()
                     or not np.isfinite(kkt).all()
                     or (kkt < 0).any()
-                    or not effects.isin(["full-affine-rank", "rank-deficient"]).all()
+                    or not effects.isin(
+                        [
+                            "full-affine-rank",
+                            "rank-deficient",
+                            "rank-not-certified-underflow",
+                        ],
+                    ).all()
                 ):
                     msg = f"Invalid production fit diagnostics: {cohort}/{provider}"
                     raise ValueError(msg)
@@ -403,6 +572,9 @@ def _fit_diagnostic_rows(
                 )
                 aggregate["full_rank"] += int(effects.eq("full-affine-rank").sum())
                 aggregate["rank_deficient"] += int(effects.eq("rank-deficient").sum())
+                aggregate["rank_underflow"] += int(
+                    effects.eq("rank-not-certified-underflow").sum(),
+                )
 
     def summarize(
         scope: str,
@@ -439,6 +611,9 @@ def _fit_diagnostic_rows(
             "rank_deficient_rows": sum(
                 int(item["rank_deficient"]) for item in selected
             ),
+            "rank_not_certified_underflow_rows": sum(
+                int(item["rank_underflow"]) for item in selected
+            ),
         }
 
     return [
@@ -463,10 +638,23 @@ def _expected_selected_burden(
     counts, pmfs = core._load_frozen_scientific_inputs(contract, provider)  # noqa: SLF001
     features = tuple(contract["features"])
     selected = counts.loc[:, features]
-    single = pd.read_csv(
-        run_root / "tasks" / cohort / provider / "single_gene_results.csv",
-        float_precision="round_trip",
+    task_root = run_root / "tasks" / cohort / provider
+    single_path = task_root / "single_gene_results.csv"
+    task_manifest = json.loads(
+        (task_root / "task_manifest.json").read_text(encoding="utf-8"),
     )
+    single_record = task_manifest.get("outputs", {}).get(single_path.name, {})
+    if (
+        single_record.get("path") != single_path.name
+        or single_record.get("bytes") != single_path.stat().st_size
+        or single_record.get("sha256") != _sha256(single_path)
+    ):
+        msg = (
+            "Single-event result is not bound by its task manifest: "
+            f"{cohort}/{provider}"
+        )
+        raise ValueError(msg)
+    single = pd.read_csv(single_path, float_precision="round_trip")
     if single["Gene Name"].tolist() != list(features):
         msg = f"Single-event axis changed: {cohort}/{provider}"
         raise ValueError(msg)
@@ -518,11 +706,13 @@ def _figure6_burden_source(run_root: Path) -> pd.DataFrame:
     return frame
 
 
-def _plot_figure6(
+def _plot_figure6(  # noqa: PLR0913
     *,
     burden_source: pd.DataFrame,
     summary: pd.DataFrame,
+    overlap: pd.DataFrame,
     calibration_table: pd.DataFrame,
+    primary_adjustment: str,
     primary_q: float,
     output: Path,
 ) -> None:
@@ -584,7 +774,8 @@ def _plot_figure6(
         np.log10(count_ticks + 1),
         [f"{value:,}" for value in count_ticks],
     )
-    ax.set_xlabel(f"CO pairs at q <= {primary_q:g}")
+    threshold_label = _threshold_label(primary_adjustment, primary_q)
+    ax.set_xlabel(f"CO pairs at {threshold_label}")
     ax.set_title("B  Co-occurrence calls across background models", loc="left")
     ax.grid(axis="x", alpha=0.2)
 
@@ -610,44 +801,95 @@ def _plot_figure6(
             color=PROVIDER_COLORS[provider],
             label=PROVIDER_LABELS[provider],
         )
-    limits = [0, max(0.11, float(marginal["rate"].max()) * 1.05)]
+    gate_mask = marginal["gate_endpoint"].astype("boolean").fillna(value=False)
+    gate = marginal.loc[gate_mask]
+    if not gate.empty:
+        ax.scatter(
+            gate["threshold"],
+            gate["hoeffding_upper_bound"],
+            marker="^",
+            facecolors="none",
+            edgecolors=PROVIDER_COLORS["mutsig"],
+            s=32,
+            label="MutSig simultaneous upper bound",
+        )
+        acceptance = gate.groupby("threshold", as_index=False)[
+            "acceptance_upper_bound"
+        ].first()
+        ax.scatter(
+            acceptance["threshold"],
+            acceptance["acceptance_upper_bound"],
+            marker="_",
+            color="#111827",
+            s=90,
+            linewidths=1.4,
+            label="Prespecified acceptance bound",
+        )
+    calibration_values = [float(marginal["rate"].max())]
+    for column in ("hoeffding_upper_bound", "acceptance_upper_bound"):
+        finite = pd.to_numeric(marginal[column], errors="coerce").dropna()
+        if not finite.empty:
+            calibration_values.append(float(finite.max()))
+    limits = [0, max(0.06, max(calibration_values) * 1.08)]
     ax.plot(limits, limits, color="#111827", linewidth=0.8, linestyle="--")
     ax.set_xlim(limits)
     ax.set_ylim(limits)
     ax.set_xlabel("Nominal p-value threshold")
     ax.set_ylabel("Null rejection rate")
-    ax.set_title("C  Profile-LRT null calibration", loc="left")
+    ax.set_title("C  Profile-LRT fitted-null calibration", loc="left")
     ax.legend(frameon=False)
 
     ax = axes[1, 1]
-    family = calibration_table.loc[
-        calibration_table["screen"].eq("complete_null_bh_family"),
-    ]
-    for provider in core.BMRS:
-        selected = family.loc[family["provider"].eq(provider)]
-        for threshold, group in selected.groupby("threshold"):
-            ax.scatter(
-                np.full(len(group), float(threshold)),
-                group["rate"],
-                s=22,
-                alpha=0.75,
-                color=PROVIDER_COLORS[provider],
-            )
-        means = selected.groupby("threshold", as_index=False)["rate"].mean()
-        ax.plot(
-            means["threshold"],
-            means["rate"],
-            color=PROVIDER_COLORS[provider],
-            label=PROVIDER_LABELS[provider],
-        )
-    limits = [0, max(0.22, float(family["rate"].max()) * 1.05)]
-    ax.plot(limits, limits, color="#111827", linewidth=0.8, linestyle="--")
-    ax.set_xlim(limits)
-    ax.set_ylim(limits)
-    ax.set_xlabel("Nominal BH q-value threshold")
-    ax.set_ylabel("Complete-null families with >=1 rejection")
-    ax.set_title("D  Complete-null family calibration", loc="left")
-    ax.legend(frameon=False)
+    aggregate = overlap.groupby("direction", sort=False)[
+        [
+            "mutsig",
+            "mutsig_cbase_concordant",
+            "mutsig_dig_concordant",
+            "mutsig_cbase_discordant",
+            "mutsig_dig_discordant",
+        ]
+    ].sum()
+    directions = ["ME", "CO"]
+    positions = np.arange(len(directions), dtype=float)
+    widths = 0.24
+    series = (
+        ("mutsig", "MutSig", PROVIDER_COLORS["mutsig"]),
+        (
+            "mutsig_cbase_concordant",
+            "MutSig + CBaSE, same direction",
+            PROVIDER_COLORS["cbase"],
+        ),
+        (
+            "mutsig_dig_concordant",
+            "MutSig + DIG, same direction",
+            PROVIDER_COLORS["dig"],
+        ),
+    )
+    for offset, (column, label, color) in zip(
+        (-widths, 0.0, widths),
+        series,
+        strict=True,
+    ):
+        values = aggregate.reindex(directions, fill_value=0)[column].to_numpy()
+        ax.bar(positions + offset, values, width=widths, color=color, label=label)
+    cbase_discordant = int(aggregate["mutsig_cbase_discordant"].sum())
+    dig_discordant = int(aggregate["mutsig_dig_discordant"].sum())
+    ax.text(
+        0.02,
+        0.98,
+        (
+            "Opposite-direction threshold crossings among MutSig calls: "
+            f"CBaSE {cbase_discordant:,}; DIG {dig_discordant:,}"
+        ),
+        transform=ax.transAxes,
+        va="top",
+        fontsize=8,
+    )
+    ax.set_xticks(positions, ["Mutual exclusivity", "Co-occurrence"])
+    ax.set_ylabel(f"Pairs across {len(summary)} cohorts ({threshold_label})")
+    ax.set_title("D  Direction-concordant provider overlap", loc="left")
+    ax.legend(frameon=False, loc="upper right")
+    ax.grid(axis="y", alpha=0.2)
 
     figure.savefig(
         output,
@@ -660,8 +902,28 @@ def _plot_figure6(
         raise RuntimeError(msg)
 
 
-def validate_report(output_root: Path) -> dict[str, Any]:
-    """Validate the immutable reporting tree and its core table dimensions."""
+def validate_report(  # noqa: PLR0913
+    output_root: Path,
+    *,
+    run_root: Path | None = None,
+    provider_root: Path | None = None,
+    postprocess_root: Path | None = None,
+    calibration_root: Path | None = None,
+    rule_path: Path | None = None,
+) -> dict[str, Any]:
+    """Validate the immutable reporting tree and its external input bindings."""
+    external_inputs = (
+        run_root,
+        provider_root,
+        postprocess_root,
+        calibration_root,
+        rule_path,
+    )
+    if any(path is not None for path in external_inputs) and not all(
+        path is not None for path in external_inputs
+    ):
+        msg = "All external reporting inputs must be supplied together."
+        raise ValueError(msg)
     manifest_path = output_root / "report_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_outputs = {
@@ -681,6 +943,23 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         or manifest.get("contract") != REPORT_CONTRACT
         or manifest.get("cohorts") != list(TCGA_COHORTS)
         or manifest.get("primary_provider") != "mutsig"
+        or manifest.get("inference_status") != rule_module.REPORTABLE_STATUS
+        or manifest.get("effective_p_policy")
+        != "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        or manifest.get("primary_adjustment") != "benjamini-yekutieli"
+        or manifest.get("sensitivity_adjustment") != "benjamini-hochberg"
+        or manifest.get("primary_q_threshold") != 0.01
+        or manifest.get("sensitivity_q_threshold") != 0.01
+        or manifest.get("provider_overlap")
+        != "direction-concordant-descriptive-only-not-an-inferential-vote"
+        or set(manifest.get("inputs", {}))
+        != {
+            "run_completion",
+            "provider_manifest",
+            "postprocess_manifest",
+            "calibration_summary",
+            "reporting_rule",
+        }
         or manifest.get("high_burden_definition", {}).get("pooled_tumor_count")
         != EXPECTED_TUMOR_COUNT
         or set(records) != expected_outputs
@@ -699,6 +978,49 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         ):
             msg = f"Focused reporting output changed: {name}"
             raise ValueError(msg)
+    if run_root is not None:
+        validate_provider_root(provider_root, TCGA_COHORTS)
+        postprocess.validate_derived_root(
+            postprocess_root,
+            TCGA_COHORTS,
+            run_root=run_root,
+        )
+        calibration.validate_summary(
+            calibration_root,
+            run_root=run_root,
+            provider_root=provider_root,
+        )
+        _load_rule(rule_path, calibration_root, postprocess_root)
+        input_paths = {
+            "run_completion": (
+                run_root / "completion_manifest.json",
+                run_root,
+            ),
+            "provider_manifest": (
+                provider_root / "provider_manifest.json",
+                provider_root,
+            ),
+            "postprocess_manifest": (
+                postprocess_root / postprocess.ROOT_MANIFEST_NAME,
+                postprocess_root,
+            ),
+            "calibration_summary": (
+                calibration_root / calibration.SUMMARY_NAME,
+                calibration_root,
+            ),
+        }
+        for name, (path, root) in input_paths.items():
+            if manifest["inputs"][name] != _file_record(path, relative_to=root):
+                msg = f"Focused report is bound to a different input: {name}"
+                raise ValueError(msg)
+        expected_rule = {
+            "path": rule_path.name,
+            "bytes": rule_path.stat().st_size,
+            "sha256": _sha256(rule_path),
+        }
+        if manifest["inputs"]["reporting_rule"] != expected_rule:
+            msg = "Focused report is bound to a different reporting rule."
+            raise ValueError(msg)
     summary = pd.read_csv(output_root / "table_s5.csv")
     overlap = pd.read_csv(output_root / "provider_overlap.csv")
     runtime = pd.read_csv(output_root / "runtime_summary.csv")
@@ -716,6 +1038,28 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         "observed_selected_event_count",
         *(f"{provider}_model_expected_selected_event_count" for provider in core.BMRS),
     }
+    expected_overlap_columns = [
+        "cohort",
+        "direction",
+        "adjustment",
+        "q_threshold",
+        "cbase",
+        "dig",
+        "mutsig",
+        "mutsig_cbase_concordant",
+        "mutsig_cbase_discordant",
+        "mutsig_dig_concordant",
+        "mutsig_dig_discordant",
+    ]
+    overlap_count_columns = expected_overlap_columns[4:]
+    overlap_schema_valid = overlap.columns.tolist() == expected_overlap_columns
+    overlap_counts = (
+        overlap.loc[:, overlap_count_columns].to_numpy(dtype=float)
+        if overlap_schema_valid
+        else np.empty((0, len(overlap_count_columns)), dtype=float)
+    )
+    expected_overlap_cohorts = np.repeat(TCGA_COHORTS, 2).tolist()
+    expected_overlap_directions = ["ME", "CO"] * len(TCGA_COHORTS)
     expected_rows = cohort_burden.groupby("cohort", sort=False).cumcount() + 1
     cohort_burden_values = cohort_burden[
         "pre_k_total_nonsynonymous_snv_event_count"
@@ -726,8 +1070,30 @@ def validate_report(output_root: Path) -> dict[str, Any]:
     if (
         len(summary) != len(TCGA_COHORTS)
         or summary["cohort"].tolist() != list(TCGA_COHORTS)
+        or not summary["primary_adjustment"].eq("BY").all()
+        or not summary["primary_q_threshold"].eq(0.01).all()
+        or not summary["sensitivity_adjustment"].eq("BH").all()
+        or not summary["sensitivity_q_threshold"].eq(0.01).all()
         or int(summary["tumors"].sum()) != EXPECTED_TUMOR_COUNT
         or len(overlap) != len(TCGA_COHORTS) * 2
+        or not overlap_schema_valid
+        or overlap["cohort"].tolist() != expected_overlap_cohorts
+        or overlap["direction"].tolist() != expected_overlap_directions
+        or not overlap["adjustment"].eq("BY").all()
+        or not overlap["q_threshold"].eq(0.01).all()
+        or not np.isfinite(overlap_counts).all()
+        or (overlap_counts < 0).any()
+        or not np.equal(overlap_counts, np.floor(overlap_counts)).all()
+        or (
+            overlap["mutsig_cbase_concordant"]
+            + overlap["mutsig_cbase_discordant"]
+            > overlap["mutsig"]
+        ).any()
+        or (
+            overlap["mutsig_dig_concordant"]
+            + overlap["mutsig_dig_discordant"]
+            > overlap["mutsig"]
+        ).any()
         or len(runtime) != len(TCGA_COHORTS) * len(core.BMRS)
         or fit_diagnostics["scope"].tolist() != ["all", *core.BMRS]
         or int(fit_diagnostics.iloc[0]["pairwise_rows"])
@@ -735,6 +1101,7 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         or int(fit_diagnostics.iloc[0]["nonconverged_rows"]) != 0
         or int(fit_diagnostics.iloc[0]["full_affine_rank_rows"])
         + int(fit_diagnostics.iloc[0]["rank_deficient_rows"])
+        + int(fit_diagnostics.iloc[0]["rank_not_certified_underflow_rows"])
         != int(fit_diagnostics.iloc[0]["pairwise_rows"])
         or len(cohort_burden) != EXPECTED_TUMOR_COUNT
         or cohort_burden["cohort"].nunique() != len(TCGA_COHORTS)
@@ -776,9 +1143,17 @@ def build_report(  # noqa: PLR0913
     """Build all result-dependent reporting artifacts once."""
     cohorts = tuple(TCGA_COHORTS)
     validate_provider_root(provider_root, cohorts)
-    postprocess.validate_derived_root(postprocess_root, cohorts)
-    calibration.validate_summary(calibration_root)
+    postprocess.validate_derived_root(postprocess_root, cohorts, run_root=run_root)
+    calibration.validate_summary(
+        calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+    )
     rule = _load_rule(rule_path, calibration_root, postprocess_root)
+    if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
+        reason = rule.get("withheld_reason", "unspecified-calibration-gate-failure")
+        msg = f"Association-level reporting is withheld: {reason}"
+        raise RuntimeError(msg)
     postprocess._validate_completion(run_root, cohorts)  # noqa: SLF001
     if output_root.exists() or output_root.is_symlink():
         msg = f"Refusing to overwrite reporting root: {output_root}"
@@ -786,6 +1161,8 @@ def build_report(  # noqa: PLR0913
 
     burdens = _burden_values(provider_root, cohorts)
     burden_threshold = _high_burden_threshold(burdens)
+    primary_adjustment = str(rule["primary_adjustment"])
+    sensitivity_adjustment = str(rule["sensitivity_adjustment"])
     primary_q = float(rule["primary_q_threshold"])
     sensitivity_q = float(rule["sensitivity_q_threshold"])
     summary_rows = []
@@ -799,15 +1176,27 @@ def build_report(  # noqa: PLR0913
                 frame=frame,
                 burdens=burdens[cohort],
                 high_burden_threshold=burden_threshold,
+                primary_adjustment=primary_adjustment,
                 primary_q=primary_q,
+                sensitivity_adjustment=sensitivity_adjustment,
                 sensitivity_q=sensitivity_q,
             ),
         )
         overlap_rows.extend(
-            _overlap_rows(frame, cohort=cohort, primary_q=primary_q),
+            _overlap_rows(
+                frame,
+                cohort=cohort,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+            ),
         )
         top_frames.append(
-            _top_primary_pairs(frame, cohort=cohort, primary_q=primary_q),
+            _top_primary_pairs(
+                frame,
+                cohort=cohort,
+                primary_adjustment=primary_adjustment,
+                primary_q=primary_q,
+            ),
         )
     summary = pd.DataFrame(summary_rows)
     overlap = pd.DataFrame(overlap_rows)
@@ -865,20 +1254,22 @@ def build_report(  # noqa: PLR0913
         "High fraction",
     ]
     burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
+    primary_label = _threshold_label(primary_adjustment, primary_q)
+    sensitivity_label = _threshold_label(sensitivity_adjustment, sensitivity_q)
     call_rows = [
         {
             "Cohort": row["cohort"],
             "Background": PROVIDER_LABELS[provider],
-            "q <= 0.10 total": row[f"{provider}_primary_total"],
-            "q <= 0.10 ME": row[f"{provider}_primary_me"],
-            "q <= 0.10 CO": row[f"{provider}_primary_co"],
-            "q <= 0.10 direction unavailable": (
+            f"{primary_label} total": row[f"{provider}_primary_total"],
+            f"{primary_label} ME": row[f"{provider}_primary_me"],
+            f"{primary_label} CO": row[f"{provider}_primary_co"],
+            f"{primary_label} direction unavailable": (
                 row[f"{provider}_primary_direction_unavailable"]
             ),
-            "q <= 0.20 total": row[f"{provider}_sensitivity_total"],
-            "q <= 0.20 ME": row[f"{provider}_sensitivity_me"],
-            "q <= 0.20 CO": row[f"{provider}_sensitivity_co"],
-            "q <= 0.20 direction unavailable": (
+            f"{sensitivity_label} total": row[f"{provider}_sensitivity_total"],
+            f"{sensitivity_label} ME": row[f"{provider}_sensitivity_me"],
+            f"{sensitivity_label} CO": row[f"{provider}_sensitivity_co"],
+            f"{sensitivity_label} direction unavailable": (
                 row[f"{provider}_sensitivity_direction_unavailable"]
             ),
         }
@@ -898,7 +1289,9 @@ def build_report(  # noqa: PLR0913
     _plot_figure6(
         burden_source=figure6_burden_source,
         summary=summary,
+        overlap=overlap,
         calibration_table=calibration_table,
+        primary_adjustment=primary_adjustment,
         primary_q=primary_q,
         output=figure_path,
     )
@@ -907,8 +1300,15 @@ def build_report(  # noqa: PLR0913
         "contract": REPORT_CONTRACT,
         "cohorts": list(cohorts),
         "primary_provider": "mutsig",
+        "inference_status": rule["inference_status"],
+        "effective_p_policy": rule["effective_p_policy"],
+        "primary_adjustment": primary_adjustment,
         "primary_q_threshold": primary_q,
+        "sensitivity_adjustment": sensitivity_adjustment,
         "sensitivity_q_threshold": sensitivity_q,
+        "provider_overlap": (
+            "direction-concordant-descriptive-only-not-an-inferential-vote"
+        ),
         "high_burden_definition": {
             "measure": "pre-K total nonsynonymous SNV event count per tumor",
             "reference": "pooled 10,433-tumor 32-cohort analysis population",
@@ -951,7 +1351,14 @@ def build_report(  # noqa: PLR0913
     }
     _write_atomic(staging / "report_manifest.json", _canonical_json(manifest) + b"\n")
     staging.replace(output_root)
-    validate_report(output_root)
+    validate_report(
+        output_root,
+        run_root=run_root,
+        provider_root=provider_root,
+        postprocess_root=postprocess_root,
+        calibration_root=calibration_root,
+        rule_path=rule_path,
+    )
     return output_root
 
 

@@ -1,10 +1,10 @@
 """Derive provider-specific p- and q-values for the focused K=500 grid.
 
-The fit tests dependence once per unordered pair.  This stage therefore applies one
-Benjamini-Hochberg correction to the complete within-cohort pair family for each BMR,
-then labels direction from the fitted Marshall-Olkin rho.  It does not select a q
-threshold or combine providers; those reporting decisions are frozen only after the
-calibration and PAAD/LAML diagnostics.
+The fit tests dependence once per unordered pair.  This stage retains the complete
+within-cohort pair family for each BMR and emits both Benjamini--Yekutieli (BY) and
+Benjamini--Hochberg (BH) adjusted values.  Direction is a descriptive annotation from
+the fitted Marshall--Olkin rho, never a separate test.  This module does not select a
+threshold or combine providers.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-DERIVATION_CONTRACT: Final = "focused-provider-complete-family-bh-v1"
-ROOT_CONTRACT: Final = "focused-32x3-provider-inference-v1"
+DERIVATION_CONTRACT: Final = "focused-provider-complete-family-by-bh-v2"
+ROOT_CONTRACT: Final = "focused-32x3-provider-inference-v2"
 RESULT_NAME: Final = "provider_inference.csv"
 COHORT_MANIFEST_NAME: Final = "cohort_manifest.json"
 ROOT_MANIFEST_NAME: Final = "postprocess_manifest.json"
@@ -102,6 +102,24 @@ def benjamini_hochberg(p_values: np.ndarray) -> np.ndarray:
     return result
 
 
+def benjamini_yekutieli(p_values: np.ndarray) -> np.ndarray:
+    """Return stable BY adjusted p-values for one complete finite family."""
+    values = np.asarray(p_values, dtype=np.float64)
+    adjusted = benjamini_hochberg(values)
+    return _by_from_bh(adjusted)
+
+
+def _by_from_bh(bh_adjusted: np.ndarray) -> np.ndarray:
+    """Return BY values from already computed BH values for the same family."""
+    adjusted = np.asarray(bh_adjusted, dtype=np.float64)
+    if len(adjusted) == 0:
+        return adjusted
+    harmonic = float(
+        np.sum(1.0 / np.arange(1, len(adjusted) + 1, dtype=np.float64)),
+    )
+    return np.clip(adjusted * harmonic, 0.0, 1.0)
+
+
 def _direction(rho: pd.Series) -> pd.Series:
     values = pd.to_numeric(rho, errors="coerce").to_numpy(dtype=np.float64)
     labels = np.full(len(values), "unavailable", dtype=object)
@@ -109,6 +127,50 @@ def _direction(rho: pd.Series) -> pd.Series:
     labels[np.isfinite(values) & (values > 0)] = "CO"
     labels[np.isfinite(values) & (values == 0)] = "neutral"
     return pd.Series(labels, index=rho.index, dtype="string")
+
+
+def _provider_statistics(
+    likelihood_ratio: np.ndarray,
+    rho: pd.Series,
+    identifiability: pd.Series,
+) -> dict[str, np.ndarray | pd.Series]:
+    """Apply the complete-family policy to one provider's fitted statistics."""
+    statistics = np.asarray(likelihood_ratio, dtype=np.float64)
+    effects = identifiability.astype("string")
+    allowed_identifiability = {
+        "full-affine-rank",
+        "rank-deficient",
+        "rank-not-certified-underflow",
+    }
+    if (
+        statistics.ndim != 1
+        or len(statistics) != len(rho)
+        or len(statistics) != len(effects)
+        or not np.isfinite(statistics).all()
+        or (statistics < -1e-10).any()
+        or not effects.isin(allowed_identifiability).all()
+    ):
+        msg = "Invalid fitted statistics for provider inference."
+        raise ValueError(msg)
+    statistics = np.maximum(statistics, 0.0)
+    reportable = effects.eq("full-affine-rank").to_numpy()
+    p_values = chi2.sf(statistics, df=1)
+    p_values[~reportable] = 1.0
+    bh_q_values = benjamini_hochberg(p_values)
+    reportable_rho = pd.to_numeric(rho, errors="coerce").where(reportable)
+    if not np.isfinite(reportable_rho.loc[reportable].to_numpy(dtype=float)).all():
+        msg = "A full-rank fitted effect has no finite rho."
+        raise ValueError(msg)
+    return {
+        "likelihood_ratio": statistics,
+        "p_value": p_values,
+        "by_q_value": _by_from_bh(bh_q_values),
+        "bh_q_value": bh_q_values,
+        "rho": reportable_rho,
+        "direction": _direction(reportable_rho),
+        "effect_identifiability": effects,
+        "effect_reportable": reportable,
+    }
 
 
 def _read_provider(run_root: Path, cohort: str, provider: str) -> pd.DataFrame:
@@ -149,28 +211,22 @@ def _read_provider(run_root: Path, cohort: str, provider: str) -> pd.DataFrame:
     if tuple(frame.columns) != PAIRWISE_COLUMNS:
         msg = f"Unexpected pairwise schema: {cohort}/{provider}"
         raise ValueError(msg)
-    likelihood_ratio = frame["Likelihood Ratio"].to_numpy(dtype=np.float64)
-    if (
-        len(frame) != contract["pair_policy"]["row_count"]
-        or not np.isfinite(likelihood_ratio).all()
-        or (likelihood_ratio < -1e-10).any()
-    ):
+    if len(frame) != contract["pair_policy"]["row_count"]:
         msg = f"Invalid profile likelihood ratios: {cohort}/{provider}"
         raise ValueError(msg)
-    likelihood_ratio = np.maximum(likelihood_ratio, 0.0)
-    p_values = chi2.sf(likelihood_ratio, df=1)
+    statistics = _provider_statistics(
+        frame["Likelihood Ratio"].to_numpy(dtype=np.float64),
+        frame["Rho"],
+        frame["Effect Identifiability"],
+    )
     return pd.DataFrame(
         {
             "gene_a": frame["Gene A"].astype("string"),
             "gene_b": frame["Gene B"].astype("string"),
-            f"{provider}_likelihood_ratio": likelihood_ratio,
-            f"{provider}_p_value": p_values,
-            f"{provider}_q_value": benjamini_hochberg(p_values),
-            f"{provider}_rho": pd.to_numeric(frame["Rho"], errors="coerce"),
-            f"{provider}_direction": _direction(frame["Rho"]),
-            f"{provider}_effect_identifiability": frame[
-                "Effect Identifiability"
-            ].astype("string"),
+            **{
+                f"{provider}_{name}": value
+                for name, value in statistics.items()
+            },
         },
     )
 
@@ -214,9 +270,35 @@ def _validate_completion(
     return completion
 
 
+def _valid_diagnostics(value: object, pair_count: int) -> bool:
+    """Return whether one cohort's effect-status counters are exhaustive."""
+    if not isinstance(value, dict) or set(value) != set(BMRS):
+        return False
+    for provider in BMRS:
+        record = value.get(provider)
+        if not isinstance(record, dict):
+            return False
+        counts = [
+            record.get("full_affine_rank_count"),
+            record.get("rank_deficient_count"),
+            record.get("rank_not_certified_underflow_count"),
+        ]
+        exact_zero = record.get("exact_zero_p_value_count")
+        if (
+            any(not isinstance(item, int) or item < 0 for item in counts)
+            or sum(counts) != pair_count
+            or not isinstance(exact_zero, int)
+            or not 0 <= exact_zero <= pair_count
+        ):
+            return False
+    return True
+
+
 def validate_derived_root(
     output_root: Path,
     cohorts: Sequence[str],
+    *,
+    run_root: Path | None = None,
 ) -> dict[str, Any]:
     """Validate receipt-bound derived tables before downstream consumption."""
     root_path = output_root / ROOT_MANIFEST_NAME
@@ -228,6 +310,13 @@ def validate_derived_root(
     if (
         payload.get("schema_version") != SCHEMA_VERSION
         or payload.get("contract") != ROOT_CONTRACT
+        or payload.get("effective_p_policy")
+        != "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        or payload.get("multiplicity")
+        != {
+            "primary": "benjamini-yekutieli",
+            "nominal_sensitivity": "benjamini-hochberg",
+        }
         or payload.get("cohort_count") != len(payload.get("cohorts", []))
         or payload.get("provider_family_count")
         != len(payload.get("cohorts", [])) * len(BMRS)
@@ -236,6 +325,16 @@ def validate_derived_root(
     ):
         msg = "Focused postprocess root manifest is invalid."
         raise ValueError(msg)
+    if run_root is not None:
+        completion_path = _validate_completion(run_root, cohorts)
+        completion_record = payload.get("run_completion", {})
+        if (
+            completion_record.get("path") != completion_path.name
+            or completion_record.get("bytes") != completion_path.stat().st_size
+            or completion_record.get("sha256") != _sha256(completion_path)
+        ):
+            msg = "Focused postprocess root is bound to a different production run."
+            raise ValueError(msg)
     for cohort in cohorts:
         relative_manifest = f"{cohort}/{COHORT_MANIFEST_NAME}"
         record = records.get(relative_manifest, {})
@@ -249,11 +348,25 @@ def validate_derived_root(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         result_path = output_root / cohort / RESULT_NAME
         output = manifest.get("output", {})
+        pair_count = manifest.get("pair_count")
         if (
             manifest.get("schema_version") != SCHEMA_VERSION
             or manifest.get("contract") != DERIVATION_CONTRACT
             or manifest.get("cohort") != cohort
             or manifest.get("providers") != list(BMRS)
+            or not isinstance(pair_count, int)
+            or pair_count < 0
+            or manifest.get("multiplicity")
+            != {
+                "primary": "provider-specific-BY-over-complete-within-cohort-family",
+                "nominal_sensitivity": (
+                    "provider-specific-BH-over-complete-within-cohort-family"
+                ),
+            }
+            or manifest.get("non_full_rank")
+            != "retain-in-family-with-p-one-and-no-directional-effect"
+            or manifest.get("reporting_threshold_selected") is not False
+            or not _valid_diagnostics(manifest.get("diagnostics"), pair_count)
             or output.get("path") != f"{cohort}/{RESULT_NAME}"
             or output.get("bytes") != result_path.stat().st_size
             or output.get("sha256") != _sha256(result_path)
@@ -292,6 +405,19 @@ def derive_cohort(run_root: Path, cohort: str, output_root: Path) -> dict[str, A
         )
         for provider in BMRS
     }
+    diagnostics = {}
+    for provider, frame in zip(BMRS, frames, strict=True):
+        effects = frame[f"{provider}_effect_identifiability"].astype("string")
+        diagnostics[provider] = {
+            "full_affine_rank_count": int(effects.eq("full-affine-rank").sum()),
+            "rank_deficient_count": int(effects.eq("rank-deficient").sum()),
+            "rank_not_certified_underflow_count": int(
+                effects.eq("rank-not-certified-underflow").sum(),
+            ),
+            "exact_zero_p_value_count": int(
+                frame[f"{provider}_p_value"].eq(0.0).sum(),
+            ),
+        }
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "contract": DERIVATION_CONTRACT,
@@ -299,8 +425,15 @@ def derive_cohort(run_root: Path, cohort: str, output_root: Path) -> dict[str, A
         "pair_count": len(combined),
         "providers": list(BMRS),
         "family": "all-matched-unordered-pairs-excluding-same-base-M:N",
-        "multiplicity": "provider-specific-BH-over-complete-within-cohort-family",
+        "multiplicity": {
+            "primary": "provider-specific-BY-over-complete-within-cohort-family",
+            "nominal_sensitivity": (
+                "provider-specific-BH-over-complete-within-cohort-family"
+            ),
+        },
         "direction": "rho-sign-after-nondirectional-profile-LRT",
+        "non_full_rank": "retain-in-family-with-p-one-and-no-directional-effect",
+        "diagnostics": diagnostics,
         "reporting_threshold_selected": False,
         "sources": sources,
         "output": _file_record(result_path, relative_to=output_root),
@@ -334,6 +467,13 @@ def derive(
     root = {
         "schema_version": SCHEMA_VERSION,
         "contract": ROOT_CONTRACT,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+        "multiplicity": {
+            "primary": "benjamini-yekutieli",
+            "nominal_sensitivity": "benjamini-hochberg",
+        },
         "run_completion": _file_record(completion, relative_to=run_root),
         "cohorts": list(cohorts),
         "cohort_count": len(cohorts),
@@ -355,7 +495,7 @@ def derive(
         _canonical_json(root) + b"\n",
     )
     staging.replace(output_root)
-    validate_derived_root(output_root, cohorts)
+    validate_derived_root(output_root, cohorts, run_root=run_root)
     return output_root
 
 

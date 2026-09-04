@@ -15,8 +15,10 @@ from analysis.prepare_tcga_revision_focused import CONFIG_PATH, _load_config
 from dialect.data.tcga import TCGA_COHORTS
 
 SCHEMA_VERSION: Final = "1.0.0"
-RULE_CONTRACT: Final = "focused-global-reporting-rule-v1"
+RULE_CONTRACT: Final = "focused-global-reporting-rule-v2"
 RULE_NAME: Final = "reporting_rule.json"
+REPORTABLE_STATUS: Final = "reportable"
+WITHHELD_STATUS: Final = "withheld"
 
 
 def _canonical_json(value: object) -> bytes:
@@ -58,22 +60,62 @@ def freeze_rule(
     calibration_root: Path,
     postprocess_root: Path,
     output_path: Path,
+    run_root: Path,
+    provider_root: Path,
 ) -> Path:
-    """Write one global rule without using observed result counts or identities."""
+    """Write one global rule without using observed result counts or identities.
+
+    A failed affirmative calibration gate produces an immutable withheld rule instead
+    of silently selecting a different threshold.  Association-level reporting must
+    reject that status.
+    """
     config = _load_config()
     calibration_config = calibration._load_config()  # noqa: SLF001
-    summary = calibration.validate_summary(calibration_root)
-    postprocess.validate_derived_root(postprocess_root, TCGA_COHORTS)
-    if summary.get("detected_inflation"):
-        msg = (
-            "Prespecified calibration detected inflation; the chi-square/BH candidates "
-            "cannot be frozen as the reporting rule."
-        )
-        raise RuntimeError(msg)
-    if summary.get("retain_chi_square_bh_candidates") is not True:
-        msg = "Calibration did not retain the prespecified reporting candidates."
-        raise RuntimeError(msg)
+    summary = calibration.validate_summary(
+        calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+    )
+    postprocess.validate_derived_root(
+        postprocess_root,
+        TCGA_COHORTS,
+        run_root=run_root,
+    )
+    gate_pass = summary.get("overall_gate_pass")
+    if not isinstance(gate_pass, bool):
+        msg = "Calibration summary lacks the affirmative overall gate decision."
+        raise TypeError(msg)
+    if summary.get("reporting_rule_selected") is not False:
+        msg = "Calibration must remain result-blind and must not select a rule."
+        raise ValueError(msg)
     candidates = calibration_config["reporting_candidates"]
+    expected_candidates = {
+        "test": "chi-square-one-df-profile-lrt",
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_threshold": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_threshold": 0.01,
+        "thresholds_selected_from_observed_pairs": False,
+        "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof",
+    }
+    if any(candidates.get(key) != value for key, value in expected_candidates.items()):
+        msg = "Calibration reporting candidates violate the frozen global rule."
+        raise ValueError(msg)
+    expected_summary = {
+        "gate_provider": "mutsig",
+        "gate_method": "simultaneous-one-sided-hoeffding-upper-bound",
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_candidate": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_candidate": 0.01,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+    }
+    if any(summary.get(key) != value for key, value in expected_summary.items()):
+        msg = "Calibration summary violates the prespecified reporting candidates."
+        raise ValueError(msg)
+    inference_status = REPORTABLE_STATUS if gate_pass else WITHHELD_STATUS
     rule = {
         "schema_version": SCHEMA_VERSION,
         "contract": RULE_CONTRACT,
@@ -86,8 +128,11 @@ def freeze_rule(
             postprocess_root / postprocess.ROOT_MANIFEST_NAME,
         ),
         "scope": "one-identical-rule-across-all-32-cancer-types",
-        "test": "chi-square-one-df-profile-lrt",
-        "multiplicity": "provider-specific-BH-complete-within-cohort-family",
+        "test": candidates["test"],
+        "effective_p_policy": summary["effective_p_policy"],
+        "multiplicity": "provider-specific-complete-within-cohort-family",
+        "primary_adjustment": candidates["primary_adjustment"],
+        "sensitivity_adjustment": candidates["sensitivity_adjustment"],
         "primary_provider": config["analysis"]["primary_provider"],
         "continuity_provider": config["analysis"]["continuity_provider"],
         "supplementary_providers": config["analysis"]["supplementary_providers"],
@@ -101,8 +146,22 @@ def freeze_rule(
         "provider_overlap": "descriptive-only-not-an-inferential-vote",
         "me_presentation": "primary-MutSig-with-CBaSE-continuity-comparison",
         "co_presentation": "primary-MutSig-with-CBaSE-and-DIG-sensitivity",
-        "thresholds_selected_from_observed_pairs": False,
+        "thresholds_selected_from_observed_pairs": candidates[
+            "thresholds_selected_from_observed_pairs"
+        ],
+        "calibration_gate": {
+            "provider": summary.get("gate_provider"),
+            "method": summary.get("gate_method"),
+            "overall_gate_pass": gate_pass,
+        },
+        "inference_status": inference_status,
+        "withheld_reason": (
+            None
+            if gate_pass
+            else "prespecified-finite-scenario-calibration-gate-failed"
+        ),
         "claim_scope": "finite-scenario-calibrated-nominal-inference",
+        "calibration_interpretation": candidates["interpretation"],
     }
     _write_once(output_path, _canonical_json(rule) + b"\n")
     return output_path
@@ -112,6 +171,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--calibration-root", type=Path, required=True)
     parser.add_argument("--postprocess-root", type=Path, required=True)
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--provider-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -123,6 +184,8 @@ def main() -> None:
         freeze_rule(
             calibration_root=args.calibration_root.resolve(),
             postprocess_root=args.postprocess_root.resolve(),
+            run_root=args.run_root.resolve(),
+            provider_root=args.provider_root.resolve(),
             output_path=args.output.absolute(),
         ),
     )

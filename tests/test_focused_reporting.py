@@ -19,18 +19,30 @@ def _inference_frame() -> pd.DataFrame:
         {
             "gene_a": ["A_M", "B_M", "C_M", "D_M"],
             "gene_b": ["B_M", "C_M", "D_M", "E_M"],
-            "cbase_p_value": [0.001, 0.02, 0.03, 0.9],
-            "cbase_q_value": [0.01, 0.2, 0.05, 1.0],
-            "cbase_rho": [-0.5, 0.4, -0.2, 0.1],
-            "cbase_direction": ["ME", "CO", "ME", "CO"],
-            "dig_p_value": [0.002, 0.01, 0.6, 0.7],
-            "dig_q_value": [0.02, 0.08, 0.8, 0.9],
+            "cbase_likelihood_ratio": [10.0, 9.0, 2.0, 0.1],
+            "cbase_p_value": [0.001, 0.0015, 0.003, 0.9],
+            "cbase_by_q_value": [0.005, 0.006, 0.5, 1.0],
+            "cbase_bh_q_value": [0.004, 0.005, 0.009, 1.0],
+            "cbase_rho": [-0.5, -0.4, -0.2, 0.1],
+            "cbase_direction": ["ME", "ME", "ME", "CO"],
+            "cbase_effect_identifiability": ["full-affine-rank"] * 4,
+            "cbase_effect_reportable": [True] * 4,
+            "dig_likelihood_ratio": [9.0, 8.0, 1.0, 0.2],
+            "dig_p_value": [0.001, 0.002, 0.015, 0.7],
+            "dig_by_q_value": [0.006, 0.007, 0.8, 1.0],
+            "dig_bh_q_value": [0.005, 0.006, 0.02, 1.0],
             "dig_rho": [-0.4, 0.3, -0.1, 0.2],
             "dig_direction": ["ME", "CO", "ME", "CO"],
-            "mutsig_p_value": [0.0001, 0.004, 0.3, 0.8],
-            "mutsig_q_value": [0.001, 0.04, 0.4, 0.9],
+            "dig_effect_identifiability": ["full-affine-rank"] * 4,
+            "dig_effect_reportable": [True] * 4,
+            "mutsig_likelihood_ratio": [15.0, 12.0, 3.0, 0.1],
+            "mutsig_p_value": [0.0001, 0.001, 0.002, 0.8],
+            "mutsig_by_q_value": [0.001, 0.004, 0.4, 0.9],
+            "mutsig_bh_q_value": [0.0005, 0.003, 0.008, 0.8],
             "mutsig_rho": [-0.7, 0.6, -0.3, 0.2],
             "mutsig_direction": ["ME", "CO", "ME", "CO"],
+            "mutsig_effect_identifiability": ["full-affine-rank"] * 4,
+            "mutsig_effect_reportable": [True] * 4,
         },
     )
 
@@ -49,8 +61,10 @@ def test_cohort_summary_uses_global_rule_for_every_provider() -> None:
         frame=_inference_frame(),
         burdens=np.asarray([1, 2, 3, 100], dtype=float),
         high_burden_threshold=100,
-        primary_q=0.1,
-        sensitivity_q=0.2,
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
+        sensitivity_adjustment="benjamini-hochberg",
+        sensitivity_q=0.01,
     )
     assert row["tested_pairs"] == 4
     assert row["high_burden_fraction"] == 0.25
@@ -67,43 +81,48 @@ def test_primary_pair_ranking_and_overlap_are_descriptive() -> None:
     top = reporting._top_primary_pairs(  # noqa: SLF001
         frame,
         cohort="TEST",
-        primary_q=0.1,
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
     )
     assert top[["gene_a", "gene_b"]].to_numpy().tolist() == [
         ["A_M", "B_M"],
         ["B_M", "C_M"],
     ]
     assert top["provider_support"].tolist() == [3, 2]
+    assert top["provider_discordance"].tolist() == [0, 1]
 
     overlap = reporting._overlap_rows(  # noqa: SLF001
         frame,
         cohort="TEST",
-        primary_q=0.1,
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
     )
     assert overlap == [
         {
             "cohort": "TEST",
             "direction": "ME",
-            "q_threshold": 0.1,
+            "adjustment": "BY",
+            "q_threshold": 0.01,
             "cbase": 2,
             "dig": 1,
             "mutsig": 1,
-            "at_least_one": 2,
-            "at_least_two": 1,
-            "all_three": 1,
-            "mutsig_and_cbase": 1,
+            "mutsig_cbase_concordant": 1,
+            "mutsig_cbase_discordant": 0,
+            "mutsig_dig_concordant": 1,
+            "mutsig_dig_discordant": 0,
         },
         {
             "cohort": "TEST",
             "direction": "CO",
-            "q_threshold": 0.1,
+            "adjustment": "BY",
+            "q_threshold": 0.01,
             "cbase": 0,
             "dig": 1,
             "mutsig": 1,
-            "at_least_one": 1,
-            "at_least_two": 1,
-            "all_three": 0,
-            "mutsig_and_cbase": 0,
+            "mutsig_cbase_concordant": 0,
+            "mutsig_cbase_discordant": 1,
+            "mutsig_dig_concordant": 1,
+            "mutsig_dig_discordant": 0,
         },
     ]
 
@@ -148,6 +167,69 @@ def test_figure_burden_source_reconciles_observed_axis(
     assert source["mutsig_model_expected_selected_event_count"].tolist() == [4.0, 4.0]
 
 
+def test_figure6_uses_v2_calibration_and_directional_overlap(tmp_path: Path) -> None:
+    burden = pd.DataFrame(
+        {
+            "observed_selected_event_count": [1.0, 3.0],
+            "cbase_model_expected_selected_event_count": [1.0, 2.0],
+            "dig_model_expected_selected_event_count": [1.5, 2.5],
+            "mutsig_model_expected_selected_event_count": [0.8, 2.8],
+        },
+    )
+    summary = pd.DataFrame(
+        {
+            "cohort": ["A", "B"],
+            "cbase_primary_co": [2, 1],
+            "dig_primary_co": [1, 1],
+            "mutsig_primary_co": [1, 0],
+        },
+    )
+    overlap = pd.DataFrame(
+        {
+            "direction": ["ME", "CO", "ME", "CO"],
+            "mutsig": [2, 1, 1, 0],
+            "mutsig_cbase_concordant": [1, 1, 1, 0],
+            "mutsig_dig_concordant": [2, 0, 0, 0],
+            "mutsig_cbase_discordant": [0, 0, 0, 0],
+            "mutsig_dig_discordant": [0, 1, 1, 0],
+        },
+    )
+    calibration = pd.DataFrame(
+        [
+            {
+                "provider": provider,
+                "screen": "marginal_lrt",
+                "threshold": threshold,
+                "rate": threshold / 2,
+                "gate_endpoint": provider == "mutsig",
+                "hoeffding_upper_bound": (
+                    threshold * 0.8 if provider == "mutsig" else np.nan
+                ),
+                "acceptance_upper_bound": (
+                    {0.01: 0.02, 0.05: 0.06}[threshold]
+                    if provider == "mutsig"
+                    else np.nan
+                ),
+            }
+            for provider in reporting.core.BMRS
+            for threshold in (0.01, 0.05)
+        ],
+    )
+    output = tmp_path / "figure6.pdf"
+
+    reporting._plot_figure6(  # noqa: SLF001
+        burden_source=burden,
+        summary=summary,
+        overlap=overlap,
+        calibration_table=calibration,
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
+        output=output,
+    )
+
+    assert output.read_bytes().startswith(b"%PDF-")
+
+
 def test_fit_diagnostics_cover_every_certificate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -165,7 +247,7 @@ def test_fit_diagnostics_cover_every_certificate(
             "Effect Identifiability": [
                 "full-affine-rank",
                 "rank-deficient",
-                "full-affine-rank",
+                "rank-not-certified-underflow",
             ],
         },
     ).to_csv(task / "pairwise_interaction_results.csv", index=False)
@@ -186,8 +268,9 @@ def test_fit_diagnostics_cover_every_certificate(
             "maximum_last_ll_gain": 2e-12,
             "maximum_fixed_point_residual": 2e-10,
             "maximum_kkt_residual": 2e-9,
-            "full_affine_rank_rows": 2,
+            "full_affine_rank_rows": 1,
             "rank_deficient_rows": 1,
+            "rank_not_certified_underflow_rows": 1,
         },
         {
             "scope": "cbase",
@@ -202,8 +285,9 @@ def test_fit_diagnostics_cover_every_certificate(
             "maximum_last_ll_gain": 2e-12,
             "maximum_fixed_point_residual": 2e-10,
             "maximum_kkt_residual": 2e-9,
-            "full_affine_rank_rows": 2,
+            "full_affine_rank_rows": 1,
             "rank_deficient_rows": 1,
+            "rank_not_certified_underflow_rows": 1,
         },
     ]
 
@@ -213,12 +297,40 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     root.mkdir()
     tumors = [reporting.EXPECTED_TUMOR_COUNT - 31, *([1] * 31)]
     pd.DataFrame(
-        {"cohort": list(reporting.TCGA_COHORTS), "tumors": tumors},
+        {
+            "cohort": list(reporting.TCGA_COHORTS),
+            "primary_adjustment": ["BY"] * len(reporting.TCGA_COHORTS),
+            "primary_q_threshold": [0.01] * len(reporting.TCGA_COHORTS),
+            "sensitivity_adjustment": ["BH"] * len(reporting.TCGA_COHORTS),
+            "sensitivity_q_threshold": [0.01] * len(reporting.TCGA_COHORTS),
+            "tumors": tumors,
+        },
     ).to_csv(root / "table_s5.csv", index=False)
     pd.DataFrame(
         {
             "cohort": np.repeat(reporting.TCGA_COHORTS, 2),
             "direction": ["ME", "CO"] * len(reporting.TCGA_COHORTS),
+            "adjustment": ["BY"] * (len(reporting.TCGA_COHORTS) * 2),
+            "q_threshold": [0.01] * (len(reporting.TCGA_COHORTS) * 2),
+            "cbase": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
+            "dig": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
+            "mutsig": np.zeros(len(reporting.TCGA_COHORTS) * 2, dtype=int),
+            "mutsig_cbase_concordant": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_cbase_discordant": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_dig_concordant": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
+            "mutsig_dig_discordant": np.zeros(
+                len(reporting.TCGA_COHORTS) * 2,
+                dtype=int,
+            ),
         },
     ).to_csv(root / "provider_overlap.csv", index=False)
     pd.DataFrame(
@@ -245,6 +357,7 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
                 *([len(reporting.TCGA_COHORTS)] * 3),
             ],
             "rank_deficient_rows": [0, 0, 0, 0],
+            "rank_not_certified_underflow_rows": [0, 0, 0, 0],
         },
     ).to_csv(root / "fit_diagnostics_summary.csv", index=False)
     pd.DataFrame(columns=["cohort", "gene_a", "gene_b"]).to_csv(
@@ -295,6 +408,24 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
         "contract": reporting.REPORT_CONTRACT,
         "cohorts": list(reporting.TCGA_COHORTS),
         "primary_provider": "mutsig",
+        "inference_status": reporting.rule_module.REPORTABLE_STATUS,
+        "effective_p_policy": (
+            "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
+        ),
+        "primary_adjustment": "benjamini-yekutieli",
+        "primary_q_threshold": 0.01,
+        "sensitivity_adjustment": "benjamini-hochberg",
+        "sensitivity_q_threshold": 0.01,
+        "provider_overlap": (
+            "direction-concordant-descriptive-only-not-an-inferential-vote"
+        ),
+        "inputs": {
+            "run_completion": {},
+            "provider_manifest": {},
+            "postprocess_manifest": {},
+            "calibration_summary": {},
+            "reporting_rule": {},
+        },
         "high_burden_definition": {
             "pooled_tumor_count": reporting.EXPECTED_TUMOR_COUNT,
         },
