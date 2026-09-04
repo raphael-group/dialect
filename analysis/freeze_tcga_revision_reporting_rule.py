@@ -95,6 +95,9 @@ def freeze_rule(
         "sensitivity_q_threshold": candidates["sensitivity_q_threshold"],
         "threshold_comparison": "inclusive-less-than-or-equal",
         "direction": "primary-provider-rho-sign-after-nondirectional-testing",
+        "direction_unavailable": (
+            "retain-nondirectional-rejection-exclude-from-me-co-lists"
+        ),
         "provider_overlap": "descriptive-only-not-an-inferential-vote",
         "me_presentation": "primary-MutSig-with-CBaSE-continuity-comparison",
         "co_presentation": "primary-MutSig-with-CBaSE-and-DIG-sensitivity",

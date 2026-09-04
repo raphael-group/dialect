@@ -474,4 +474,8 @@ def test_reporting_rule_freezes_prespecified_candidates(
     assert rule["primary_q_threshold"] == 0.1
     assert rule["sensitivity_q_threshold"] == 0.2
     assert rule["scope"] == "one-identical-rule-across-all-32-cancer-types"
+    assert (
+        rule["direction_unavailable"]
+        == "retain-nondirectional-rejection-exclude-from-me-co-lists"
+    )
     assert rule["thresholds_selected_from_observed_pairs"] is False

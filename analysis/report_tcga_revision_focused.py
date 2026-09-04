@@ -101,6 +101,8 @@ def _load_rule(
         or rule.get("continuity_provider") != "cbase"
         or rule.get("supplementary_providers") != ["dig"]
         or rule.get("threshold_comparison") != "inclusive-less-than-or-equal"
+        or rule.get("direction_unavailable")
+        != "retain-nondirectional-rejection-exclude-from-me-co-lists"
         or rule.get("thresholds_selected_from_observed_pairs") is not False
         or rule.get("calibration_summary_sha256")
         != _sha256(calibration_root / calibration.SUMMARY_NAME)
