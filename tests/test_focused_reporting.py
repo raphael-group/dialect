@@ -175,6 +175,8 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     )
     (root / "table_s5.tex").write_text("table\n", encoding="utf-8")
     (root / "figure6.pdf").write_bytes(b"%PDF-synthetic\n")
+    focal_index = list(reporting.TCGA_COHORTS).index(reporting.FOCAL_BURDEN_COHORT)
+    focal_tumors = tumors[focal_index]
     pd.DataFrame(
         {
             "cohort": np.repeat(
@@ -191,12 +193,12 @@ def test_report_validator_binds_inventory_and_bytes(tmp_path: Path) -> None:
     ).to_csv(root / "cohort_burden_source.csv", index=False)
     pd.DataFrame(
         {
-            "cohort": [reporting.FOCAL_BURDEN_COHORT],
-            "cohort_row": [1],
-            "observed_selected_event_count": [0],
-            "cbase_model_expected_selected_event_count": [0],
-            "dig_model_expected_selected_event_count": [0],
-            "mutsig_model_expected_selected_event_count": [0],
+            "cohort": [reporting.FOCAL_BURDEN_COHORT] * focal_tumors,
+            "cohort_row": np.arange(1, focal_tumors + 1),
+            "observed_selected_event_count": np.zeros(focal_tumors),
+            "cbase_model_expected_selected_event_count": np.zeros(focal_tumors),
+            "dig_model_expected_selected_event_count": np.zeros(focal_tumors),
+            "mutsig_model_expected_selected_event_count": np.zeros(focal_tumors),
         },
     ).to_csv(root / "figure6_burden_source.csv", index=False)
     names = {

@@ -568,6 +568,12 @@ def validate_report(output_root: Path) -> dict[str, Any]:
         *(f"{provider}_model_expected_selected_event_count" for provider in core.BMRS),
     }
     expected_rows = cohort_burden.groupby("cohort", sort=False).cumcount() + 1
+    cohort_burden_values = cohort_burden[
+        "pre_k_total_nonsynonymous_snv_event_count"
+    ].to_numpy(dtype=float)
+    figure_burden_values = figure_burden.drop(
+        columns=["cohort", "cohort_row"],
+    ).to_numpy(dtype=float)
     if (
         len(summary) != len(TCGA_COHORTS)
         or summary["cohort"].tolist() != list(TCGA_COHORTS)
@@ -583,9 +589,16 @@ def validate_report(output_root: Path) -> dict[str, Any]:
             cohort_burden["cohort"].value_counts(sort=False),
         ).all()
         or set(figure_burden["cohort"]) != {FOCAL_BURDEN_COHORT}
+        or len(figure_burden)
+        != int(summary.set_index("cohort").loc[FOCAL_BURDEN_COHORT, "tumors"])
         or not figure_burden["cohort_row"].eq(
             np.arange(1, len(figure_burden) + 1),
         ).all()
+        or not np.isfinite(cohort_burden_values).all()
+        or (cohort_burden_values < 0).any()
+        or not np.equal(cohort_burden_values, np.floor(cohort_burden_values)).all()
+        or not np.isfinite(figure_burden_values).all()
+        or (figure_burden_values < 0).any()
         or "sample" in " ".join(cohort_burden.columns).casefold()
         or "sample" in " ".join(figure_burden.columns).casefold()
         or (output_root / "figure6.pdf").read_bytes()[:5] != b"%PDF-"
