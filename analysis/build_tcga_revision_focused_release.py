@@ -1426,8 +1426,13 @@ def _pdf_text_projections(value: bytes) -> tuple[str, ...]:
 
 def _scan_normalized_pdf_privacy(content: bytes, *, name: str) -> None:
     """Scan normalized PDF strings and reject non-link annotations."""
-    raw_projection = content.decode("latin-1")
-    if _contains_sample_barcode_text(raw_projection):
+    # Scan literal identifiers across the complete byte stream, but do not URL-
+    # decode embedded font or image programs.  Binary stream bytes can contain
+    # arbitrary percent-hex sequences (for example ``%CA``), which are not PDF
+    # text and can make a strict URL decoder fail spuriously.  Encoded text is
+    # checked below in the non-stream PDF structure and decoded string objects;
+    # rendered page text is checked separately with pdftotext and OCR.
+    if _TCGA_SAMPLE_BARCODE.search(content) is not None:
         msg = f"Release PDF exposes a TCGA sample barcode: {name}"
         raise ValueError(msg)
 
@@ -1436,6 +1441,10 @@ def _scan_normalized_pdf_privacy(content: bytes, *, name: str) -> None:
         for match in _PDF_OBJECT.finditer(content)
     }
     dictionary_regions = [body.partition(b"stream")[0] for body in objects.values()]
+    structural_projection = b"\n".join(dictionary_regions).decode("latin-1")
+    if _contains_sample_barcode_text(structural_projection):
+        msg = f"Release PDF exposes a TCGA sample barcode: {name}"
+        raise ValueError(msg)
     projections = [
         projection
         for region in dictionary_regions

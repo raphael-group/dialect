@@ -2400,6 +2400,27 @@ def test_canonical_archive_stream_rejects_device_metadata_on_regular_file() -> N
         release._canonical_tar_segments([info])  # noqa: SLF001
 
 
+def test_normalized_pdf_privacy_ignores_binary_percent_hex_only() -> None:
+    safe_binary_stream = (
+        b"%PDF-1.4\n1 0 obj\n<< /Length 6 >>\nstream\n"
+        b"\xff%CA\x00\nendstream\nendobj\n"
+    )
+    release._scan_normalized_pdf_privacy(  # noqa: SLF001
+        safe_binary_stream,
+        name="safe.pdf",
+    )
+
+    for leak in (
+        b"%PDF-1.4\n1 0 obj\n<< /Title (TCGA%2DAB%2D1234) >>\nendobj\n",
+        (
+            b"%PDF-1.4\n1 0 obj\n<< /Length 15 >>\nstream\n"
+            b"TCGA-AB-1234\nendstream\nendobj\n"
+        ),
+    ):
+        with pytest.raises(ValueError, match="TCGA sample barcode"):
+            release._scan_normalized_pdf_privacy(leak, name="leak.pdf")  # noqa: SLF001
+
+
 @pytest.mark.skipif(
     any(shutil.which(tool) is None for tool in release._PDF_TOOLS),  # noqa: SLF001
     reason="Poppler PDF privacy tools are unavailable",
