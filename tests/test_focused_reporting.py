@@ -516,6 +516,7 @@ def test_table_s5_tex_uses_readable_split_panels_and_compact_headers() -> None:
     assert r"BH $q\leq 0.01$" in source
     assert "Primary-rule interpretation" not in source
     assert "decisions direction unavailable" not in source
+    assert not any(line.endswith((" ", "\t")) for line in source.splitlines())
     assert max(map(len, source.splitlines())) < 180
 
 

@@ -1928,7 +1928,7 @@ def _table_s5_tex(  # noqa: PLR0913
         "\\midrule",
         "\\endhead",
         "\\midrule",
-        "\\multicolumn{11}{r}{Continued on next page} \\\\ ",
+        r"\multicolumn{11}{r}{Continued on next page} \\",
         "\\midrule",
         "\\endfoot",
         "\\bottomrule",
