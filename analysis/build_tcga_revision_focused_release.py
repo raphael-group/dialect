@@ -3047,6 +3047,65 @@ def _valid_hash(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def _validate_attested_mutsig_maf_binding(
+    value: object,
+    *,
+    input_records: Mapping[str, Mapping[str, Any]],
+    provider_records: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Bind every attested MutSig receipt to its canonical cohort MAF."""
+    bindings = value.get("bindings") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"contract", "cohorts", "cohort_count", "bindings"}
+        or value.get("contract") != provenance.MUTSIG_MAF_BINDING_CONTRACT
+        or value.get("cohorts") != list(TCGA_COHORTS)
+        or value.get("cohort_count") != len(TCGA_COHORTS)
+        or not isinstance(bindings, list)
+        or len(bindings) != len(TCGA_COHORTS)
+    ):
+        msg = "Fit attestation MutSig/MAF binding violates its exact schema."
+        raise ValueError(msg)
+
+    for cohort, binding in zip(TCGA_COHORTS, bindings, strict=True):
+        canonical_maf = (
+            binding.get("canonical_maf") if isinstance(binding, dict) else None
+        )
+        mutsig_receipt = (
+            binding.get("mutsig_receipt") if isinstance(binding, dict) else None
+        )
+        verified_relation = (
+            binding.get("verified_relation") if isinstance(binding, dict) else None
+        )
+        provider_files = provider_records[cohort].get("mutsig_files", {})
+        expected_receipt = (
+            provider_files.get("persample_receipt.tsv")
+            if isinstance(provider_files, dict)
+            else None
+        )
+        expected_canonical = input_records[cohort].get("canonical_maf")
+        expected_relation = (
+            {
+                "canonical_bytes": canonical_maf.get("bytes"),
+                "receipt_field": "maf_sha256",
+                "sha256": canonical_maf.get("sha256"),
+            }
+            if isinstance(canonical_maf, dict)
+            else None
+        )
+        if (
+            not isinstance(binding, dict)
+            or set(binding)
+            != {"cohort", "canonical_maf", "mutsig_receipt", "verified_relation"}
+            or binding.get("cohort") != cohort
+            or canonical_maf != expected_canonical
+            or mutsig_receipt != expected_receipt
+            or verified_relation != expected_relation
+        ):
+            msg = f"Fit attestation MutSig/MAF binding changed: {cohort}"
+            raise ValueError(msg)
+
+
 def _validate_raw_manifest_schemas(
     *,
     input_manifest: Mapping[str, Any],
@@ -3461,6 +3520,7 @@ def _validate_attestation_schema(
         "provider_manifest",
         "run_manifest",
         "completion_manifest",
+        "canonical_mutsig_maf_binding",
         "cohort_contracts",
         "task_manifests",
     }
@@ -4122,6 +4182,11 @@ def _verify_semantic_closure(
     ):
         msg = "Provider manifest does not cover the exact 32-cohort release grid."
         raise ValueError(msg)
+    _validate_attested_mutsig_maf_binding(
+        attestation.get("raw_chain", {}).get("canonical_mutsig_maf_binding"),
+        input_records=input_records,
+        provider_records=provider_records,
+    )
     for cohort in TCGA_COHORTS:
         provider_files = provider_records[cohort].get("files", {})
         for filename in RELEASED_PROVIDER_FILES:

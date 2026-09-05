@@ -100,6 +100,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     tampered_figure: bool = False,
     tampered_fit_iterations: bool = False,
     tampered_fit_continuous: bool = False,
+    tampered_mutsig_maf_binding: bool = False,
     tampered_document_s1: bool = False,
     invalid_portal_tiff: bool = False,
 ) -> list[release.Member]:
@@ -1479,6 +1480,35 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
             key=lambda item: item.as_posix(),
         )
     ]
+    input_records_by_cohort = {
+        str(record["cohort"]): record for record in input_cohort_records
+    }
+    provider_records_by_cohort = {
+        str(record["cohort"]): record for record in provider_records
+    }
+    mutsig_maf_bindings = []
+    for cohort in release.TCGA_COHORTS:
+        canonical_maf = dict(input_records_by_cohort[cohort]["canonical_maf"])
+        mutsig_receipt = dict(
+            provider_records_by_cohort[cohort]["mutsig_files"][
+                "persample_receipt.tsv"
+            ],
+        )
+        verified_sha256 = str(canonical_maf["sha256"])
+        if tampered_mutsig_maf_binding and cohort == release.TCGA_COHORTS[0]:
+            verified_sha256 = "0" * 64
+        mutsig_maf_bindings.append(
+            {
+                "cohort": cohort,
+                "canonical_maf": canonical_maf,
+                "mutsig_receipt": mutsig_receipt,
+                "verified_relation": {
+                    "canonical_bytes": canonical_maf["bytes"],
+                    "receipt_field": "maf_sha256",
+                    "sha256": verified_sha256,
+                },
+            },
+        )
     add_json(
         release.FIT_ATTESTATION_MEMBER,
         {
@@ -1541,6 +1571,12 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     completion_member,
                     "completion_manifest.json",
                 ),
+                "canonical_mutsig_maf_binding": {
+                    "contract": provenance.MUTSIG_MAF_BINDING_CONTRACT,
+                    "cohorts": list(release.TCGA_COHORTS),
+                    "cohort_count": len(release.TCGA_COHORTS),
+                    "bindings": mutsig_maf_bindings,
+                },
                 "cohort_contracts": contract_evidence,
                 "task_manifests": attested_tasks,
             },
@@ -1591,6 +1627,7 @@ def _write_closure_archive(  # noqa: PLR0913
     tampered_figure: bool = False,
     tampered_fit_iterations: bool = False,
     tampered_fit_continuous: bool = False,
+    tampered_mutsig_maf_binding: bool = False,
     tampered_document_s1: bool = False,
     invalid_portal_tiff: bool = False,
 ) -> bytes:
@@ -1611,6 +1648,7 @@ def _write_closure_archive(  # noqa: PLR0913
         tampered_figure=tampered_figure,
         tampered_fit_iterations=tampered_fit_iterations,
         tampered_fit_continuous=tampered_fit_continuous,
+        tampered_mutsig_maf_binding=tampered_mutsig_maf_binding,
         tampered_document_s1=tampered_document_s1,
         invalid_portal_tiff=invalid_portal_tiff,
     )
@@ -1947,6 +1985,16 @@ def test_archive_verifier_binds_released_pmfs_to_provider_manifest(
     _write_closure_archive(archive, broken_provider_artifact=True)
 
     with pytest.raises(ValueError, match="provider artifact"):
+        release.verify_archive(archive)
+
+
+def test_archive_verifier_binds_mutsig_receipts_to_canonical_mafs(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "broken-mutsig-maf-binding.tar.gz"
+    _write_closure_archive(archive, tampered_mutsig_maf_binding=True)
+
+    with pytest.raises(ValueError, match="MutSig/MAF binding changed"):
         release.verify_archive(archive)
 
 
