@@ -294,7 +294,7 @@ def test_figure_burden_bins_reconcile_observed_axis_without_sample_rows(
     )
 
 
-def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> None:
+def test_figure6_uses_calibration_and_directional_overlap(tmp_path: Path) -> None:
     burden = pd.concat(
         [
             reporting._aggregate_burden_bins(  # noqa: SLF001
@@ -391,7 +391,7 @@ def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> 
             capture_output=True,
             text=True,
         ).stdout
-        assert "Page size:       540 x 630 pts" in info
+        assert "Page size:       540 x 594 pts" in info
     if pdffonts := shutil.which("pdffonts"):
         fonts = subprocess.run(  # noqa: S603
             [pdffonts, output],
@@ -401,6 +401,49 @@ def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> 
         ).stdout
         assert "Arial" in fonts
         assert "Type 3" not in fonts
+
+
+def test_figure6_layout_helpers_keep_clean_ticks_and_panel_order() -> None:
+    summary = pd.DataFrame(
+        {
+            "cohort": ["LOW", "TIE_B", "TIE_A", "HIGH"],
+            "cbase_descriptive_primary_rule_crossing_co": [0, 4, 4, 123_071],
+            "dig_descriptive_primary_rule_crossing_co": [1, 2, 4, 110_000],
+            "mutsig_primary_rejection_co": [0, 4, 3, 0],
+        },
+    )
+    ordered = reporting._ordered_cohort_summary(summary)  # noqa: SLF001
+
+    assert reporting.FIGURE6_PANEL_ORDER == ("A", "B", "C", "D")
+    assert reporting.FIGURE6_SIZE_INCHES == (7.5, 8.25)
+    assert ordered["cohort"].tolist() == ["LOW", "TIE_A", "TIE_B", "HIGH"]
+    assert reporting._co_call_count_ticks(123_071).tolist() == [  # noqa: SLF001
+        0,
+        1,
+        10,
+        100,
+        1_000,
+        10_000,
+        100_000,
+    ]
+
+
+def test_figure6_overlap_matrix_preserves_direction_and_provider_meaning() -> None:
+    overlap = pd.DataFrame(
+        {
+            "direction": ["ME", "CO", "ME", "CO"],
+            "mutsig_primary_rejection_count": [2, 1, 1, 0],
+            "mutsig_rejection_cbase_concordant_crossing_count": [1, 1, 1, 0],
+            "mutsig_rejection_dig_concordant_crossing_count": [2, 0, 0, 0],
+            "mutsig_rejection_cbase_discordant_crossing_count": [0, 0, 0, 0],
+            "mutsig_rejection_dig_discordant_crossing_count": [0, 1, 1, 0],
+        },
+    )
+
+    matrix, discordant = reporting._overlap_panel_values(overlap)  # noqa: SLF001
+
+    assert matrix.tolist() == [[3, 2, 2], [1, 1, 0]]
+    assert discordant == (0, 2)
 
 
 def test_calibration_gate_maxima_selects_worst_pair_per_cohort() -> None:

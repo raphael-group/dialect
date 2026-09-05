@@ -34,6 +34,8 @@ from dialect.data.tcga import TCGA_COHORTS
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from matplotlib.axes import Axes
+
 SCHEMA_VERSION: Final = "1.0.0"
 REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v5"
 HIGH_BURDEN_QUANTILE: Final = 0.99
@@ -118,6 +120,9 @@ PROVIDER_COLORS: Final = {
     "dig": "#0072B2",
     "mutsig": "#D55E00",
 }
+FIGURE6_SIZE_INCHES: Final = (7.5, 8.25)
+FIGURE6_PANEL_ORDER: Final = ("A", "B", "C", "D")
+CO_CALL_COUNT_TICKS: Final = (0, 1, 10, 100, 1_000, 10_000, 100_000)
 ADJUSTMENT_COLUMNS: Final = {
     "benjamini-yekutieli": "by_q_value",
     "benjamini-hochberg": "bh_q_value",
@@ -1293,6 +1298,361 @@ def _figure6_burden_bins(run_root: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _ordered_cohort_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    """Order cohort rows by the largest provider-specific primary CO count."""
+    count_columns = [
+        f"{_decision_prefix(provider, 'primary')}_co" for provider in core.BMRS
+    ]
+    if summary.empty or any(column not in summary for column in count_columns):
+        msg = "Figure 6 cohort summary lacks primary CO counts."
+        raise ValueError(msg)
+    ordered = summary.copy()
+    ordered["_largest_provider_co_count"] = ordered[count_columns].max(axis=1)
+    return ordered.sort_values(
+        ["_largest_provider_co_count", "cohort"],
+        kind="mergesort",
+    ).drop(columns="_largest_provider_co_count")
+
+
+def _co_call_count_ticks(maximum_count: float) -> np.ndarray:
+    """Return fixed, well-separated count ticks without an ad hoc maximum tick."""
+    if not np.isfinite(maximum_count) or maximum_count < 0:
+        msg = "Figure 6 CO-count maximum is invalid."
+        raise ValueError(msg)
+    candidates = np.asarray(CO_CALL_COUNT_TICKS, dtype=np.int64)
+    selected = candidates[candidates <= maximum_count]
+    return selected if len(selected) else candidates[:1]
+
+
+def _overlap_panel_values(overlap: pd.DataFrame) -> tuple[np.ndarray, tuple[int, int]]:
+    """Return the direction-by-provider overlap matrix and discordant totals."""
+    required = {
+        "direction",
+        "mutsig_primary_rejection_count",
+        "mutsig_rejection_cbase_concordant_crossing_count",
+        "mutsig_rejection_dig_concordant_crossing_count",
+        "mutsig_rejection_cbase_discordant_crossing_count",
+        "mutsig_rejection_dig_discordant_crossing_count",
+    }
+    if not required <= set(overlap):
+        msg = "Figure 6 provider-overlap table is incomplete."
+        raise ValueError(msg)
+    aggregate = overlap.groupby("direction", sort=False)[
+        list(required - {"direction"})
+    ].sum()
+    directions = ["ME", "CO"]
+    matrix = np.column_stack(
+        [
+            aggregate.reindex(directions, fill_value=0)[column].to_numpy(dtype=int)
+            for column in (
+                "mutsig_primary_rejection_count",
+                "mutsig_rejection_cbase_concordant_crossing_count",
+                "mutsig_rejection_dig_concordant_crossing_count",
+            )
+        ],
+    )
+    discordant = (
+        int(aggregate["mutsig_rejection_cbase_discordant_crossing_count"].sum()),
+        int(aggregate["mutsig_rejection_dig_discordant_crossing_count"].sum()),
+    )
+    return matrix, discordant
+
+
+def _plot_burden_panel(ax: Axes, burden_bins: pd.DataFrame) -> None:
+    """Plot UCEC observed burden against each BMR's expectation."""
+    for provider in core.BMRS:
+        selected = burden_bins.loc[burden_bins["provider"].eq(provider)]
+        observed = np.exp(
+            (
+                selected["observed_log1p_bin_lower"]
+                + selected["observed_log1p_bin_upper"]
+            )
+            / 2,
+        )
+        expected = np.exp(
+            (
+                selected["expected_log1p_bin_lower"]
+                + selected["expected_log1p_bin_upper"]
+            )
+            / 2,
+        )
+        counts = selected["tumor_count"].to_numpy(dtype=float)
+        ax.scatter(
+            observed,
+            expected,
+            s=10 + 6 * np.sqrt(counts),
+            alpha=0.68,
+            color=PROVIDER_COLORS[provider],
+            edgecolors=PROVIDER_COLORS[provider],
+            linewidths=0.35,
+            label=PROVIDER_LABELS[provider],
+        )
+    maximum = float(max(ax.get_xlim()[1], ax.get_ylim()[1]))
+    ax.plot(
+        [1, maximum],
+        [1, maximum],
+        color="#374151",
+        linewidth=0.85,
+        linestyle=(0, (3, 2)),
+        zorder=0,
+    )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Observed events per tumor (+1)")
+    ax.set_ylabel("BMR-expected events per tumor (+1)")
+    ax.set_title("A  UCEC tumor burden", loc="left")
+    ax.legend(
+        frameon=False,
+        loc="upper left",
+        ncols=3,
+        handletextpad=0.35,
+        columnspacing=0.75,
+        borderaxespad=0.25,
+    )
+    ax.text(
+        0.98,
+        0.03,
+        "Circle area proportional to tumors per bin",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        color="#4B5563",
+        fontsize=7.2,
+    )
+
+
+def _plot_cohort_panel(
+    ax: Axes,
+    summary: pd.DataFrame,
+    *,
+    threshold_label: str,
+) -> None:
+    """Plot primary-rule CO counts across all cohorts without crowded end ticks."""
+    ordered = _ordered_cohort_summary(summary)
+    positions = np.arange(len(ordered), dtype=float)
+    offsets = {"cbase": -0.22, "dig": 0.0, "mutsig": 0.22}
+    provider_counts = []
+    for provider in core.BMRS:
+        counts = ordered[f"{_decision_prefix(provider, 'primary')}_co"].to_numpy(
+            dtype=float,
+        )
+        provider_counts.append(counts)
+        ax.scatter(
+            np.log10(counts + 1),
+            positions + offsets[provider],
+            s=22,
+            color=PROVIDER_COLORS[provider],
+            edgecolors="white",
+            linewidths=0.35,
+            label=PROVIDER_LABELS[provider],
+            zorder=3,
+        )
+    maximum_count = max(float(values.max()) for values in provider_counts)
+    count_ticks = _co_call_count_ticks(maximum_count)
+    ax.set_xticks(
+        np.log10(count_ticks + 1),
+        [
+            f"{value:,}" if value < 1_000 else f"{value // 1_000}k"
+            for value in count_ticks
+        ],
+    )
+    ax.set_xlim(-0.12, np.log10(maximum_count + 1) * 1.045)
+    ax.set_ylim(-0.8, len(ordered) - 0.2)
+    ax.set_yticks(positions, ordered["cohort"])
+    publication_threshold = threshold_label.replace(" <= ", " ≤ ")
+    ax.set_xlabel(f"CO calls ({publication_threshold})")
+    ax.set_title("B  CO calls across cancer cohorts", loc="left")
+    ax.legend(
+        frameon=False,
+        loc="upper left",
+        ncols=3,
+        handletextpad=0.35,
+        columnspacing=0.8,
+        borderaxespad=0.25,
+    )
+    ax.grid(axis="x", color="#D1D5DB", linewidth=0.55, alpha=0.75)
+    ax.set_axisbelow(True)
+
+
+def _plot_calibration_panel(
+    ax: Axes,
+    calibration_table: pd.DataFrame,
+    confirmation_table: pd.DataFrame,
+) -> None:
+    """Plot cohort calibration rates, provider means, and final gate bounds."""
+    marginal = calibration_table.loc[
+        calibration_table["screen"].eq("marginal_lrt"),
+    ]
+    cell_rates = marginal.groupby(
+        ["cohort", "provider", "threshold"],
+        as_index=False,
+    )["rate"].mean()
+    offsets = {"cbase": -0.0012, "dig": 0.0, "mutsig": 0.0012}
+    for provider in core.BMRS:
+        selected = cell_rates.loc[cell_rates["provider"].eq(provider)]
+        for threshold, group in selected.groupby("threshold"):
+            x = np.full(len(group), float(threshold) + offsets[provider])
+            ax.scatter(
+                x,
+                group["rate"],
+                s=13,
+                alpha=0.28,
+                color=PROVIDER_COLORS[provider],
+                linewidths=0,
+                zorder=2,
+            )
+        means = selected.groupby("threshold", as_index=False)["rate"].mean()
+        ax.plot(
+            means["threshold"] + offsets[provider],
+            means["rate"],
+            color=PROVIDER_COLORS[provider],
+            marker="o",
+            markersize=3.8,
+            linewidth=1.35,
+            label=PROVIDER_LABELS[provider],
+            zorder=3,
+        )
+    maxima = _confirmation_gate_maxima(confirmation_table)
+    acceptance = maxima.groupby("threshold", as_index=False)[
+        "acceptance_upper_bound"
+    ].first()
+    ax.plot(
+        acceptance["threshold"],
+        acceptance["acceptance_upper_bound"],
+        color="#111827",
+        marker="_",
+        markersize=9,
+        markeredgewidth=1.0,
+        linestyle="none",
+        zorder=4,
+    )
+    ax.scatter(
+        maxima["threshold"],
+        maxima["maximum_clopper_pearson_upper_bound"],
+        marker="D",
+        facecolors="white",
+        edgecolors="#111827",
+        linewidths=0.9,
+        s=24,
+        zorder=5,
+    )
+    upper_limit = max(
+        0.075,
+        float(acceptance["acceptance_upper_bound"].max()) * 1.08,
+    )
+    ax.plot(
+        [0.006, 0.055],
+        [0.006, 0.055],
+        color="#9CA3AF",
+        linewidth=0.75,
+        linestyle=(0, (3, 2)),
+        zorder=0,
+    )
+    ax.set_xlim(0.006, 0.055)
+    ax.set_ylim(0, upper_limit)
+    ax.set_xticks([0.01, 0.05], ["0.01", "0.05"])
+    ax.set_xlabel("Nominal p-value threshold")
+    ax.set_ylabel("Rejection rate / upper bound")
+    ax.set_title("C  Fitted-null calibration", loc="left")
+    ax.legend(
+        frameon=False,
+        loc="upper left",
+        ncols=3,
+        handlelength=1.25,
+        handletextpad=0.35,
+        columnspacing=0.75,
+        borderaxespad=0.25,
+    )
+    rightmost_acceptance = acceptance.sort_values("threshold").iloc[-1]
+    rightmost_maximum = maxima.sort_values("threshold").iloc[-1]
+    ax.annotate(
+        "acceptance",
+        xy=(
+            float(rightmost_acceptance["threshold"]),
+            float(rightmost_acceptance["acceptance_upper_bound"]),
+        ),
+        xytext=(-4, 5),
+        textcoords="offset points",
+        ha="right",
+        va="bottom",
+        color="#374151",
+        fontsize=7.0,
+    )
+    ax.annotate(
+        "worst upper",
+        xy=(
+            float(rightmost_maximum["threshold"]),
+            float(rightmost_maximum["maximum_clopper_pearson_upper_bound"]),
+        ),
+        xytext=(-4, -5),
+        textcoords="offset points",
+        ha="right",
+        va="top",
+        color="#374151",
+        fontsize=7.0,
+    )
+    ax.grid(axis="y", color="#E5E7EB", linewidth=0.5)
+    ax.set_axisbelow(True)
+
+
+def _plot_overlap_panel(ax: Axes, overlap: pd.DataFrame) -> None:
+    """Plot a compact matrix of primary calls retained under each provider."""
+    matrix, discordant = _overlap_panel_values(overlap)
+    colors = [
+        PROVIDER_COLORS["mutsig"],
+        PROVIDER_COLORS["cbase"],
+        PROVIDER_COLORS["dig"],
+    ]
+    y_positions = np.asarray([1.0, 0.0])
+    for column, color in enumerate(colors):
+        values = matrix[:, column]
+        sizes = 78 + 34 * values
+        ax.scatter(
+            np.full(2, column, dtype=float),
+            y_positions,
+            s=sizes,
+            color=color,
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=2,
+        )
+        for y, value in zip(y_positions, values, strict=True):
+            ax.text(
+                column,
+                y,
+                f"{value:,}",
+                ha="center",
+                va="center",
+                color="white",
+                fontsize=8.2,
+                fontweight="bold",
+                zorder=3,
+            )
+    ax.set_xlim(-0.55, 2.55)
+    ax.set_ylim(-0.58, 1.52)
+    ax.set_xticks(
+        [0, 1, 2],
+        ["MutSig\nprimary", "also CBaSE\nsame direction", "also DIG\nsame direction"],
+    )
+    ax.set_yticks(y_positions, ["Mutual exclusivity", "Co-occurrence"])
+    ax.set_title("D  Primary-pair overlap", loc="left")
+    ax.text(
+        0.5,
+        0.03,
+        f"Opposite direction: CBaSE {discordant[0]:,}   DIG {discordant[1]:,}",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        color="#4B5563",
+        fontsize=7.2,
+    )
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(axis="both", length=0)
+    ax.grid(axis="x", color="#E5E7EB", linewidth=0.55)
+    ax.set_axisbelow(True)
+
+
 def _plot_figure6(  # noqa: PLR0913
     *,
     burden_bins: pd.DataFrame,
@@ -1306,225 +1666,49 @@ def _plot_figure6(  # noqa: PLR0913
 ) -> None:
     mpl.rcParams.update(
         {
+            "axes.labelsize": 8.2,
             "axes.spines.right": False,
             "axes.spines.top": False,
-            "axes.labelsize": 8,
-            "axes.titlesize": 9,
+            "axes.titlepad": 8,
+            "axes.titlesize": 9.4,
+            "axes.titleweight": "bold",
             "font.family": "Arial",
-            "font.size": 9,
+            "font.size": 8.2,
             "figure.dpi": 150,
-            "legend.fontsize": 8,
+            "legend.fontsize": 7.4,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
-            "xtick.labelsize": 8,
-            "ytick.labelsize": 8,
+            "xtick.labelsize": 7.7,
+            "ytick.labelsize": 7.7,
         },
     )
-    figure = plt.figure(figsize=(7.5, 8.75), constrained_layout=True)
+    figure = plt.figure(figsize=FIGURE6_SIZE_INCHES, constrained_layout=True)
+    figure.get_layout_engine().set(
+        w_pad=0.03,
+        h_pad=0.035,
+        wspace=0.06,
+        hspace=0.08,
+    )
     grid = figure.add_gridspec(
         3,
         2,
-        width_ratios=(1.15, 1.0),
-        height_ratios=(1.0, 1.0, 1.0),
+        width_ratios=(1.06, 1.0),
+        height_ratios=(1.08, 1.02, 0.90),
     )
-    ax_b = figure.add_subplot(grid[:, 0])
-    ax_a = figure.add_subplot(grid[0, 1])
-    ax_c = figure.add_subplot(grid[1, 1])
-    ax_d = figure.add_subplot(grid[2, 1])
-
-    ax = ax_a
-    for provider in core.BMRS:
-        selected_bins = burden_bins.loc[burden_bins["provider"].eq(provider)]
-        observed = np.exp(
-            (
-                selected_bins["observed_log1p_bin_lower"]
-                + selected_bins["observed_log1p_bin_upper"]
-            )
-            / 2,
-        )
-        expected = np.exp(
-            (
-                selected_bins["expected_log1p_bin_lower"]
-                + selected_bins["expected_log1p_bin_upper"]
-            )
-            / 2,
-        )
-        counts = selected_bins["tumor_count"].to_numpy(dtype=float)
-        ax.scatter(
-            observed,
-            expected,
-            s=8 + 7 * np.sqrt(counts),
-            alpha=0.55,
-            color=PROVIDER_COLORS[provider],
-            label=PROVIDER_LABELS[provider],
-        )
-    maximum = float(max(ax.get_xlim()[1], ax.get_ylim()[1]))
-    ax.plot([1, maximum], [1, maximum], color="#111827", linewidth=0.8, linestyle="--")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Observed selected events per tumor + 1")
-    ax.set_ylabel("Model-expected events per tumor + 1")
-    ax.set_title("A  UCEC burden across background models", loc="left")
-    ax.legend(frameon=False)
-
-    ax = ax_b
-    ordered = summary.sort_values(
-        f"{_decision_prefix('mutsig', 'primary')}_co",
-        ascending=True,
-    )
-    positions = np.arange(len(ordered))
-    offsets = {"cbase": -0.22, "dig": 0.0, "mutsig": 0.22}
-    provider_counts = []
-    for provider in core.BMRS:
-        counts = ordered[f"{_decision_prefix(provider, 'primary')}_co"].to_numpy(
-            dtype=float,
-        )
-        provider_counts.append(counts)
-        ax.scatter(
-            np.log10(counts + 1),
-            positions + offsets[provider],
-            s=24,
-            color=PROVIDER_COLORS[provider],
-            label=PROVIDER_LABELS[provider],
-        )
-    ax.set_yticks(positions, ordered["cohort"])
-    maximum_count = max(float(values.max()) for values in provider_counts)
-    candidate_ticks = np.asarray([0, 1, 10, 100, 1_000, 10_000, 100_000])
-    count_ticks = candidate_ticks[candidate_ticks <= maximum_count]
-    if len(count_ticks) == 0 or count_ticks[-1] < maximum_count:
-        count_ticks = np.append(count_ticks, int(np.ceil(maximum_count)))
-    ax.set_xticks(
-        np.log10(count_ticks + 1),
-        [f"{value:,}" for value in count_ticks],
-    )
+    axes = {
+        "A": figure.add_subplot(grid[0, 0]),
+        "B": figure.add_subplot(grid[:, 1]),
+        "C": figure.add_subplot(grid[1, 0]),
+        "D": figure.add_subplot(grid[2, 0]),
+    }
+    if tuple(axes) != FIGURE6_PANEL_ORDER:
+        msg = "Figure 6 panel order drifted."
+        raise RuntimeError(msg)
     threshold_label = _threshold_label(primary_adjustment, primary_q)
-    ax.set_xlabel(f"CO-direction pairs at {threshold_label}")
-    ax.set_title(
-        "B  Primary MutSig rejections and descriptive crossings",
-        loc="left",
-    )
-    ax.grid(axis="x", alpha=0.2)
-
-    ax = ax_c
-    marginal = calibration_table.loc[calibration_table["screen"].eq("marginal_lrt"),]
-    cell_rates = marginal.groupby(
-        ["cohort", "provider", "threshold"],
-        as_index=False,
-    )["rate"].mean()
-    for provider in core.BMRS:
-        selected = cell_rates.loc[cell_rates["provider"].eq(provider)]
-        for threshold, group in selected.groupby("threshold"):
-            x = np.full(len(group), float(threshold))
-            ax.scatter(
-                x,
-                group["rate"],
-                s=22,
-                alpha=0.75,
-                color=PROVIDER_COLORS[provider],
-            )
-        means = selected.groupby("threshold", as_index=False)["rate"].mean()
-        ax.plot(
-            means["threshold"],
-            means["rate"],
-            color=PROVIDER_COLORS[provider],
-            label=f"{PROVIDER_LABELS[provider]} cohort mean",
-        )
-    gate_maxima = _confirmation_gate_maxima(confirmation_table)
-    ax.scatter(
-        gate_maxima["threshold"],
-        gate_maxima["maximum_clopper_pearson_upper_bound"],
-        marker="^",
-        facecolors="none",
-        edgecolors=PROVIDER_COLORS["mutsig"],
-        s=22,
-        label="Two-stage family worst endpoint",
-    )
-    acceptance = gate_maxima.groupby("threshold", as_index=False)[
-        "acceptance_upper_bound"
-    ].first()
-    ax.scatter(
-        acceptance["threshold"],
-        acceptance["acceptance_upper_bound"],
-        marker="_",
-        color="#111827",
-        s=70,
-        linewidths=1.4,
-        label="Acceptance bound",
-    )
-    calibration_values = [
-        float(cell_rates["rate"].max()),
-        float(gate_maxima["maximum_clopper_pearson_upper_bound"].max()),
-        float(gate_maxima["acceptance_upper_bound"].max()),
-    ]
-    limits = [0, max(0.06, max(calibration_values) * 1.08)]
-    ax.plot(limits, limits, color="#111827", linewidth=0.8, linestyle="--")
-    ax.set_xlim(limits)
-    ax.set_ylim(limits)
-    ax.set_xlabel("Nominal p-value threshold")
-    ax.set_ylabel("Rejection rate / upper bound")
-    ax.set_title("C  Fitted-null calibration; two-stage bound", loc="left")
-    ax.legend(frameon=False, ncols=2, loc="upper left")
-
-    ax = ax_d
-    aggregate = overlap.groupby("direction", sort=False)[
-        [
-            "mutsig_primary_rejection_count",
-            "mutsig_rejection_cbase_concordant_crossing_count",
-            "mutsig_rejection_dig_concordant_crossing_count",
-            "mutsig_rejection_cbase_discordant_crossing_count",
-            "mutsig_rejection_dig_discordant_crossing_count",
-        ]
-    ].sum()
-    directions = ["ME", "CO"]
-    positions = np.arange(len(directions), dtype=float)
-    widths = 0.24
-    series = (
-        (
-            "mutsig_primary_rejection_count",
-            "Primary MutSig rejections",
-            PROVIDER_COLORS["mutsig"],
-        ),
-        (
-            "mutsig_rejection_cbase_concordant_crossing_count",
-            "With descriptive CBaSE crossing, same direction",
-            PROVIDER_COLORS["cbase"],
-        ),
-        (
-            "mutsig_rejection_dig_concordant_crossing_count",
-            "With descriptive DIG crossing, same direction",
-            PROVIDER_COLORS["dig"],
-        ),
-    )
-    for offset, (column, label, color) in zip(
-        (-widths, 0.0, widths),
-        series,
-        strict=True,
-    ):
-        values = aggregate.reindex(directions, fill_value=0)[column].to_numpy()
-        ax.bar(positions + offset, values, width=widths, color=color, label=label)
-    cbase_discordant = int(
-        aggregate["mutsig_rejection_cbase_discordant_crossing_count"].sum(),
-    )
-    dig_discordant = int(
-        aggregate["mutsig_rejection_dig_discordant_crossing_count"].sum(),
-    )
-    ax.text(
-        0.02,
-        0.98,
-        (
-            "Opposite-direction crossings among primary MutSig rejections: "
-            f"CBaSE {cbase_discordant:,}; DIG {dig_discordant:,}"
-        ),
-        transform=ax.transAxes,
-        va="top",
-        fontsize=8,
-    )
-    ax.set_xticks(positions, ["Mutual exclusivity", "Co-occurrence"])
-    ax.set_ylabel(f"Pairs across {len(summary)} cohorts ({threshold_label})")
-    ax.set_title("D  Direction-concordant provider overlap", loc="left")
-    ax.margins(y=0.35)
-    ax.legend(frameon=False, loc="upper right", bbox_to_anchor=(1.0, 0.82))
-    ax.grid(axis="y", alpha=0.2)
+    _plot_burden_panel(axes["A"], burden_bins)
+    _plot_cohort_panel(axes["B"], summary, threshold_label=threshold_label)
+    _plot_calibration_panel(axes["C"], calibration_table, confirmation_table)
+    _plot_overlap_panel(axes["D"], overlap)
 
     figure.savefig(
         output,
