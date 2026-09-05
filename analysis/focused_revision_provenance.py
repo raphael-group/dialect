@@ -58,6 +58,7 @@ FIT_SOURCE_FILES: Final = tuple(
     ),
 )
 RELEASE_PIPELINE_FILES: Final = (
+    Path("analysis/build_tcga_revision_focused_document_manifest.py"),
     Path("analysis/build_tcga_revision_focused_release.py"),
     Path("analysis/calibrate_tcga_revision_focused.py"),
     Path("analysis/calibration_batch.py"),

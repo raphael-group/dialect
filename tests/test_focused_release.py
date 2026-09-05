@@ -34,13 +34,15 @@ def _compact_archive_inference_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def validate(frame: pd.DataFrame, *, cohort: str, features: object) -> None:
         del features
+        if frame.empty:
+            assert tuple(frame.columns) == postprocess.result_columns()
+            return
         postprocess.validate_inference_frame(frame, cohort=cohort)
-        assert frame.empty
 
     monkeypatch.setattr(release, "_validate_archived_inference_frame", validate)
 
     def validate_raw_task(task, **kwargs) -> None:
-        kwargs["pair_count"] = 0
+        kwargs["pair_count"] = task["pairwise_rows"]
         _REAL_RAW_TASK_VALIDATOR(task, **kwargs)
 
     monkeypatch.setattr(release, "_validate_archived_raw_task", validate_raw_task)
@@ -69,6 +71,8 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     tampered_table_s5: bool = False,
     tampered_table_tex: bool = False,
     tampered_figure: bool = False,
+    tampered_fit_iterations: bool = False,
+    tampered_fit_continuous: bool = False,
 ) -> list[release.Member]:
     members: dict[str, release.Member] = {}
 
@@ -930,6 +934,24 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
             content += b"% forged\n"
         elif name == "figure6.pdf" and tampered_figure:
             content = b"%PDF-forged\n"
+        elif name == "fit_diagnostics_summary.csv" and tampered_fit_iterations:
+            forged = fit_frame.copy()
+            forged.loc[forged["scope"].eq("mutsig"), [
+                "iterations_min",
+                "iterations_median",
+                "iterations_p95",
+                "iterations_max",
+            ]] = 1
+            content = release.reporting._csv_bytes(forged)  # noqa: SLF001
+        elif name == "fit_diagnostics_summary.csv" and tampered_fit_continuous:
+            forged = fit_frame.copy()
+            forged.loc[forged["scope"].eq("mutsig"), [
+                "minimum_last_ll_gain",
+                "maximum_last_ll_gain",
+                "maximum_fixed_point_residual",
+                "maximum_kkt_residual",
+            ]] = 1e-12
+            content = release.reporting._csv_bytes(forged)  # noqa: SLF001
         report_output = add(f"results/report/{name}", content)
         report_outputs[name] = _record(report_output, name)
     report_manifest_member = add_json(
@@ -1140,6 +1162,8 @@ def _write_closure_archive(  # noqa: PLR0913
     tampered_table_s5: bool = False,
     tampered_table_tex: bool = False,
     tampered_figure: bool = False,
+    tampered_fit_iterations: bool = False,
+    tampered_fit_continuous: bool = False,
 ) -> bytes:
     members = _closure_members(
         broken_postprocess_source=broken_postprocess_source,
@@ -1153,6 +1177,8 @@ def _write_closure_archive(  # noqa: PLR0913
         tampered_table_s5=tampered_table_s5,
         tampered_table_tex=tampered_table_tex,
         tampered_figure=tampered_figure,
+        tampered_fit_iterations=tampered_fit_iterations,
+        tampered_fit_continuous=tampered_fit_continuous,
     )
     manifest = release._manifest(  # noqa: SLF001
         members,
@@ -1377,6 +1403,8 @@ def test_archive_verifier_rejects_sample_level_csv_schema(tmp_path: Path) -> Non
         ("tampered_table_s5", "Table S5 differs"),
         ("tampered_table_tex", "Table S5 LaTeX differs"),
         ("tampered_figure", "Figure 6 differs"),
+        ("tampered_fit_iterations", "fit diagnostics differ"),
+        ("tampered_fit_continuous", "fit diagnostics differ"),
     ],
 )
 def test_archive_verifier_recomputes_rehashed_report_outputs(
@@ -1406,6 +1434,26 @@ def test_archived_inference_validator_recomputes_math_and_pair_axis() -> None:
         )
         for name, values in derived.items():
             frame[f"{provider}_{name}"] = values
+        frame[f"{provider}_fit_converged"] = pd.Series(
+            [True] * len(frame),
+            dtype=bool,
+        )
+        frame[f"{provider}_fit_iterations"] = pd.Series(
+            [1, 2, 3],
+            dtype=np.int64,
+        )
+        frame[f"{provider}_fit_last_ll_gain"] = pd.Series(
+            [1e-12, 2e-12, 3e-12],
+            dtype=float,
+        )
+        frame[f"{provider}_fit_fixed_point_residual"] = pd.Series(
+            [1e-12, 2e-12, 3e-12],
+            dtype=float,
+        )
+        frame[f"{provider}_fit_kkt_residual"] = pd.Series(
+            [3e-12, 2e-12, 1e-12],
+            dtype=float,
+        )
     frame = frame.loc[:, postprocess.result_columns()]
 
     _REAL_INFERENCE_VALIDATOR(frame, cohort="TEST", features=features)
@@ -1413,6 +1461,65 @@ def test_archived_inference_validator_recomputes_math_and_pair_axis() -> None:
     frame.loc[0, "mutsig_log_p_value"] = -1.0
     with pytest.raises(ValueError, match="complete-family policy"):
         _REAL_INFERENCE_VALIDATOR(frame, cohort="TEST", features=features)
+
+
+def test_fit_diagnostic_summary_matches_exact_linear_quantiles() -> None:
+    adversarial_counts = np.bincount([515, 918], minlength=1001)
+    assert release._fit_iteration_quantile(  # noqa: SLF001
+        adversarial_counts,
+        0.95,
+    ) == np.quantile([515, 918], 0.95)
+
+    accumulator = release._new_fit_diagnostic_accumulator()  # noqa: SLF001
+    frame = pd.DataFrame(
+        {
+            **{
+                f"{provider}_effect_identifiability": [
+                    "full-affine-rank",
+                    "rank-deficient",
+                    "rank-not-certified-underflow",
+                ]
+                for provider in release.core.BMRS
+            },
+            **{
+                f"{provider}_fit_converged": [True, True, True]
+                for provider in release.core.BMRS
+            },
+            **{
+                f"{provider}_fit_iterations": [1, 2, 3]
+                for provider in release.core.BMRS
+            },
+            **{
+                f"{provider}_fit_last_ll_gain": [1e-12, 2e-12, 3e-12]
+                for provider in release.core.BMRS
+            },
+            **{
+                f"{provider}_fit_fixed_point_residual": [1e-13, 2e-13, 3e-13]
+                for provider in release.core.BMRS
+            },
+            **{
+                f"{provider}_fit_kkt_residual": [3e-13, 2e-13, 1e-13]
+                for provider in release.core.BMRS
+            },
+        },
+    )
+    release._accumulate_fit_diagnostics(  # noqa: SLF001
+        accumulator,
+        frame,
+        cohort="TEST",
+    )
+
+    summary = release._fit_diagnostic_summary(accumulator)  # noqa: SLF001
+    mutsig = summary.loc[summary["scope"].eq("mutsig")].iloc[0]
+    assert mutsig["iterations_median"] == np.quantile([1, 2, 3], 0.5)
+    assert mutsig["iterations_p95"] == np.quantile([1, 2, 3], 0.95)
+    assert mutsig["minimum_last_ll_gain"] == 1e-12
+    assert mutsig["maximum_last_ll_gain"] == 3e-12
+    assert mutsig["maximum_fixed_point_residual"] == 3e-13
+    assert mutsig["maximum_kkt_residual"] == 3e-13
+    assert mutsig["full_affine_rank_rows"] == 1
+    assert mutsig["rank_deficient_rows"] == 1
+    assert mutsig["rank_not_certified_underflow_rows"] == 1
 
 
 def test_raw_task_validator_requires_exact_schema_and_resource_receipt() -> None:

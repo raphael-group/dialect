@@ -2938,6 +2938,164 @@ def _validate_archived_figure6_bins(
         raise ValueError(msg)
 
 
+def _new_fit_diagnostic_accumulator() -> dict[str, dict[str, Any]]:
+    """Return bounded provider accumulators for public pair-fit receipts."""
+    return {
+        provider: {
+            "iteration_counts": np.zeros(
+                core.REQUIRED_PAIR_FIT_MAX_ITER + 1,
+                dtype=np.int64,
+            ),
+            "rows": 0,
+            "converged": 0,
+            "minimum_gain": np.inf,
+            "maximum_gain": -np.inf,
+            "maximum_fixed_point": 0.0,
+            "maximum_kkt": 0.0,
+            "full_rank": 0,
+            "rank_deficient": 0,
+            "rank_underflow": 0,
+        }
+        for provider in core.BMRS
+    }
+
+
+def _accumulate_fit_diagnostics(
+    accumulator: dict[str, dict[str, Any]],
+    frame: pd.DataFrame,
+    *,
+    cohort: str,
+) -> None:
+    """Add one validated cohort inference frame without retaining pair rows."""
+    if frame.empty:
+        return
+    for provider in core.BMRS:
+        diagnostics = postprocess.provider_fit_diagnostics(
+            frame,
+            provider,
+            label=f"{cohort}/{provider}",
+        )
+        aggregate = accumulator[provider]
+        iterations = diagnostics["fit_iterations"]
+        counts = np.bincount(
+            iterations,
+            minlength=core.REQUIRED_PAIR_FIT_MAX_ITER + 1,
+        )
+        aggregate["iteration_counts"] += counts
+        gains = diagnostics["fit_last_ll_gain"]
+        fixed_point = diagnostics["fit_fixed_point_residual"]
+        kkt = diagnostics["fit_kkt_residual"]
+        converged = diagnostics["fit_converged"]
+        effects = frame[f"{provider}_effect_identifiability"].astype("string")
+        aggregate["rows"] += len(frame)
+        aggregate["converged"] += int(converged.sum())
+        aggregate["minimum_gain"] = min(
+            float(aggregate["minimum_gain"]),
+            float(gains.min()),
+        )
+        aggregate["maximum_gain"] = max(
+            float(aggregate["maximum_gain"]),
+            float(gains.max()),
+        )
+        aggregate["maximum_fixed_point"] = max(
+            float(aggregate["maximum_fixed_point"]),
+            float(fixed_point.max()),
+        )
+        aggregate["maximum_kkt"] = max(
+            float(aggregate["maximum_kkt"]),
+            float(kkt.max()),
+        )
+        aggregate["full_rank"] += int(effects.eq("full-affine-rank").sum())
+        aggregate["rank_deficient"] += int(effects.eq("rank-deficient").sum())
+        aggregate["rank_underflow"] += int(
+            effects.eq("rank-not-certified-underflow").sum(),
+        )
+
+
+def _fit_iteration_quantile(counts: np.ndarray, quantile: float) -> float:
+    """Match NumPy's linear integer-sample quantile from bounded counts."""
+    total = int(counts.sum())
+    if total == 0:
+        return 0.0
+    position = (total - 1) * quantile
+    lower_index = int(np.floor(position))
+    upper_index = int(np.ceil(position))
+    cumulative = np.cumsum(counts)
+    lower = int(np.searchsorted(cumulative, lower_index, side="right"))
+    upper = int(np.searchsorted(cumulative, upper_index, side="right"))
+    fraction = position - lower_index
+    difference = upper - lower
+    if fraction >= 0.5:
+        return float(upper - difference * (1.0 - fraction))
+    return float(lower + difference * fraction)
+
+
+def _fit_diagnostic_summary(
+    accumulator: Mapping[str, Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Reconstruct the exact released fit-diagnostic summary."""
+
+    def summarize(scope: str, providers: Sequence[str]) -> dict[str, Any]:
+        selected = [accumulator[provider] for provider in providers]
+        iteration_counts = sum(
+            (
+                np.asarray(item["iteration_counts"], dtype=np.int64)
+                for item in selected
+            ),
+            start=np.zeros(
+                core.REQUIRED_PAIR_FIT_MAX_ITER + 1,
+                dtype=np.int64,
+            ),
+        )
+        rows = sum(int(item["rows"]) for item in selected)
+        converged = sum(int(item["converged"]) for item in selected)
+        occupied = np.flatnonzero(iteration_counts)
+        nonempty = [item for item in selected if int(item["rows"]) > 0]
+        return {
+            "scope": scope,
+            "pairwise_rows": rows,
+            "converged_rows": converged,
+            "nonconverged_rows": rows - converged,
+            "iterations_min": int(occupied[0]) if len(occupied) else 0,
+            "iterations_median": _fit_iteration_quantile(iteration_counts, 0.5),
+            "iterations_p95": _fit_iteration_quantile(iteration_counts, 0.95),
+            "iterations_max": int(occupied[-1]) if len(occupied) else 0,
+            "minimum_last_ll_gain": (
+                min(float(item["minimum_gain"]) for item in nonempty)
+                if nonempty
+                else 0.0
+            ),
+            "maximum_last_ll_gain": (
+                max(float(item["maximum_gain"]) for item in nonempty)
+                if nonempty
+                else 0.0
+            ),
+            "maximum_fixed_point_residual": max(
+                (float(item["maximum_fixed_point"]) for item in nonempty),
+                default=0.0,
+            ),
+            "maximum_kkt_residual": max(
+                (float(item["maximum_kkt"]) for item in nonempty),
+                default=0.0,
+            ),
+            "full_affine_rank_rows": sum(
+                int(item["full_rank"]) for item in selected
+            ),
+            "rank_deficient_rows": sum(
+                int(item["rank_deficient"]) for item in selected
+            ),
+            "rank_not_certified_underflow_rows": sum(
+                int(item["rank_underflow"]) for item in selected
+            ),
+        }
+
+    rows = [
+        summarize("all", core.BMRS),
+        *(summarize(provider, (provider,)) for provider in core.BMRS),
+    ]
+    return pd.DataFrame(rows, columns=reporting.FIT_DIAGNOSTIC_COLUMNS)
+
+
 def _validate_archived_report_derivations(  # noqa: PLR0913
     archive: tarfile.TarFile,
     records: Mapping[str, Mapping[str, Any]],
@@ -2945,9 +3103,9 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
     expected_summary_rows: Mapping[str, Mapping[str, int | float | str]],
     expected_overlap: pd.DataFrame,
     expected_top: pd.DataFrame,
+    expected_fit_diagnostics: pd.DataFrame,
     sample_counts: Mapping[str, int],
     raw_tasks: Mapping[tuple[str, str], Mapping[str, Any]],
-    cohort_diagnostics: Mapping[str, Mapping[str, Any]],
     calibration_table_name: str,
     high_burden_threshold: float,
 ) -> None:
@@ -3005,81 +3163,11 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
         msg = "Archived runtime summary differs from raw task manifests."
         raise ValueError(msg)
 
-    fit = frames["fit_diagnostics_summary.csv"]
-    if fit["scope"].astype(str).tolist() != ["all", *core.BMRS]:
-        msg = "Archived fit diagnostics have an invalid scope axis."
+    if payloads["fit_diagnostics_summary.csv"] != reporting._csv_bytes(  # noqa: SLF001
+        expected_fit_diagnostics,
+    ):
+        msg = "Archived fit diagnostics differ from inference recomputation."
         raise ValueError(msg)
-    expected_by_provider: dict[str, dict[str, int]] = {}
-    for provider in core.BMRS:
-        expected_by_provider[provider] = {
-            "pairwise_rows": sum(
-                int(raw_tasks[(cohort, provider)]["pairwise_rows"])
-                for cohort in TCGA_COHORTS
-            ),
-            "full_affine_rank_rows": sum(
-                int(cohort_diagnostics[cohort][provider]["full_affine_rank_count"])
-                for cohort in TCGA_COHORTS
-            ),
-            "rank_deficient_rows": sum(
-                int(cohort_diagnostics[cohort][provider]["rank_deficient_count"])
-                for cohort in TCGA_COHORTS
-            ),
-            "rank_not_certified_underflow_rows": sum(
-                int(
-                    cohort_diagnostics[cohort][provider][
-                        "rank_not_certified_underflow_count"
-                    ],
-                )
-                for cohort in TCGA_COHORTS
-            ),
-        }
-    for row in fit.to_dict(orient="records"):
-        scope = str(row["scope"])
-        providers = core.BMRS if scope == "all" else (scope,)
-        for column in (
-            "pairwise_rows",
-            "full_affine_rank_rows",
-            "rank_deficient_rows",
-            "rank_not_certified_underflow_rows",
-        ):
-            expected = sum(
-                expected_by_provider[provider][column] for provider in providers
-            )
-            if row[column] != expected:
-                msg = f"Archived fit diagnostics differ from receipts: {scope}/{column}"
-                raise ValueError(msg)
-        if (
-            row["converged_rows"] + row["nonconverged_rows"] != row["pairwise_rows"]
-            or row["full_affine_rank_rows"]
-            + row["rank_deficient_rows"]
-            + row["rank_not_certified_underflow_rows"]
-            != row["pairwise_rows"]
-        ):
-            msg = f"Archived fit diagnostic counts do not reconcile: {scope}"
-            raise ValueError(msg)
-        numeric = np.asarray(
-            [
-                row["iterations_min"],
-                row["iterations_median"],
-                row["iterations_p95"],
-                row["iterations_max"],
-                row["minimum_last_ll_gain"],
-                row["maximum_last_ll_gain"],
-                row["maximum_fixed_point_residual"],
-                row["maximum_kkt_residual"],
-            ],
-            dtype=np.float64,
-        )
-        if (
-            not np.isfinite(numeric).all()
-            or (numeric[:4] < 0).any()
-            or not np.all(np.diff(numeric[:4]) >= 0)
-            or numeric[4] < -1e-12
-            or numeric[5] < numeric[4]
-            or (numeric[6:] < 0).any()
-        ):
-            msg = f"Archived fit diagnostic values are invalid: {scope}"
-            raise ValueError(msg)
 
     figure_bins = frames["figure6_burden_bins.csv"]
     _validate_archived_figure6_bins(
@@ -3523,7 +3611,7 @@ def _verify_semantic_closure(
     expected_summary_rows: dict[str, Mapping[str, int | float | str]] = {}
     expected_overlap_rows: list[dict[str, int | float | str]] = []
     expected_top_frames: list[pd.DataFrame] = []
-    cohort_diagnostics: dict[str, Mapping[str, Any]] = {}
+    fit_diagnostic_accumulator = _new_fit_diagnostic_accumulator()
     for cohort in TCGA_COHORTS:
         cohort_manifest_name = (
             f"results/postprocess/{cohort}/{postprocess.COHORT_MANIFEST_NAME}"
@@ -3609,6 +3697,11 @@ def _verify_semantic_closure(
             cohort=cohort,
             features=contract_features[cohort],
         )
+        _accumulate_fit_diagnostics(
+            fit_diagnostic_accumulator,
+            frame,
+            cohort=cohort,
+        )
         if len(frame) != pair_count:
             msg = f"Archived inference row count differs from its receipt: {cohort}"
             raise ValueError(msg)
@@ -3665,7 +3758,6 @@ def _verify_semantic_closure(
                 primary_q=0.01,
             ),
         )
-        cohort_diagnostics[cohort] = cohort_manifest["diagnostics"]
         validated_pair_count += pair_count
         for provider_key in ("cbase", "dig", "mutsig"):
             if raw_tasks[(cohort, provider_key)].get("pairwise_rows") != pair_count:
@@ -4010,9 +4102,11 @@ def _verify_semantic_closure(
             columns=reporting.OVERLAP_COLUMNS,
         ),
         expected_top=pd.concat(expected_top_frames, ignore_index=True),
+        expected_fit_diagnostics=_fit_diagnostic_summary(
+            fit_diagnostic_accumulator,
+        ),
         sample_counts=contract_sample_counts,
         raw_tasks=raw_tasks,
-        cohort_diagnostics=cohort_diagnostics,
         calibration_table_name=calibration_table_name,
         high_burden_threshold=float(high_burden["threshold"]),
     )

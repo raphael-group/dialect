@@ -32,6 +32,7 @@ def _record(path: Path, *, relative_to: Path) -> dict[str, int | str]:
 
 def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None:
     expected = (
+        provenance.Path("analysis/build_tcga_revision_focused_document_manifest.py"),
         provenance.Path("analysis/build_tcga_revision_focused_release.py"),
         provenance.Path("analysis/calibrate_tcga_revision_focused.py"),
         provenance.Path("analysis/calibration_batch.py"),
