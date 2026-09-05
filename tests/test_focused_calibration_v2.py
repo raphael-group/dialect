@@ -52,6 +52,7 @@ def test_protocol_has_exact_primary_and_descriptive_cells() -> None:
     config = calibration._load_config()  # noqa: SLF001
     cells = calibration._protocol_cells(config)  # noqa: SLF001
 
+    assert config["seed"] == 20260903
     assert len(cells) == 42
     assert len({(cell.cohort, cell.provider) for cell in cells}) == 42
     primary_coordinates = [

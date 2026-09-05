@@ -202,6 +202,7 @@ def _load_config() -> dict[str, Any]:
     if (
         config.get("schema_version") != SCHEMA_VERSION
         or config.get("contract") != "focused-result-blind-null-calibration-v3"
+        or config.get("seed") != 20260903
         or primary.get("role") != PRIMARY_ROLE
         or primary.get("cohorts") != list(TCGA_COHORTS)
         or primary.get("providers") != ["mutsig"]

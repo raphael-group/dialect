@@ -188,9 +188,18 @@ def _load_rule(
         if gate_pass is True
         else rule_module.WITHHELD_STATUS
     )
+    expected_postprocess_sha256 = (
+        _sha256(postprocess_root / postprocess.ROOT_MANIFEST_NAME)
+        if gate_pass is True
+        else None
+    )
     if (
         rule.get("schema_version") != SCHEMA_VERSION
         or rule.get("contract") != rule_module.RULE_CONTRACT
+        or rule.get("analysis_config_sha256")
+        != _sha256(rule_module.CONFIG_PATH)
+        or rule.get("calibration_config_sha256")
+        != _sha256(calibration.CONFIG_PATH)
         or rule.get("scope")
         != "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
         or rule.get("primary_provider") != "mutsig"
@@ -212,7 +221,15 @@ def _load_rule(
         != "primary-provider-rho-sign-after-nondirectional-rejection"
         or rule.get("direction_unavailable")
         != "retain-nondirectional-rejection-exclude-from-me-co-lists"
+        or rule.get("provider_overlap")
+        != "descriptive-only-not-an-inferential-vote"
+        or rule.get("me_presentation")
+        != "primary-MutSig-with-CBaSE-continuity-comparison"
+        or rule.get("co_presentation")
+        != "primary-MutSig-with-CBaSE-and-DIG-sensitivity"
         or rule.get("thresholds_selected_from_observed_pairs") is not False
+        or rule.get("claim_scope")
+        != "finite-scenario-calibrated-nominal-inference"
         or rule.get("calibration_interpretation")
         != "finite-scenario-stress-not-formal-uniform-FDR-proof"
         or not isinstance(gate_pass, bool)
@@ -240,7 +257,7 @@ def _load_rule(
         or rule.get("calibration_summary_sha256")
         != _sha256(calibration_root / calibration.SUMMARY_NAME)
         or rule.get("postprocess_manifest_sha256")
-        != _sha256(postprocess_root / postprocess.ROOT_MANIFEST_NAME)
+        != expected_postprocess_sha256
     ):
         msg = "Frozen reporting rule is invalid or bound to different inputs."
         raise ValueError(msg)

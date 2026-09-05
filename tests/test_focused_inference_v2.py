@@ -176,6 +176,54 @@ def test_semantic_validator_recomputes_complete_family_q_values() -> None:
         postprocess.validate_inference_frame(frame, cohort="TEST")
 
 
+def test_focal_direction_comparison_requires_nondirectional_rejection() -> None:
+    frame = pd.DataFrame(
+        {
+            "gene_a": ["A_M", "C_M"],
+            "gene_b": ["B_M", "D_M"],
+            "mutsig_log_p_value": np.log([0.2, 0.0001]),
+            "mutsig_log_by_q_value": np.log([0.5, 0.001]),
+            "mutsig_log_bh_q_value": np.log([0.2, 0.0005]),
+            "mutsig_rho": [-0.5, 0.5],
+            "mutsig_direction": ["ME", "CO"],
+            "cbase_log_by_q_value": np.log([0.001, 0.001]),
+            "cbase_log_bh_q_value": np.log([0.001, 0.001]),
+            "cbase_direction": ["ME", "ME"],
+            "dig_log_by_q_value": np.log([0.001, 0.001]),
+            "dig_log_bh_q_value": np.log([0.001, 0.001]),
+            "dig_direction": ["ME", "CO"],
+        },
+    )
+
+    observed = diagnosis._focal_top_pairs(  # noqa: SLF001
+        frame,
+        cohort="TEST",
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
+        sensitivity_adjustment="benjamini-hochberg",
+        sensitivity_q=0.01,
+    ).set_index("gene_a")
+
+    # A_M has fitted rho signs, but MutSig did not reject dependence.  Those
+    # signs therefore cannot be promoted to concordant/discordant decisions.
+    assert not observed.loc[
+        "A_M",
+        "cbase_descriptive_primary_rule_crossing_direction_concordant",
+    ]
+    assert not observed.loc[
+        "A_M",
+        "dig_descriptive_primary_rule_crossing_direction_concordant",
+    ]
+    assert observed.loc[
+        "C_M",
+        "cbase_descriptive_primary_rule_crossing_direction_discordant",
+    ]
+    assert observed.loc[
+        "C_M",
+        "dig_descriptive_primary_rule_crossing_direction_concordant",
+    ]
+
+
 def test_raw_source_binding_rejects_derived_statistic_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

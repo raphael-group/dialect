@@ -173,6 +173,12 @@ def _focal_top_pairs(  # noqa: PLR0913
             ("primary", primary_adjustment, primary_q),
             ("sensitivity", sensitivity_adjustment, sensitivity_q),
         ):
+            mutsig_crossing = reporting._threshold_crossing(  # noqa: SLF001
+                result,
+                "mutsig",
+                adjustment,
+                threshold,
+            )
             crossing = reporting._threshold_crossing(  # noqa: SLF001
                 result,
                 provider,
@@ -183,11 +189,13 @@ def _focal_top_pairs(  # noqa: PLR0913
             result[prefix] = crossing
             result[f"{prefix}_direction_concordant"] = (
                 crossing
+                & mutsig_crossing
                 & mutsig_direction.isin(["ME", "CO"])
                 & provider_direction.eq(mutsig_direction)
             )
             result[f"{prefix}_direction_discordant"] = (
                 crossing
+                & mutsig_crossing
                 & mutsig_direction.isin(["ME", "CO"])
                 & provider_direction.isin(["ME", "CO"])
                 & provider_direction.ne(mutsig_direction)

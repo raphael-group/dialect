@@ -156,6 +156,15 @@ def freeze_rule(
             TCGA_COHORTS,
             run_root=run_root,
         )
+        postprocess_manifest_sha256: str | None = _sha256(
+            postprocess_root / postprocess.ROOT_MANIFEST_NAME,
+        )
+    else:
+        # A negative gate is a terminal scientific outcome, not permission to
+        # derive or even require association-level outputs.  Keep the withheld
+        # receipt independent of a postprocessing tree so the gate can stop the
+        # workflow exactly where intended.
+        postprocess_manifest_sha256 = None
     inference_status = REPORTABLE_STATUS if gate_pass else WITHHELD_STATUS
     rule = {
         "schema_version": SCHEMA_VERSION,
@@ -165,9 +174,7 @@ def freeze_rule(
         "calibration_summary_sha256": _sha256(
             calibration_root / calibration.SUMMARY_NAME,
         ),
-        "postprocess_manifest_sha256": _sha256(
-            postprocess_root / postprocess.ROOT_MANIFEST_NAME,
-        ),
+        "postprocess_manifest_sha256": postprocess_manifest_sha256,
         "scope": "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts",
         "test": candidates["test"],
         "effective_p_policy": summary["effective_p_policy"],

@@ -739,6 +739,17 @@ def test_reporting_rule_freezes_prespecified_candidates(
         == rule
     )
 
+    original_analysis_config_sha256 = rule["analysis_config_sha256"]
+    rule["analysis_config_sha256"] = "0" * 64
+    output.write_text(json.dumps(rule), encoding="utf-8")
+    with pytest.raises(ValueError, match="Frozen reporting rule"):
+        reporting._load_rule(  # noqa: SLF001
+            output,
+            calibration_root,
+            postprocess_root,
+        )
+
+    rule["analysis_config_sha256"] = original_analysis_config_sha256
     rule["direction"] = "rho-sign"
     output.write_text(json.dumps(rule), encoding="utf-8")
     with pytest.raises(ValueError, match="Frozen reporting rule"):
@@ -756,7 +767,6 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
     calibration_root = tmp_path / "calibration"
     postprocess_root = tmp_path / "postprocess"
     calibration_root.mkdir()
-    postprocess_root.mkdir()
     summary = {
         "overall_gate_pass": False,
         "reporting_rule_selected": False,
@@ -781,11 +791,6 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
         json.dumps(summary),
         encoding="utf-8",
     )
-    (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
-        "{}\n",
-        encoding="utf-8",
-    )
-
     def fail_if_association_accessed(*_args, **_kwargs):
         msg = "association table was accessed"
         raise AssertionError(msg)
@@ -821,6 +826,16 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
     rule = json.loads(output.read_text(encoding="utf-8"))
     assert rule["calibration_gate"]["overall_gate_pass"] is False
     assert rule["inference_status"] == reporting_rule.WITHHELD_STATUS
+    assert rule["postprocess_manifest_sha256"] is None
+    assert not postprocess_root.exists()
+    assert (
+        reporting._load_rule(  # noqa: SLF001
+            output,
+            calibration_root,
+            postprocess_root,
+        )
+        == rule
+    )
 
 
 @pytest.mark.parametrize(
