@@ -158,6 +158,8 @@ PROVIDER_COLORS: Final = {
 FIGURE6_SIZE_INCHES: Final = (7.5, 8.25)
 FIGURE6_PANEL_ORDER: Final = ("A", "B", "C", "D")
 PLOS_MINIMUM_FIGURE_FONT_SIZE_PT: Final = 8.0
+BURDEN_AXIS_TICKS: Final = (1, 10, 100, 1_000)
+BURDEN_AXIS_TICK_LABELS: Final = ("1", "10", "100", "1k")
 CO_CALL_COUNT_TICKS: Final = (0, 1, 10, 100, 1_000, 10_000, 100_000)
 ADJUSTMENT_COLUMNS: Final = {
     "benjamini-yekutieli": "by_q_value",
@@ -1434,6 +1436,10 @@ def _plot_burden_panel(ax: Axes, burden_bins: pd.DataFrame) -> None:
     )
     ax.set_xscale("log")
     ax.set_yscale("log")
+    # Plain labels keep every glyph at the configured 8-point size.  The
+    # default LogFormatterMathtext shrinks exponent glyphs below that minimum.
+    ax.set_xticks(BURDEN_AXIS_TICKS, BURDEN_AXIS_TICK_LABELS)
+    ax.set_yticks(BURDEN_AXIS_TICKS, BURDEN_AXIS_TICK_LABELS)
     ax.set_xlabel("Observed events per tumor (+1)")
     ax.set_ylabel("Model-expected selected events (+1)")
     ax.set_title("A  UCEC tumor burden", loc="left")
@@ -1720,7 +1726,7 @@ def _plot_figure6(  # noqa: PLR0913
     )
     figure = plt.figure(figsize=FIGURE6_SIZE_INCHES, constrained_layout=True)
     figure.get_layout_engine().set(
-        w_pad=0.03,
+        w_pad=0.04,
         h_pad=0.035,
         wspace=0.06,
         hspace=0.08,

@@ -311,6 +311,12 @@ def test_burden_panel_labels_fitted_model_expectation() -> None:
     try:
         reporting._plot_burden_panel(axis, burden)  # noqa: SLF001
         assert axis.get_ylabel() == "Model-expected selected events (+1)"
+        assert [tick.get_text() for tick in axis.get_xticklabels()] == list(
+            reporting.BURDEN_AXIS_TICK_LABELS,
+        )
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == list(
+            reporting.BURDEN_AXIS_TICK_LABELS,
+        )
     finally:
         reporting.plt.close(figure)
 
@@ -438,6 +444,8 @@ def test_figure6_layout_helpers_keep_clean_ticks_and_panel_order() -> None:
     assert reporting.FIGURE6_PANEL_ORDER == ("A", "B", "C", "D")
     assert reporting.FIGURE6_SIZE_INCHES == (7.5, 8.25)
     assert reporting.PLOS_MINIMUM_FIGURE_FONT_SIZE_PT == 8.0
+    assert reporting.BURDEN_AXIS_TICKS == (1, 10, 100, 1_000)
+    assert reporting.BURDEN_AXIS_TICK_LABELS == ("1", "10", "100", "1k")
     assert ordered["cohort"].tolist() == ["LOW", "TIE_A", "TIE_B", "HIGH"]
     assert reporting._co_call_count_ticks(123_071).tolist() == [  # noqa: SLF001
         0,
