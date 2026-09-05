@@ -114,6 +114,11 @@ _PDF_LIMIT_BYTES: Final = 128 * 1024 * 1024
 _PORTAL_TIFF_LIMIT_BYTES: Final = 10 * 1024 * 1024
 _PORTAL_TIFF_MAX_PIXELS: Final = 100_000_000
 _PORTAL_TIFF_MIN_DPI: Final = 300.0
+_PORTAL_TIFF_MAX_DPI: Final = 600.0
+_PORTAL_TIFF_MIN_WIDTH_INCHES: Final = 2.63
+_PORTAL_TIFF_MAX_WIDTH_INCHES: Final = 7.5
+_PORTAL_TIFF_MAX_HEIGHT_INCHES: Final = 8.75
+_PORTAL_TIFF_MEASUREMENT_TOL: Final = 1e-3
 _S1_TABLE_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PDF_TOOL_OUTPUT_LIMIT_BYTES: Final = 64 * 1024 * 1024
 _PDF_TOOL_TIMEOUT_SECONDS: Final = 60
@@ -303,27 +308,61 @@ def _validate_portal_tiff_bytes(content: bytes, *, name: str) -> None:
             with Image.open(BytesIO(content)) as image:
                 dpi = image.info.get("dpi")
                 width, height = image.size
+                valid_dpi = isinstance(dpi, tuple) and len(dpi) == 2
+                if valid_dpi:
+                    valid_dpi = all(
+                        isinstance(value, Real)
+                        and not isinstance(value, bool)
+                        and np.isfinite(float(value))
+                        and float(value) > 0
+                        for value in dpi
+                    )
+                x_dpi, y_dpi = (
+                    (float(dpi[0]), float(dpi[1]))
+                    if valid_dpi
+                    else (float("nan"), float("nan"))
+                )
+                width_inches = width / x_dpi
+                height_inches = height / y_dpi
                 if (
                     image.format != "TIFF"
-                    or image.mode != "RGB"
+                    or image.mode not in {"L", "RGB"}
                     or image.n_frames != 1
                     or width <= 0
                     or height <= 0
                     or width * height > _PORTAL_TIFF_MAX_PIXELS
                     or image.info.get("compression") != "tiff_lzw"
-                    or not isinstance(dpi, tuple)
-                    or len(dpi) != 2
-                    or any(
-                        not isinstance(value, Real)
-                        or isinstance(value, bool)
-                        or not np.isfinite(float(value))
-                        or float(value) < _PORTAL_TIFF_MIN_DPI
-                        for value in dpi
+                    or not valid_dpi
+                    or x_dpi < (
+                        _PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or y_dpi < (
+                        _PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or x_dpi > (
+                        _PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or y_dpi > (
+                        _PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or width_inches < (
+                        _PORTAL_TIFF_MIN_WIDTH_INCHES
+                        - _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or width_inches > (
+                        _PORTAL_TIFF_MAX_WIDTH_INCHES
+                        + _PORTAL_TIFF_MEASUREMENT_TOL
+                    )
+                    or height_inches > (
+                        _PORTAL_TIFF_MAX_HEIGHT_INCHES
+                        + _PORTAL_TIFF_MEASUREMENT_TOL
                     )
                 ):
                     msg = (
-                        "Portal figure must be one bounded, single-page RGB LZW "
-                        f"TIFF at >= {_PORTAL_TIFF_MIN_DPI:g} dpi: {name}"
+                        "Portal figure must be a complete single-page, flattened "
+                        "8-bit RGB/grayscale LZW TIFF: 300-600 dpi, width "
+                        "2.63-7.5 in, height <= 8.75 in, and size <= 10 MiB: "
+                        f"{name}"
                     )
                     raise ValueError(msg)
                 image.load()
@@ -862,7 +901,10 @@ def _readme(
         "included and hash-bound to the provider manifest. The bundle excludes raw "
         "MAFs, count matrices, sample axes and identifiers, sample-specific MutSig "
         "tensors, per-tumor source tables, and restricted MutSig source. Figure 6 "
-        "source data use fixed aggregate bins only.\n\n"
+        "source data use fixed aggregate bins only. Both portal TIFFs are fully "
+        "decoded and constrained to one flattened 8-bit RGB/grayscale LZW page, "
+        "300--600 dpi, 2.63--7.5 inches wide, no more than 8.75 inches high, and "
+        "no more than 10 MiB.\n\n"
         "CBaSE provider generation uses stochastic initialization upstream. Its "
         "included PMFs, provider-output hashes, and completed fit receipts are "
         "therefore authoritative; this verification bundle does not claim "

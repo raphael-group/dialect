@@ -35,11 +35,11 @@ _EXPECTED_DOCUMENTS = {
 
 def _portal_tiff() -> bytes:
     output = BytesIO()
-    Image.new("RGB", (2, 2), "white").save(
+    Image.new("RGB", (789, 300), "white").save(
         output,
         format="TIFF",
         compression="tiff_lzw",
-        dpi=(600, 600),
+        dpi=(300, 300),
     )
     return output.getvalue()
 

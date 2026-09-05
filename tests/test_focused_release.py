@@ -62,11 +62,11 @@ def _record(member: release.Member, path: str) -> dict[str, int | str]:
 @lru_cache(maxsize=1)
 def _portal_tiff() -> bytes:
     output = BytesIO()
-    Image.new("RGB", (2, 2), "white").save(
+    Image.new("RGB", (789, 300), "white").save(
         output,
         format="TIFF",
         compression="tiff_lzw",
-        dpi=(600, 600),
+        dpi=(300, 300),
     )
     return output.getvalue()
 
@@ -1306,26 +1306,75 @@ def test_archive_rejects_rehashed_invalid_portal_artifacts(
         release.verify_archive(archive)
 
 
-def test_portal_tiff_validator_rejects_header_only_and_nonportal_encodings(
-) -> None:
+def _encoded_tiff(
+    *,
+    mode: str = "RGB",
+    size: tuple[int, int] = (789, 300),
+    dpi: tuple[int, int] = (300, 300),
+    compression: str = "tiff_lzw",
+    append: bool = False,
+) -> bytes:
+    output = BytesIO()
+    image = Image.new(mode, size, "white")
+    if append:
+        image.save(
+            output,
+            format="TIFF",
+            compression=compression,
+            dpi=dpi,
+            save_all=True,
+            append_images=[image.copy()],
+        )
+    else:
+        image.save(
+            output,
+            format="TIFF",
+            compression=compression,
+            dpi=dpi,
+        )
+    return output.getvalue()
+
+
+def test_portal_tiff_validator_accepts_full_envelope_boundaries() -> None:
     release._validate_portal_tiff_bytes(_portal_tiff(), name="Fig1.tif")  # noqa: SLF001
+    release._validate_portal_tiff_bytes(  # noqa: SLF001
+        _encoded_tiff(mode="L", size=(4_500, 600), dpi=(600, 600)),
+        name="Fig2.tif",
+    )
+    release._validate_portal_tiff_bytes(  # noqa: SLF001
+        _encoded_tiff(size=(789, 2_625), dpi=(300, 300)),
+        name="Fig2.tif",
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _encoded_tiff(dpi=(299, 300)),
+        _encoded_tiff(dpi=(601, 600), size=(1_581, 300)),
+        _encoded_tiff(size=(788, 300)),
+        _encoded_tiff(size=(2_251, 300)),
+        _encoded_tiff(size=(789, 2_626)),
+        _encoded_tiff(mode="RGBA"),
+        _encoded_tiff(compression="raw"),
+        _encoded_tiff(append=True),
+    ],
+)
+def test_portal_tiff_validator_rejects_nonportal_envelope(content: bytes) -> None:
+    with pytest.raises(ValueError, match="flattened 8-bit RGB/grayscale LZW TIFF"):
+        release._validate_portal_tiff_bytes(content, name="Fig2.tif")  # noqa: SLF001
+
+
+def test_portal_tiff_validator_rejects_malformed_or_truncated_payloads() -> None:
 
     with pytest.raises(ValueError, match="decodable TIFF"):
         release._validate_portal_tiff_bytes(  # noqa: SLF001
             b"II*\x00\x08\x00\x00\x00",
             name="Fig1.tif",
         )
-
-    output = BytesIO()
-    Image.new("L", (2, 2), "white").save(
-        output,
-        format="TIFF",
-        compression="tiff_lzw",
-        dpi=(72, 72),
-    )
-    with pytest.raises(ValueError, match="single-page RGB LZW TIFF"):
+    with pytest.raises(ValueError, match="decodable TIFF"):
         release._validate_portal_tiff_bytes(  # noqa: SLF001
-            output.getvalue(),
+            _portal_tiff()[:-16],
             name="Fig2.tif",
         )
 
@@ -1764,6 +1813,10 @@ def test_release_readme_uses_dynamic_rule_and_two_commits() -> None:
     assert "exact cohort-level CBaSE and DIG PMFs" in text
     assert "hash-bound to the provider manifest" in text
     assert "fixed aggregate bins only" in text
+    assert "300--600 dpi" in text
+    assert "2.63--7.5 inches wide" in text
+    assert "no more than 8.75 inches high" in text
+    assert "no more than 10 MiB" in text
     assert "honest post-run source" in text
     assert "not a task-level attestation" in text
     assert "q <= 0.10" not in text
