@@ -37,6 +37,7 @@ import pandas as pd
 from PIL import Image, UnidentifiedImageError
 
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
 from analysis import focused_revision_provenance as provenance
 from analysis import freeze_tcga_revision_reporting_rule as rule_module
 from analysis import postprocess_tcga_revision_focused as postprocess
@@ -50,8 +51,8 @@ if TYPE_CHECKING:
     from typing import BinaryIO
 
 SCHEMA_VERSION: Final = "1.0.0"
-RELEASE_CONTRACT: Final = "focused-dialect-submission-release-v2"
-RECEIPT_CONTRACT: Final = "focused-dialect-submission-release-receipt-v2"
+RELEASE_CONTRACT: Final = "focused-dialect-submission-release-v3"
+RECEIPT_CONTRACT: Final = "focused-dialect-submission-release-receipt-v3"
 SOURCE_RECORD_CONTRACT: Final = "focused-fit-release-source-boundary-v1"
 MANIFEST_NAME: Final = "release_manifest.json"
 SOURCE_RECORD_NAME: Final = "provenance/source_boundary.json"
@@ -59,10 +60,19 @@ FIT_ATTESTATION_MEMBER: Final = "provenance/fit_execution_attestation.json"
 DOCUMENT_MANIFEST_NAME: Final = "document_manifest.json"
 DOCUMENT_CONTRACT: Final = "focused-submission-document-set-v2"
 README_NAME: Final = "README.md"
-CALIBRATION_SUMMARY_MEMBER: Final = (
-    "results/calibration/calibration_summary.json"
+CALIBRATION_SUMMARY_MEMBER: Final = "results/calibration/calibration_summary.json"
+CONFIRMATION_CONFIG_MEMBER: Final = (
+    "provenance/config/tcga_revision_calibration_confirmation_config.json"
+)
+CONFIRMATION_RUN_MEMBER: Final = "results/calibration_confirmation/run_manifest.json"
+CONFIRMATION_SUMMARY_MEMBER: Final = (
+    "results/calibration_confirmation/confirmation_summary.json"
+)
+CONFIRMATION_FINAL_TABLE_MEMBER: Final = (
+    "results/calibration_confirmation/confirmation_final_endpoints.csv"
 )
 REPORTING_RULE_MEMBER: Final = "results/reporting_rule.json"
+EXPECTED_PAYLOAD_MEMBER_COUNT: Final = 448
 REQUIRED_DOCUMENTS: Final = {
     "Fig1.tif",
     "Fig2.tif",
@@ -333,30 +343,16 @@ def _validate_portal_tiff_bytes(content: bytes, *, name: str) -> None:
                     or width * height > _PORTAL_TIFF_MAX_PIXELS
                     or image.info.get("compression") != "tiff_lzw"
                     or not valid_dpi
-                    or x_dpi < (
-                        _PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or y_dpi < (
-                        _PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or x_dpi > (
-                        _PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or y_dpi > (
-                        _PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or width_inches < (
-                        _PORTAL_TIFF_MIN_WIDTH_INCHES
-                        - _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or width_inches > (
-                        _PORTAL_TIFF_MAX_WIDTH_INCHES
-                        + _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
-                    or height_inches > (
-                        _PORTAL_TIFF_MAX_HEIGHT_INCHES
-                        + _PORTAL_TIFF_MEASUREMENT_TOL
-                    )
+                    or x_dpi < (_PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or y_dpi < (_PORTAL_TIFF_MIN_DPI - _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or x_dpi > (_PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or y_dpi > (_PORTAL_TIFF_MAX_DPI + _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or width_inches
+                    < (_PORTAL_TIFF_MIN_WIDTH_INCHES - _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or width_inches
+                    > (_PORTAL_TIFF_MAX_WIDTH_INCHES + _PORTAL_TIFF_MEASUREMENT_TOL)
+                    or height_inches
+                    > (_PORTAL_TIFF_MAX_HEIGHT_INCHES + _PORTAL_TIFF_MEASUREMENT_TOL)
                 ):
                     msg = (
                         "Portal figure must be a complete single-page, flattened "
@@ -558,6 +554,7 @@ def _preflight_upstream_json(  # noqa: PLR0913
     run_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     report_root: Path,
     rule_path: Path,
     fit_attestation_path: Path,
@@ -566,10 +563,20 @@ def _preflight_upstream_json(  # noqa: PLR0913
     summary = _load_strict_json_path(
         calibration_root / calibration.SUMMARY_NAME,
     )
-    if not rule_module.calibration_gate_pass(summary):
+    if rule_module.calibration_gate_pass(summary) is not False:
+        msg = (
+            "The archived workflow must preserve the failed stage-one "
+            "calibration decision."
+        )
+        raise ValueError(msg)
+
+    confirmation_summary = _load_strict_json_path(
+        confirmation_root / confirmation.SUMMARY_NAME,
+    )
+    if not rule_module.calibration_gate_pass(confirmation_summary):
         msg = (
             "Association-level release validation is withheld: "
-            "calibration gate failed."
+            "calibration confirmation failed."
         )
         raise RuntimeError(msg)
 
@@ -589,6 +596,7 @@ def _preflight_upstream_json(  # noqa: PLR0913
     paths = {
         preparation.CONFIG_PATH,
         calibration.CONFIG_PATH,
+        confirmation.CONFIG_PATH,
         rule_path,
         fit_attestation_path,
     }
@@ -598,6 +606,7 @@ def _preflight_upstream_json(  # noqa: PLR0913
         run_root,
         postprocess_root,
         calibration_root,
+        confirmation_root,
         report_root,
     ):
         paths.update(root.rglob("*.json"))
@@ -613,6 +622,7 @@ def _validate_upstream(  # noqa: PLR0913
     run_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     report_root: Path,
     rule_path: Path,
     fit_attestation_path: Path,
@@ -620,23 +630,25 @@ def _validate_upstream(  # noqa: PLR0913
     release_commit: str,
     runtime_executable: Path,
 ) -> dict[str, Any]:
+    reporting._require_reportable_rule(  # noqa: SLF001
+        calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
+        postprocess_root=postprocess_root,
+        rule_path=rule_path,
+        run_root=run_root,
+        provider_root=provider_root,
+        action="release validation",
+    )
     _preflight_upstream_json(
         input_root=input_root,
         provider_root=provider_root,
         run_root=run_root,
         postprocess_root=postprocess_root,
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         report_root=report_root,
         rule_path=rule_path,
         fit_attestation_path=fit_attestation_path,
-    )
-    reporting._require_reportable_rule(  # noqa: SLF001
-        calibration_root=calibration_root,
-        postprocess_root=postprocess_root,
-        rule_path=rule_path,
-        run_root=run_root,
-        provider_root=provider_root,
-        action="release validation",
     )
     attestation = provenance.validate_fit_attestation(
         fit_attestation_path,
@@ -665,6 +677,7 @@ def _validate_upstream(  # noqa: PLR0913
             validate_rule,
             rule_path,
             calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
             postprocess_root=postprocess_root,
             run_root=run_root,
             provider_root=provider_root,
@@ -680,6 +693,7 @@ def _validate_upstream(  # noqa: PLR0913
         input_root=input_root,
         postprocess_root=postprocess_root,
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         rule_path=rule_path,
         reporting_rule=rule_path,
         fit_attestation_path=fit_attestation_path,
@@ -706,12 +720,14 @@ def _result_members(  # noqa: PLR0913
     run_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     report_root: Path,
     rule_path: Path,
     fit_attestation_path: Path,
 ) -> list[Member]:
     reporting._require_reportable_rule(  # noqa: SLF001
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         rule_path=rule_path,
         run_root=run_root,
@@ -727,6 +743,7 @@ def _result_members(  # noqa: PLR0913
             "provenance/config/tcga_revision_calibration_config.json",
             calibration.CONFIG_PATH,
         ),
+        _file_member(CONFIRMATION_CONFIG_MEMBER, confirmation.CONFIG_PATH),
         _file_member(
             "provenance/input/input_manifest.json",
             input_root / "input_manifest.json",
@@ -759,6 +776,18 @@ def _result_members(  # noqa: PLR0913
         _file_member(
             "results/calibration/calibration_cells.csv",
             calibration_root / calibration.SUMMARY_TABLE_NAME,
+        ),
+        _file_member(
+            CONFIRMATION_RUN_MEMBER,
+            confirmation_root / confirmation.RUN_MANIFEST_NAME,
+        ),
+        _file_member(
+            CONFIRMATION_SUMMARY_MEMBER,
+            confirmation_root / confirmation.SUMMARY_NAME,
+        ),
+        _file_member(
+            CONFIRMATION_FINAL_TABLE_MEMBER,
+            confirmation_root / confirmation.FINAL_TABLE_NAME,
         ),
         _file_member("results/reporting_rule.json", rule_path),
     ]
@@ -806,6 +835,23 @@ def _result_members(  # noqa: PLR0913
                 task_root / name,
             )
             for name in (calibration.TASK_DATA_NAME, calibration.TASK_MANIFEST_NAME)
+        )
+    confirmation_run = json.loads(
+        (confirmation_root / confirmation.RUN_MANIFEST_NAME).read_text(
+            encoding="utf-8",
+        ),
+    )
+    for endpoint in confirmation._manifest_endpoints(confirmation_run):  # noqa: SLF001
+        task_root = confirmation_root / "tasks" / endpoint.endpoint_id
+        members.extend(
+            _file_member(
+                (
+                    "results/calibration_confirmation/tasks/"
+                    f"{endpoint.endpoint_id}/{name}"
+                ),
+                task_root / name,
+            )
+            for name in (confirmation.TASK_DATA_NAME, confirmation.TASK_MANIFEST_NAME)
         )
     return members
 
@@ -896,6 +942,12 @@ def _readme(
         "The release manifest hashes every member and the verifier checks the semantic "
         "receipt chain from input and provider manifests through raw task receipts, "
         "postprocessing, calibration, the frozen rule, reporting, and documents. "
+        "The original 10,000-replicate stage-one calibration summary is preserved "
+        "with its failed decision. The bundle separately records the prespecified "
+        "two-stage confirmation: stage one is recomputed at 0.025 familywise error, "
+        "and only its selected endpoint is tested on 100,000 fresh replicates at "
+        "the remaining 0.025. Stage-one and confirmation counts are never pooled, "
+        "and no additional confirmation stage is permitted. "
         "Public cohort contracts preserve scientific hashes while removing host paths. "
         "The exact cohort-level CBaSE and DIG PMFs and their stage receipts are "
         "included and hash-bound to the provider manifest. The bundle excludes raw "
@@ -1017,9 +1069,8 @@ def _hash_stream(
             "",
             unicodedata.normalize("NFKC", value),
         )
-        if (
-            _contains_sample_barcode_text(window)
-            or _contains_sample_barcode_text(compact_window)
+        if _contains_sample_barcode_text(window) or _contains_sample_barcode_text(
+            compact_window,
         ):
             msg = f"Release member exposes a TCGA sample barcode: {public_name}"
             raise ValueError(msg)
@@ -1049,8 +1100,7 @@ def _contains_forbidden_text_character(value: str) -> bool:
     if _FORBIDDEN_TEXT_CONTROL.search(value) is not None:
         return True
     return any(
-        character not in "\t\n\r"
-        and unicodedata.category(character).startswith("C")
+        character not in "\t\n\r" and unicodedata.category(character).startswith("C")
         for character in value
     )
 
@@ -1095,8 +1145,7 @@ def _contains_sample_barcode_text(value: str) -> bool:
         projections.append(normalized)
     return any(
         _TCGA_SAMPLE_BARCODE_TEXT.search(projection) is not None
-        or _TCGA_SAMPLE_BARCODE_TEXT.search(re.sub(r"\s+", "", projection))
-        is not None
+        or _TCGA_SAMPLE_BARCODE_TEXT.search(re.sub(r"\s+", "", projection)) is not None
         for projection in projections
     )
 
@@ -1582,24 +1631,18 @@ def _scan_pdf_privacy(content: bytes, *, name: str) -> None:
         )
 
 
-
-
 def _contains_sample_barcode(value: object) -> bool:
     """Return whether a decoded JSON value contains a TCGA sample barcode."""
     if isinstance(value, dict):
         return any(
-            _contains_sample_barcode(key)
-            or _contains_sample_barcode(child)
+            _contains_sample_barcode(key) or _contains_sample_barcode(child)
             for key, child in value.items()
         )
     if isinstance(value, list):
         return any(_contains_sample_barcode(child) for child in value)
-    return (
-        isinstance(value, str)
-        and (
-            _contains_forbidden_text_character(value)
-            or _contains_sample_barcode_text(value)
-        )
+    return isinstance(value, str) and (
+        _contains_forbidden_text_character(value)
+        or _contains_sample_barcode_text(value)
     )
 
 
@@ -1750,8 +1793,28 @@ def _require_embedded_reportable_gate(
     if not isinstance(summary_gate, bool):
         msg = "Archived calibration summary lacks an exact boolean gate."
         raise TypeError(msg)
-    if not summary_gate:
-        msg = "Association-level archive verification is withheld: gate failed."
+    if summary_gate:
+        msg = "Archived stage-one calibration must preserve its failed decision."
+        raise ValueError(msg)
+
+    confirmation_summary = _verified_json_member(
+        archive,
+        CONFIRMATION_SUMMARY_MEMBER,
+        records,
+    )
+    confirmation_gate = confirmation_summary.get("overall_gate_pass")
+    composite_gate = confirmation_summary.get("composite_overall_gate_pass")
+    if not isinstance(confirmation_gate, bool) or not isinstance(
+        composite_gate,
+        bool,
+    ):
+        msg = "Archived confirmation summary lacks an exact boolean gate."
+        raise TypeError(msg)
+    if not confirmation_gate or not composite_gate:
+        msg = (
+            "Association-level archive verification is withheld: "
+            "confirmation gate failed."
+        )
         raise RuntimeError(msg)
 
     rule = _verified_json_member(archive, REPORTING_RULE_MEMBER, records)
@@ -1770,19 +1833,15 @@ def _require_embedded_reportable_gate(
         msg = "Association-level archive verification requires a reportable rule."
         raise RuntimeError(msg)
 
-    calibration_binding = rule.get("calibration_summary")
-    if isinstance(calibration_binding, dict):
-        _require_record(
-            calibration_binding,
-            records,
-            CALIBRATION_SUMMARY_MEMBER,
-            label="gate rule to calibration",
-        )
-    elif (
+    if (
         rule.get("calibration_summary_sha256")
         != records[CALIBRATION_SUMMARY_MEMBER].get("sha256")
+        or rule.get("calibration_confirmation_summary_sha256")
+        != records[CONFIRMATION_SUMMARY_MEMBER].get("sha256")
+        or rule.get("calibration_confirmation_final_table_sha256")
+        != records[CONFIRMATION_FINAL_TABLE_MEMBER].get("sha256")
     ):
-        msg = "Archived reporting gate is not bound to calibration."
+        msg = "Archived reporting gate is not bound to both calibration stages."
         raise ValueError(msg)
 
 
@@ -1827,9 +1886,7 @@ def _calibration_arrays(
         "scalar_fallback",
         "sentinel_pairs",
     )
-    expected_members = tuple(
-        f"{array_name}.npy" for array_name in expected_array_names
-    )
+    expected_members = tuple(f"{array_name}.npy" for array_name in expected_array_names)
     expected_member_set = {
         "marginal_lrt.npy",
         "marginal_reportable.npy",
@@ -1868,6 +1925,51 @@ def _calibration_arrays(
     np.savez_compressed(canonical, **arrays)
     if canonical.getvalue() != content:
         msg = f"Archived calibration NPZ is not canonical: {name}"
+        raise ValueError(msg)
+    return arrays
+
+
+def _confirmation_arrays(
+    content: bytes,
+    *,
+    name: str,
+) -> dict[str, np.ndarray]:
+    """Load one canonical bounded confirmation NPZ without object arrays."""
+    expected_names = (
+        "likelihood_ratio",
+        "reportable",
+        "scalar_fallback",
+        "sentinel_pair",
+    )
+    expected_members = tuple(f"{array_name}.npy" for array_name in expected_names)
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as bundle:
+            infos = bundle.infolist()
+    except (OSError, zipfile.BadZipFile) as error:
+        msg = f"Archived confirmation NPZ cannot be decoded: {name}"
+        raise ValueError(msg) from error
+    if (
+        tuple(info.filename for info in infos) != expected_members
+        or any(
+            info.is_dir()
+            or info.flag_bits & 0x1
+            or info.file_size > _CALIBRATION_ARRAY_LIMIT_BYTES
+            for info in infos
+        )
+        or sum(info.file_size for info in infos) > _CALIBRATION_ARRAY_LIMIT_BYTES
+    ):
+        msg = f"Archived confirmation NPZ has an unsafe inventory: {name}"
+        raise ValueError(msg)
+    try:
+        with np.load(BytesIO(content), allow_pickle=False) as bundle:
+            arrays = {name: bundle[name].copy() for name in expected_names}
+    except (OSError, ValueError) as error:
+        msg = f"Archived confirmation NPZ cannot be decoded: {name}"
+        raise ValueError(msg) from error
+    canonical = BytesIO()
+    np.savez_compressed(canonical, **arrays)
+    if canonical.getvalue() != content:
+        msg = f"Archived confirmation NPZ is not canonical: {name}"
         raise ValueError(msg)
     return arrays
 
@@ -1928,7 +2030,7 @@ def _public_calibration_contract(
 def _recompute_archived_calibration_gate(
     archive: tarfile.TarFile,
     records: Mapping[str, Mapping[str, Any]],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], pd.DataFrame]:
     """Recompute every calibration endpoint before association data are opened."""
     config_name = "provenance/config/tcga_revision_calibration_config.json"
     config_bytes = _verified_member_bytes(
@@ -2262,19 +2364,491 @@ def _recompute_archived_calibration_gate(
     if summary != expected_summary:
         msg = "Archived calibration summary differs from exact NPZ recomputation."
         raise ValueError(msg)
+    if (
+        expected_summary["overall_gate_pass"] is not False
+        or expected_summary["primary_gate_endpoint_count"] != 2_048
+        or expected_summary["primary_gate_passed_endpoint_count"] != 2_047
+    ):
+        msg = "Archived stage-one calibration is not the preserved failed receipt."
+        raise ValueError(msg)
+    return expected_summary, frame
+
+
+def _recompute_archived_confirmation_gate(
+    archive: tarfile.TarFile,
+    records: Mapping[str, Mapping[str, Any]],
+    *,
+    stage1_summary: Mapping[str, Any],
+    stage1_frame: pd.DataFrame,
+) -> dict[str, Any]:
+    """Recompute the independent two-stage decision before associations open."""
+    config_bytes = _verified_member_bytes(
+        archive,
+        CONFIRMATION_CONFIG_MEMBER,
+        records,
+        limit=_JSON_LIMIT_BYTES,
+    )
+    if config_bytes != confirmation.CONFIG_PATH.read_bytes():
+        msg = "Archived confirmation configuration differs from the verifier."
+        raise ValueError(msg)
+    config = confirmation._load_config()  # noqa: SLF001
+    config_sha256 = hashlib.sha256(config_bytes).hexdigest()
+    stage1_config_name = "provenance/config/tcga_revision_calibration_config.json"
+    stage1_run_name = "results/calibration/run_manifest.json"
+    stage1_table_name = "results/calibration/calibration_cells.csv"
+    completion_name = "provenance/run/completion_manifest.json"
+    provider_name = "provenance/provider/provider_manifest.json"
+    source_records = {
+        "calibration_config": _archive_record(
+            records,
+            stage1_config_name,
+            path="analysis/tcga_revision_calibration_config.json",
+        ),
+        "calibration_run_manifest": _archive_record(
+            records,
+            stage1_run_name,
+            path=calibration.RUN_MANIFEST_NAME,
+        ),
+        "calibration_table": _archive_record(
+            records,
+            stage1_table_name,
+            path=calibration.SUMMARY_TABLE_NAME,
+        ),
+        "calibration_summary": _archive_record(
+            records,
+            CALIBRATION_SUMMARY_MEMBER,
+            path=calibration.SUMMARY_NAME,
+        ),
+        "production_completion": _archive_record(
+            records,
+            completion_name,
+            path="completion_manifest.json",
+        ),
+        "provider_manifest": _archive_record(
+            records,
+            provider_name,
+            path="provider_manifest.json",
+        ),
+    }
+    stage1_config = calibration._load_config()  # noqa: SLF001
+    gate_rows = calibration._validated_gate_rows(  # noqa: SLF001
+        stage1_frame,
+        stage1_config,
+    ).copy()
+    stage1 = config["two_stage_gate"]["stage1"]
+    endpoint_count = int(stage1["endpoint_count"])
+    endpoint_error = float(stage1["familywise_error"]) / endpoint_count
+    base_rows: list[dict[str, Any]] = []
+    for source_row in gate_rows.to_dict(orient="records"):
+        endpoint = confirmation._endpoint_from_row(source_row)  # noqa: SLF001
+        upper = calibration._clopper_pearson_upper_bound(  # noqa: SLF001
+            successes=int(source_row["events"]),
+            trials=int(source_row["trials"]),
+            endpoint_error=endpoint_error,
+        )
+        acceptance = float(
+            config["two_stage_gate"]["acceptance_upper_bounds"][
+                f"{endpoint.threshold:.2f}"
+            ],
+        )
+        passed = upper <= acceptance
+        base_rows.append(
+            {
+                "endpoint_id": endpoint.endpoint_id,
+                "cohort": endpoint.cohort,
+                "provider": endpoint.provider,
+                "sentinel_pair_index": endpoint.sentinel_pair_index,
+                "threshold": endpoint.threshold,
+                "acceptance_upper_bound": acceptance,
+                "stage1_events": int(source_row["events"]),
+                "stage1_trials": int(source_row["trials"]),
+                "stage1_rate": int(source_row["events"]) / int(source_row["trials"]),
+                "stage1_reportable_trials": int(source_row["reportable_trials"]),
+                "stage1_nonreportable_trials": int(
+                    source_row["nonreportable_trials"],
+                ),
+                "stage1_familywise_error": float(stage1["familywise_error"]),
+                "stage1_endpoint_count": endpoint_count,
+                "stage1_endpoint_error": endpoint_error,
+                "stage1_clopper_pearson_upper_bound": upper,
+                "stage1_pass": (
+                    confirmation.ENDPOINT_ACCEPTED
+                    if passed
+                    else confirmation.ENDPOINT_REJECTED
+                ),
+                "selected_for_stage2": not passed,
+            },
+        )
+    base_frame = pd.DataFrame(base_rows)
+    selected = confirmation._selected_endpoints(base_frame)  # noqa: SLF001
+    if (
+        stage1_summary.get("overall_gate_pass") is not False
+        or len(base_frame) != endpoint_count
+        or len(selected) != 1
+    ):
+        msg = "Archived confirmation source does not reproduce stage-one selection."
+        raise ValueError(msg)
+
+    run = _verified_json_member(archive, CONFIRMATION_RUN_MEMBER, records)
+    expected_run = {
+        "schema_version": confirmation.SCHEMA_VERSION,
+        "contract": confirmation.RUN_CONTRACT,
+        "config": _archive_record(
+            records,
+            CONFIRMATION_CONFIG_MEMBER,
+            path="analysis/tcga_revision_calibration_confirmation_config.json",
+        ),
+        "source_records": source_records,
+        "source_calibration_overall_gate_pass": False,
+        "stage1": {
+            "familywise_error": stage1["familywise_error"],
+            "endpoint_count": stage1["endpoint_count"],
+            "endpoint_error": endpoint_error,
+            "selection_rule": stage1["selection_rule"],
+            "selected_endpoint_count": len(selected),
+            "selected_endpoints": [
+                confirmation._endpoint_payload(endpoint)  # noqa: SLF001
+                for endpoint in selected
+            ],
+        },
+        "stage2": dict(config["two_stage_gate"]["stage2"]),
+        "resource_contract": dict(config["resources"]),
+        "runtime_resource_observation": confirmation._resource_observation(  # noqa: SLF001
+            config,
+        ),
+        "thread_environment": dict(calibration.THREAD_ENV),
+        "result_blindness": confirmation._result_blindness_receipt(),  # noqa: SLF001
+    }
+    if run != expected_run:
+        msg = "Archived confirmation run manifest differs from its protocol."
+        raise ValueError(msg)
+    run_sha256 = str(records[CONFIRMATION_RUN_MEMBER]["sha256"])
+    analysis_config_sha256 = str(
+        records["provenance/config/tcga_revision_config.json"]["sha256"],
+    )
+    contract_axes = {
+        cohort: _public_calibration_contract(
+            archive,
+            records,
+            cohort=cohort,
+            analysis_config_sha256=analysis_config_sha256,
+        )
+        for cohort in TCGA_COHORTS
+    }
+    stage2 = config["two_stage_gate"]["stage2"]
+    simulation = config["simulation"]
+    stage2_count = len(selected)
+    stage2_endpoint_error = float(stage2["familywise_error"]) / stage2_count
+    stage2_by_id: dict[str, dict[str, Any]] = {}
+    task_records: list[dict[str, Any]] = []
+    for endpoint in selected:
+        task_root = f"results/calibration_confirmation/tasks/{endpoint.endpoint_id}"
+        task_name = f"{task_root}/{confirmation.TASK_MANIFEST_NAME}"
+        data_name = f"{task_root}/{confirmation.TASK_DATA_NAME}"
+        task = _verified_json_member(archive, task_name, records)
+        arrays = _confirmation_arrays(
+            _verified_member_bytes(
+                archive,
+                data_name,
+                records,
+                limit=_CALIBRATION_ARRAY_LIMIT_BYTES,
+            ),
+            name=data_name,
+        )
+        features, sample_count = contract_axes[endpoint.cohort]
+        sentinel_pairs = calibration._sentinel_pairs(  # noqa: SLF001
+            features,
+            int(config["source_calibration"]["sentinel_pair_count"]),
+        )
+        expected_pair = sentinel_pairs[endpoint.sentinel_pair_index]
+        likelihood_ratio = arrays.get("likelihood_ratio")
+        reportable = arrays.get("reportable")
+        fallback = arrays.get("scalar_fallback")
+        sentinel_pair = arrays.get("sentinel_pair")
+        replicates = int(stage2["replicates_per_selected_endpoint"])
+        if (
+            not isinstance(likelihood_ratio, np.ndarray)
+            or likelihood_ratio.dtype != np.dtype(np.float64)
+            or likelihood_ratio.shape != (replicates,)
+            or not np.isfinite(likelihood_ratio).all()
+            or (likelihood_ratio < 0).any()
+            or not isinstance(reportable, np.ndarray)
+            or reportable.dtype != np.dtype(bool)
+            or reportable.shape != (replicates,)
+            or not isinstance(fallback, np.ndarray)
+            or fallback.dtype != np.dtype(bool)
+            or fallback.shape != (replicates,)
+            or not isinstance(sentinel_pair, np.ndarray)
+            or sentinel_pair.dtype != np.dtype(np.int32)
+            or not np.array_equal(sentinel_pair, expected_pair)
+        ):
+            msg = f"Archived confirmation arrays are invalid: {endpoint.endpoint_id}"
+            raise ValueError(msg)
+        raw_task_name = (
+            f"provenance/run/tasks/{endpoint.cohort}/{endpoint.provider}/"
+            "task_manifest.json"
+        )
+        raw_task = _verified_json_member(archive, raw_task_name, records)
+        raw_outputs = raw_task.get("outputs", {})
+        single = (
+            raw_outputs.get("single_gene_results.csv")
+            if isinstance(raw_outputs, dict)
+            else None
+        )
+        if not isinstance(single, dict):
+            msg = f"Confirmation source marginal is invalid: {endpoint.endpoint_id}"
+            raise TypeError(msg)
+        source_task_manifest = _archive_record(
+            records,
+            raw_task_name,
+            path=f"tasks/{endpoint.cohort}/{endpoint.provider}/task_manifest.json",
+        )
+        single_gene_input = {
+            "path": (
+                f"tasks/{endpoint.cohort}/{endpoint.provider}/single_gene_results.csv"
+            ),
+            "bytes": single.get("bytes"),
+            "sha256": single.get("sha256"),
+        }
+        endpoint_seed = confirmation._endpoint_seed(  # noqa: SLF001
+            int(config["seed"]),
+            endpoint,
+        )
+        fit_kernel = task.get("fit_kernel")
+        fallback_count = int(fallback.sum())
+        expected_task = {
+            "schema_version": confirmation.SCHEMA_VERSION,
+            "contract": confirmation.TASK_CONTRACT,
+            "endpoint": confirmation._endpoint_payload(endpoint),  # noqa: SLF001
+            "config_sha256": config_sha256,
+            "run_manifest_sha256": run_sha256,
+            "seed": endpoint_seed,
+            "replicates": replicates,
+            "replicate_rng": simulation["replicate_rng"],
+            "replicate_shards": simulation["replicate_shards"],
+            "replicate_shard_rule": simulation["replicate_shard_rule"],
+            "shard_seeds": [
+                confirmation._shard_seed(endpoint_seed, index)  # noqa: SLF001
+                for index in range(int(simulation["replicate_shards"]))
+            ],
+            "sentinel_pair": expected_pair.tolist(),
+            "sentinel_features": [features[int(index)] for index in expected_pair],
+            "fit_kernel": {
+                "contract": simulation["fit_kernel"],
+                "replicate_chunk_rule": simulation["replicate_chunk_rule"],
+                "replicate_chunk_size": calibration._replicate_chunk_size(  # noqa: SLF001
+                    sample_count,
+                ),
+                "scalar_fallback_count": fallback_count,
+            },
+            "worker_topology": confirmation._worker_topology(config),  # noqa: SLF001
+            "source_task_manifest": source_task_manifest,
+            "single_gene_input": single_gene_input,
+            "reportable_count": int(reportable.sum()),
+            "resource_usage": task.get("resource_usage"),
+            "output": _archive_record(
+                records,
+                data_name,
+                path=confirmation.TASK_DATA_NAME,
+            ),
+        }
+        confirmation._validate_task_resource_usage(  # noqa: SLF001
+            expected_task,
+            config,
+            Path(task_name),
+        )
+        if task != expected_task or fit_kernel != expected_task["fit_kernel"]:
+            msg = f"Archived confirmation task is invalid: {endpoint.endpoint_id}"
+            raise ValueError(msg)
+        task_record = _archive_record(
+            records,
+            task_name,
+            path=f"tasks/{endpoint.endpoint_id}/{confirmation.TASK_MANIFEST_NAME}",
+        )
+        task_record.update({"endpoint": expected_task["endpoint"]})
+        task_records.append(task_record)
+        log_p_values = calibration._effective_log_p_values(  # noqa: SLF001
+            likelihood_ratio,
+            reportable,
+        )
+        events = int((log_p_values <= np.log(endpoint.threshold)).sum())
+        upper = calibration._clopper_pearson_upper_bound(  # noqa: SLF001
+            successes=events,
+            trials=replicates,
+            endpoint_error=stage2_endpoint_error,
+        )
+        acceptance = float(
+            config["two_stage_gate"]["acceptance_upper_bounds"][
+                f"{endpoint.threshold:.2f}"
+            ],
+        )
+        stage2_by_id[endpoint.endpoint_id] = {
+            "stage2_events": events,
+            "stage2_trials": replicates,
+            "stage2_rate": events / replicates,
+            "stage2_reportable_trials": int(reportable.sum()),
+            "stage2_nonreportable_trials": replicates - int(reportable.sum()),
+            "stage2_familywise_error": float(stage2["familywise_error"]),
+            "stage2_endpoint_count": stage2_count,
+            "stage2_endpoint_error": stage2_endpoint_error,
+            "stage2_clopper_pearson_upper_bound": upper,
+            "stage2_pass": (
+                confirmation.ENDPOINT_ACCEPTED
+                if upper <= acceptance
+                else confirmation.ENDPOINT_REJECTED
+            ),
+        }
+
+    final_rows: list[dict[str, Any]] = []
+    selected_ids = {endpoint.endpoint_id for endpoint in selected}
+    for base_row in base_frame.to_dict(orient="records"):
+        row = dict(base_row)
+        endpoint_id = str(row["endpoint_id"])
+        if endpoint_id in selected_ids:
+            evidence = stage2_by_id[endpoint_id]
+            row.update(evidence)
+            row.update(
+                {
+                    "final_evidence_stage": "stage2",
+                    "final_clopper_pearson_upper_bound": evidence[
+                        "stage2_clopper_pearson_upper_bound"
+                    ],
+                    "final_pass": evidence["stage2_pass"],
+                },
+            )
+        else:
+            row.update(
+                {
+                    "stage2_events": "",
+                    "stage2_trials": "",
+                    "stage2_rate": "",
+                    "stage2_reportable_trials": "",
+                    "stage2_nonreportable_trials": "",
+                    "stage2_familywise_error": "",
+                    "stage2_endpoint_count": "",
+                    "stage2_endpoint_error": "",
+                    "stage2_clopper_pearson_upper_bound": "",
+                    "stage2_pass": confirmation.STAGE2_NOT_APPLICABLE,
+                    "final_evidence_stage": "stage1",
+                    "final_clopper_pearson_upper_bound": row[
+                        "stage1_clopper_pearson_upper_bound"
+                    ],
+                    "final_pass": row["stage1_pass"],
+                },
+            )
+        final_rows.append(row)
+    final_frame = pd.DataFrame(final_rows, columns=confirmation.FINAL_TABLE_COLUMNS)
+    expected_table = confirmation._summary_csv_bytes(final_frame)  # noqa: SLF001
+    archived_table = _verified_member_bytes(
+        archive,
+        CONFIRMATION_FINAL_TABLE_MEMBER,
+        records,
+        limit=_JSON_LIMIT_BYTES,
+    )
+    if archived_table != expected_table:
+        msg = "Archived confirmation table differs from exact recomputation."
+        raise ValueError(msg)
+    final_passed = int(
+        final_frame["final_pass"].eq(confirmation.ENDPOINT_ACCEPTED).sum(),
+    )
+    stage2_passed = int(
+        final_frame.loc[
+            final_frame["selected_for_stage2"],
+            "stage2_pass",
+        ]
+        .eq(confirmation.ENDPOINT_ACCEPTED)
+        .sum(),
+    )
+    expected_summary = {
+        "schema_version": confirmation.SCHEMA_VERSION,
+        "contract": confirmation.SUMMARY_CONTRACT,
+        "config_sha256": config_sha256,
+        "source_calibration_overall_gate_pass": False,
+        "endpoint_count": len(final_frame),
+        "stage1_familywise_error": stage1["familywise_error"],
+        "stage1_endpoint_count": stage1["endpoint_count"],
+        "stage1_endpoint_error": endpoint_error,
+        "stage1_selected_endpoint_count": stage2_count,
+        "stage2_familywise_error": stage2["familywise_error"],
+        "stage2_endpoint_count": stage2_count,
+        "stage2_endpoint_error": stage2_endpoint_error,
+        "stage2_replicates_per_selected_endpoint": stage2[
+            "replicates_per_selected_endpoint"
+        ],
+        "stage2_passed_endpoint_count": stage2_passed,
+        "final_passed_endpoint_count": final_passed,
+        "overall_gate_pass": final_passed == len(final_frame),
+        "composite_overall_gate_pass": final_passed == len(final_frame),
+        "overall_rule": config["two_stage_gate"]["overall_rule"],
+        "total_familywise_error": config["two_stage_gate"]["total_familywise_error"],
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "reporting_rule_selected": False,
+        "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof",
+        "resource_contract": dict(config["resources"]),
+        "runtime_resource_observation": confirmation._resource_observation(  # noqa: SLF001
+            config,
+        ),
+        "thread_environment": dict(calibration.THREAD_ENV),
+        "result_blindness": confirmation._result_blindness_receipt(),  # noqa: SLF001
+        "source_records": source_records,
+        "run_manifest": _archive_record(
+            records,
+            CONFIRMATION_RUN_MEMBER,
+            path=confirmation.RUN_MANIFEST_NAME,
+        ),
+        "task_manifests": task_records,
+        "final_table": _archive_record(
+            records,
+            CONFIRMATION_FINAL_TABLE_MEMBER,
+            path=confirmation.FINAL_TABLE_NAME,
+        ),
+    }
+    summary = _verified_json_member(archive, CONFIRMATION_SUMMARY_MEMBER, records)
+    if summary != expected_summary:
+        msg = "Archived confirmation summary differs from exact recomputation."
+        raise ValueError(msg)
     if expected_summary["overall_gate_pass"] is not True:
         msg = (
             "Association-level archive verification is withheld: "
-            "recomputed gate failed."
+            "recomputed confirmation gate failed."
         )
         raise RuntimeError(msg)
+
     rule = _verified_json_member(archive, REPORTING_RULE_MEMBER, records)
+    expected_gate = {
+        "provider": "mutsig",
+        "endpoint_unit": "cohort-sentinel-pair-alpha",
+        "method": "two-stage-alpha-spending-exact-binomial-confirmation",
+        "endpoint_count": 2_048,
+        "total_familywise_error": 0.05,
+        "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
+        "source_calibration_overall_gate_pass": False,
+        "source_calibration_passed_endpoint_count": 2_047,
+        "stage1_familywise_error": 0.025,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": 0.025,
+        "stage2_endpoint_count": 1,
+        "stage2_replicates_per_selected_endpoint": 100_000,
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "overall_gate_pass": True,
+    }
     expected_rule = {
         "schema_version": rule_module.SCHEMA_VERSION,
         "contract": rule_module.RULE_CONTRACT,
         "analysis_config_sha256": analysis_config_sha256,
-        "calibration_config_sha256": config_sha256,
-        "calibration_summary_sha256": str(records[summary_name]["sha256"]),
+        "calibration_config_sha256": str(records[stage1_config_name]["sha256"]),
+        "calibration_summary_sha256": str(
+            records[CALIBRATION_SUMMARY_MEMBER]["sha256"],
+        ),
+        "calibration_confirmation_config_sha256": config_sha256,
+        "calibration_confirmation_summary_sha256": str(
+            records[CONFIRMATION_SUMMARY_MEMBER]["sha256"],
+        ),
+        "calibration_confirmation_final_table_sha256": str(
+            records[CONFIRMATION_FINAL_TABLE_MEMBER]["sha256"],
+        ),
         "postprocess_manifest_sha256": str(
             records["results/postprocess/postprocess_manifest.json"]["sha256"],
         ),
@@ -2300,19 +2874,7 @@ def _recompute_archived_calibration_gate(
         "me_presentation": "primary-MutSig-with-CBaSE-continuity-comparison",
         "co_presentation": "primary-MutSig-with-CBaSE-and-DIG-sensitivity",
         "thresholds_selected_from_observed_pairs": False,
-        "calibration_gate": {
-            "provider": expected_summary["gate_provider"],
-            "endpoint_unit": expected_summary["gate_endpoint_unit"],
-            "method": expected_summary["gate_method"],
-            "endpoint_count": expected_summary["exact_binomial_endpoint_count"],
-            "familywise_error": expected_summary[
-                "exact_binomial_familywise_error"
-            ],
-            "acceptance_upper_bounds": expected_summary[
-                "acceptance_upper_bounds"
-            ],
-            "overall_gate_pass": True,
-        },
+        "calibration_gate": expected_gate,
         "inference_status": rule_module.REPORTABLE_STATUS,
         "withheld_reason": None,
         "claim_scope": "finite-scenario-calibrated-nominal-inference",
@@ -2321,7 +2883,7 @@ def _recompute_archived_calibration_gate(
         ),
     }
     if rule != expected_rule:
-        msg = "Archived reporting rule differs from the frozen reportable contract."
+        msg = "Archived reporting rule differs from the composite gate contract."
         raise ValueError(msg)
     return expected_summary
 
@@ -2338,8 +2900,7 @@ def _assert_aggregate_csv_header(archive: tarfile.TarFile, name: str) -> None:
         msg = f"Release CSV header is unexpectedly large: {name}"
         raise ValueError(msg)
     ordered_columns = tuple(
-        column.strip()
-        for column in next(csv.reader([header.decode("utf-8-sig")]), [])
+        column.strip() for column in next(csv.reader([header.decode("utf-8-sig")]), [])
     )
     columns = {column.casefold() for column in ordered_columns}
     forbidden = sorted(columns & _FORBIDDEN_ROW_AXIS_COLUMNS)
@@ -2448,8 +3009,7 @@ def _valid_source_records(
         and isinstance(record.get("bytes"), int)
         and not isinstance(record.get("bytes"), bool)
         and int(record["bytes"]) >= 0
-        and re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))
-        is not None
+        and re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", ""))) is not None
         for record, path in zip(value, expected_paths, strict=True)
     )
 
@@ -2469,8 +3029,7 @@ def _valid_detached_record(
         and isinstance(value.get("bytes"), int)
         and not isinstance(value.get("bytes"), bool)
         and int(value["bytes"]) >= minimum_bytes
-        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", "")))
-        is not None
+        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", ""))) is not None
     )
 
 
@@ -2585,8 +3144,7 @@ def _validate_raw_manifest_schemas(
             or not isinstance(sample_count, int)
             or isinstance(sample_count, bool)
             or sample_count <= 0
-            or record.get("duplicate_resolution_policy")
-            != expected_duplicate_policy
+            or record.get("duplicate_resolution_policy") != expected_duplicate_policy
         ):
             msg = f"Archived focused input cohort record is invalid: {cohort}"
             raise ValueError(msg)
@@ -2655,8 +3213,7 @@ def _validate_raw_manifest_schemas(
             msg = f"Archived focused provider record is invalid: {cohort}"
             raise ValueError(msg)
         if any(
-            files["sample_axis.txt"][key]
-            != mutsig_files["persample_patients.txt"][key]
+            files["sample_axis.txt"][key] != mutsig_files["persample_patients.txt"][key]
             for key in ("bytes", "sha256")
         ):
             msg = f"Archived MutSig and count sample axes differ: {cohort}"
@@ -2697,10 +3254,8 @@ def _validate_raw_manifest_schemas(
             "task_count",
             "tasks",
         }
-        or completion_manifest.get("schema_version")
-        != provenance.runner.SCHEMA_VERSION
-        or completion_manifest.get("contract")
-        != provenance.runner.COMPLETION_CONTRACT
+        or completion_manifest.get("schema_version") != provenance.runner.SCHEMA_VERSION
+        or completion_manifest.get("contract") != provenance.runner.COMPLETION_CONTRACT
         or completion_manifest.get("config_sha256") != analysis_config_sha256
         or completion_manifest.get("cohorts") != list(TCGA_COHORTS)
         or completion_manifest.get("task_count") != len(TCGA_COHORTS) * len(core.BMRS)
@@ -2770,8 +3325,7 @@ def _validate_archived_raw_task(  # noqa: PLR0913
             for name in ("user_cpu_seconds", "system_cpu_seconds")
         )
         or not isinstance(peak, dict)
-        or set(peak)
-        != {"bytes", "native_value", "native_unit", "platform", "source"}
+        or set(peak) != {"bytes", "native_value", "native_unit", "platform", "source"}
     ):
         msg = f"Archived raw task manifest contract is invalid: {cohort}/{provider}"
         raise ValueError(msg)
@@ -2873,8 +3427,7 @@ def _validate_attestation_schema(
         and isinstance(python.get("bytes"), int)
         and not isinstance(python.get("bytes"), bool)
         and int(python["bytes"]) > 0
-        and re.fullmatch(r"[0-9a-f]{64}", str(python.get("sha256", "")))
-        is not None
+        and re.fullmatch(r"[0-9a-f]{64}", str(python.get("sha256", ""))) is not None
         and all(
             isinstance(python.get(key), str) and bool(python[key])
             for key in ("version", "implementation", "cache_tag")
@@ -2888,8 +3441,7 @@ def _validate_attestation_schema(
         and isinstance(packages, dict)
         and set(packages) == set(provenance.RUNTIME_DISTRIBUTIONS)
         and all(
-            isinstance(version, str) and bool(version)
-            for version in packages.values()
+            isinstance(version, str) and bool(version) for version in packages.values()
         )
         and runtime.get("thread_environment")
         == dict(sorted(provenance.runner.THREAD_ENV.items()))
@@ -3014,9 +3566,7 @@ def _expected_summary_decisions(
         "selected_features": len(features),
         "tested_pairs": len(frame),
         "same_base_pairs_excluded": pair_policy["same_base_pairs_excluded"],
-        "unfiltered_pair_count": (
-            len(frame) + pair_policy["same_base_pairs_excluded"]
-        ),
+        "unfiltered_pair_count": (len(frame) + pair_policy["same_base_pairs_excluded"]),
     }
     for provider in core.BMRS:
         directions = frame[f"{provider}_direction"].astype("string")
@@ -3252,10 +3802,7 @@ def _fit_diagnostic_summary(
     def summarize(scope: str, providers: Sequence[str]) -> dict[str, Any]:
         selected = [accumulator[provider] for provider in providers]
         iteration_counts = sum(
-            (
-                np.asarray(item["iteration_counts"], dtype=np.int64)
-                for item in selected
-            ),
+            (np.asarray(item["iteration_counts"], dtype=np.int64) for item in selected),
             start=np.zeros(
                 core.REQUIRED_PAIR_FIT_MAX_ITER + 1,
                 dtype=np.int64,
@@ -3292,9 +3839,7 @@ def _fit_diagnostic_summary(
                 (float(item["maximum_kkt"]) for item in nonempty),
                 default=0.0,
             ),
-            "full_affine_rank_rows": sum(
-                int(item["full_rank"]) for item in selected
-            ),
+            "full_affine_rank_rows": sum(int(item["full_rank"]) for item in selected),
             "rank_deficient_rows": sum(
                 int(item["rank_deficient"]) for item in selected
             ),
@@ -3321,6 +3866,7 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
     sample_counts: Mapping[str, int],
     raw_tasks: Mapping[tuple[str, str], Mapping[str, Any]],
     calibration_table_name: str,
+    confirmation_table_name: str,
     high_burden_threshold: float,
 ) -> None:
     """Reconstruct all public report claims supported by archived inputs."""
@@ -3416,6 +3962,17 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
         ),
         float_precision="round_trip",
     )
+    confirmation_table = pd.read_csv(
+        BytesIO(
+            _verified_member_bytes(
+                archive,
+                confirmation_table_name,
+                records,
+                limit=_INFERENCE_LIMIT_BYTES,
+            ),
+        ),
+        float_precision="round_trip",
+    )
     with reporting.tempfile.TemporaryDirectory(prefix="dialect-archive-figure-") as tmp:
         expected_figure = Path(tmp) / "figure6.pdf"
         reporting._plot_figure6(  # noqa: SLF001
@@ -3423,6 +3980,7 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
             summary=summary,
             overlap=expected_overlap,
             calibration_table=calibration_table,
+            confirmation_table=confirmation_table,
             primary_adjustment="benjamini-yekutieli",
             primary_q=0.01,
             output=expected_figure,
@@ -3445,6 +4003,7 @@ def _verify_semantic_closure(
 ) -> None:
     analysis_config_name = "provenance/config/tcga_revision_config.json"
     calibration_config_name = "provenance/config/tcga_revision_calibration_config.json"
+    confirmation_config_name = CONFIRMATION_CONFIG_MEMBER
     input_name = "provenance/input/input_manifest.json"
     provider_name = "provenance/provider/provider_manifest.json"
     run_name = "provenance/run/run_manifest.json"
@@ -3485,11 +4044,16 @@ def _verify_semantic_closure(
     provider = _json_member(archive, provider_name)
     run = _json_member(archive, run_name)
     completion = _json_member(archive, completion_name)
-    if analysis_config_name not in records or calibration_config_name not in records:
+    if (
+        analysis_config_name not in records
+        or calibration_config_name not in records
+        or confirmation_config_name not in records
+    ):
         msg = "Release omits a frozen analysis or calibration configuration."
         raise ValueError(msg)
     analysis_config_sha256 = records[analysis_config_name]["sha256"]
     calibration_config_sha256 = records[calibration_config_name]["sha256"]
+    confirmation_config_sha256 = records[confirmation_config_name]["sha256"]
     input_records = _validate_raw_manifest_schemas(
         input_manifest=input_manifest,
         provider_manifest=provider,
@@ -3585,15 +4149,13 @@ def _verify_semantic_closure(
     }
     tasks = completion.get("tasks")
     if not isinstance(tasks, list) or any(
-        not isinstance(task, dict)
-        or set(task) != {"cohort", "provider", "manifest"}
+        not isinstance(task, dict) or set(task) != {"cohort", "provider", "manifest"}
         for task in tasks
     ):
         msg = "Release completion task records violate their exact schema."
         raise ValueError(msg)
     coordinates = {
-        (str(task.get("cohort")), str(task.get("provider")))
-        for task in tasks
+        (str(task.get("cohort")), str(task.get("provider"))) for task in tasks
     }
     if coordinates != expected_coordinates or len(tasks) != len(expected_coordinates):
         msg = "Release completion does not cover the exact 32x3 raw task grid."
@@ -3690,8 +4252,7 @@ def _verify_semantic_closure(
     contract_evidence_value = raw_chain.get("cohort_contracts")
     if not isinstance(contract_evidence_value, list) or any(
         not isinstance(record, dict)
-        or set(record)
-        != {"path", "bytes", "sha256", "canonical_sha256"}
+        or set(record) != {"path", "bytes", "sha256", "canonical_sha256"}
         or not isinstance(record.get("bytes"), int)
         or isinstance(record.get("bytes"), bool)
         or int(record["bytes"]) <= 0
@@ -3707,9 +4268,8 @@ def _verify_semantic_closure(
         .removesuffix(".json"): record
         for record in contract_evidence_value
     }
-    if (
-        len(contract_evidence) != len(TCGA_COHORTS)
-        or list(contract_evidence) != list(TCGA_COHORTS)
+    if len(contract_evidence) != len(TCGA_COHORTS) or list(contract_evidence) != list(
+        TCGA_COHORTS,
     ):
         msg = "Fit attestation does not cover the exact cohort contract grid."
         raise ValueError(msg)
@@ -3766,7 +4326,11 @@ def _verify_semantic_closure(
                 provider=provider_key,
                 analysis_config_sha256=str(analysis_config_sha256),
                 contract_sha256=str(source_contract.get("canonical_sha256")),
-                pair_count=int(core._pair_contract(contract_features[cohort])["row_count"]),  # noqa: SLF001
+                pair_count=int(
+                    core._pair_contract(  # noqa: SLF001
+                        contract_features[cohort],
+                    )["row_count"],
+                ),
             )
 
     post_root_name = "results/postprocess/postprocess_manifest.json"
@@ -3871,9 +4435,7 @@ def _verify_semantic_closure(
             != "all-matched-unordered-pairs-excluding-same-base-M:N"
             or cohort_manifest.get("multiplicity")
             != {
-                "primary": (
-                    "provider-specific-BY-over-complete-within-cohort-family"
-                ),
+                "primary": ("provider-specific-BY-over-complete-within-cohort-family"),
                 "nominal_sensitivity": (
                     "provider-specific-BH-over-complete-within-cohort-family"
                 ),
@@ -3976,8 +4538,7 @@ def _verify_semantic_closure(
         for provider_key in ("cbase", "dig", "mutsig"):
             if raw_tasks[(cohort, provider_key)].get("pairwise_rows") != pair_count:
                 msg = (
-                    "Raw and postprocessed pair counts differ: "
-                    f"{cohort}/{provider_key}"
+                    f"Raw and postprocessed pair counts differ: {cohort}/{provider_key}"
                 )
                 raise ValueError(msg)
             raw_output = (
@@ -4142,11 +4703,103 @@ def _verify_semantic_closure(
             label=f"calibration data {relative}",
         )
 
+    confirmation_run = _json_member(archive, CONFIRMATION_RUN_MEMBER)
+    confirmation_summary = _json_member(archive, CONFIRMATION_SUMMARY_MEMBER)
+    _require_record_path(
+        confirmation_run.get("config"),
+        records,
+        confirmation_config_name,
+        expected_path=("analysis/tcga_revision_calibration_confirmation_config.json"),
+        label="confirmation run to confirmation config",
+    )
+    confirmation_sources = confirmation_run.get("source_records")
+    if not isinstance(confirmation_sources, dict):
+        msg = "Confirmation run lacks its stage-one source receipt chain."
+        raise TypeError(msg)
+    for key, member_name, expected_path in (
+        (
+            "calibration_config",
+            calibration_config_name,
+            "analysis/tcga_revision_calibration_config.json",
+        ),
+        ("calibration_run_manifest", calibration_run_name, "run_manifest.json"),
+        (
+            "calibration_table",
+            calibration_table_name,
+            calibration.SUMMARY_TABLE_NAME,
+        ),
+        (
+            "calibration_summary",
+            calibration_summary_name,
+            calibration.SUMMARY_NAME,
+        ),
+        ("production_completion", completion_name, "completion_manifest.json"),
+        ("provider_manifest", provider_name, "provider_manifest.json"),
+    ):
+        _require_record_path(
+            confirmation_sources.get(key),
+            records,
+            member_name,
+            expected_path=expected_path,
+            label=f"confirmation source {key}",
+        )
+    if confirmation_summary.get("source_records") != confirmation_sources:
+        msg = "Confirmation summary source receipts differ from its run manifest."
+        raise ValueError(msg)
+    _require_record_path(
+        confirmation_summary.get("run_manifest"),
+        records,
+        CONFIRMATION_RUN_MEMBER,
+        expected_path=confirmation.RUN_MANIFEST_NAME,
+        label="confirmation summary to run",
+    )
+    _require_record_path(
+        confirmation_summary.get("final_table"),
+        records,
+        CONFIRMATION_FINAL_TABLE_MEMBER,
+        expected_path=confirmation.FINAL_TABLE_NAME,
+        label="confirmation summary to final table",
+    )
+    confirmation_task_paths = {
+        str(record.get("path"))
+        for record in confirmation_summary.get("task_manifests", [])
+        if isinstance(record, dict)
+    }
+    expected_confirmation_tasks = {
+        (f"tasks/{endpoint.endpoint_id}/{confirmation.TASK_MANIFEST_NAME}")
+        for endpoint in confirmation._manifest_endpoints(  # noqa: SLF001
+            confirmation_run,
+        )
+    }
+    if confirmation_task_paths != expected_confirmation_tasks:
+        msg = "Confirmation summary does not cover its selected endpoint tasks."
+        raise ValueError(msg)
+    for record in confirmation_summary.get("task_manifests", []):
+        relative = str(record["path"])
+        member_name = f"results/calibration_confirmation/{relative}"
+        _require_record(
+            {key: record[key] for key in ("bytes", "sha256")},
+            records,
+            member_name,
+            label=f"confirmation task {relative}",
+        )
+        task = _json_member(archive, member_name)
+        data_name = member_name.rsplit("/", 1)[0] + (f"/{confirmation.TASK_DATA_NAME}")
+        _require_record_path(
+            task.get("output"),
+            records,
+            data_name,
+            expected_path=confirmation.TASK_DATA_NAME,
+            label=f"confirmation data {relative}",
+        )
+
     rule_name = "results/reporting_rule.json"
     rule = _json_member(archive, rule_name)
     if (
         rule.get("analysis_config_sha256") != analysis_config_sha256
         or rule.get("calibration_config_sha256") != calibration_config_sha256
+        or rule.get("calibration_confirmation_config_sha256")
+        != confirmation_config_sha256
     ):
         msg = "Frozen rule is not bound to the released configurations."
         raise ValueError(msg)
@@ -4164,6 +4817,14 @@ def _verify_semantic_closure(
         != records[calibration_summary_name]["sha256"]
     ):
         msg = "Frozen rule is not bound to calibration."
+        raise ValueError(msg)
+    if (
+        rule.get("calibration_confirmation_summary_sha256")
+        != records[CONFIRMATION_SUMMARY_MEMBER]["sha256"]
+        or rule.get("calibration_confirmation_final_table_sha256")
+        != records[CONFIRMATION_FINAL_TABLE_MEMBER]["sha256"]
+    ):
+        msg = "Frozen rule is not bound to confirmation evidence."
         raise ValueError(msg)
     if isinstance(postprocess_binding, dict):
         _require_record(
@@ -4219,8 +4880,7 @@ def _verify_semantic_closure(
         or report.get("probability_representation")
         != postprocess.PROBABILITY_REPRESENTATION
         or report.get("sample_level_rows_included") is not False
-        or report.get("burden_source_policy")
-        != reporting.BURDEN_SOURCE_POLICY
+        or report.get("burden_source_policy") != reporting.BURDEN_SOURCE_POLICY
         or not isinstance(report_inputs, dict)
         or set(report_inputs)
         != {
@@ -4228,6 +4888,8 @@ def _verify_semantic_closure(
             "provider_manifest",
             "postprocess_manifest",
             "calibration_summary",
+            "calibration_confirmation_summary",
+            "calibration_confirmation_final_table",
             "reporting_rule",
         }
         or not isinstance(high_burden, dict)
@@ -4267,6 +4929,16 @@ def _verify_semantic_closure(
             "calibration_summary",
             calibration_summary_name,
             calibration.SUMMARY_NAME,
+        ),
+        (
+            "calibration_confirmation_summary",
+            CONFIRMATION_SUMMARY_MEMBER,
+            confirmation.SUMMARY_NAME,
+        ),
+        (
+            "calibration_confirmation_final_table",
+            CONFIRMATION_FINAL_TABLE_MEMBER,
+            confirmation.FINAL_TABLE_NAME,
         ),
         ("reporting_rule", rule_name, "reporting_rule.json"),
     ):
@@ -4322,6 +4994,7 @@ def _verify_semantic_closure(
         sample_counts=contract_sample_counts,
         raw_tasks=raw_tasks,
         calibration_table_name=calibration_table_name,
+        confirmation_table_name=CONFIRMATION_FINAL_TABLE_MEMBER,
         high_burden_threshold=float(high_burden["threshold"]),
     )
 
@@ -4343,8 +5016,7 @@ def _verify_semantic_closure(
         *(f"documents/{name}" for name in REQUIRED_DOCUMENTS),
     }
     if (
-        set(document_manifest)
-        != {"schema_version", "contract", "inputs", "outputs"}
+        set(document_manifest) != {"schema_version", "contract", "inputs", "outputs"}
         or document_manifest.get("schema_version") != SCHEMA_VERSION
         or document_manifest.get("contract") != DOCUMENT_CONTRACT
         or not isinstance(document_manifest.get("inputs"), dict)
@@ -4370,6 +5042,7 @@ def _verify_semantic_closure(
         FIT_ATTESTATION_MEMBER,
         analysis_config_name,
         calibration_config_name,
+        confirmation_config_name,
         input_name,
         provider_name,
         run_name,
@@ -4378,6 +5051,9 @@ def _verify_semantic_closure(
         calibration_run_name,
         calibration_summary_name,
         calibration_table_name,
+        CONFIRMATION_RUN_MEMBER,
+        CONFIRMATION_SUMMARY_MEMBER,
+        CONFIRMATION_FINAL_TABLE_MEMBER,
         rule_name,
         report_manifest_name,
         *expected_document_members,
@@ -4408,6 +5084,12 @@ def _verify_semantic_closure(
         expected_payload.add(task_member)
         expected_payload.add(
             task_member.rsplit("/", 1)[0] + f"/{calibration.TASK_DATA_NAME}",
+        )
+    for relative in expected_confirmation_tasks:
+        task_member = f"results/calibration_confirmation/{relative}"
+        expected_payload.add(task_member)
+        expected_payload.add(
+            task_member.rsplit("/", 1)[0] + f"/{confirmation.TASK_DATA_NAME}",
         )
     if set(records) != expected_payload:
         missing = sorted(expected_payload - set(records))
@@ -4493,15 +5175,30 @@ def verify_archive(path: Path) -> dict[str, Any]:
                 or not isinstance(record.get("bytes"), int)
                 or isinstance(record.get("bytes"), bool)
                 or int(record["bytes"]) < 0
-                or re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))
-                is None
+                or re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", ""))) is None
                 for name, record in records.items()
             )
         ):
             msg = "Release manifest does not cover the exact payload."
             raise ValueError(msg)
+        if len(records) != EXPECTED_PAYLOAD_MEMBER_COUNT:
+            msg = (
+                "Release payload is not the exact closed public inventory: "
+                f"expected {EXPECTED_PAYLOAD_MEMBER_COUNT} members, "
+                f"observed {len(records)}."
+            )
+            raise ValueError(msg)
         _require_embedded_reportable_gate(archive, records)
-        _recompute_archived_calibration_gate(archive, records)
+        stage1_summary, stage1_frame = _recompute_archived_calibration_gate(
+            archive,
+            records,
+        )
+        _recompute_archived_confirmation_gate(
+            archive,
+            records,
+            stage1_summary=stage1_summary,
+            stage1_frame=stage1_frame,
+        )
         _verify_canonical_archive_stream(path, infos)
         for name in sorted(payload_names):
             handle = archive.extractfile(name)
@@ -4546,6 +5243,7 @@ def build_release(  # noqa: PLR0913
     run_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     report_root: Path,
     rule_path: Path,
     fit_attestation_path: Path,
@@ -4564,6 +5262,7 @@ def build_release(  # noqa: PLR0913
         run_root=run_root,
         postprocess_root=postprocess_root,
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         report_root=report_root,
         rule_path=rule_path,
         fit_attestation_path=fit_attestation_path,
@@ -4583,6 +5282,7 @@ def build_release(  # noqa: PLR0913
             run_root=run_root,
             postprocess_root=postprocess_root,
             calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
             report_root=report_root,
             rule_path=rule_path,
             fit_attestation_path=fit_attestation_path,
@@ -4598,6 +5298,12 @@ def build_release(  # noqa: PLR0913
     names = [member.name for member in members]
     if MANIFEST_NAME in names or len(names) != len(set(names)):
         msg = "Release plan contains duplicate or reserved member names."
+        raise ValueError(msg)
+    if len(members) != EXPECTED_PAYLOAD_MEMBER_COUNT:
+        msg = (
+            "Release plan does not contain the exact frozen payload inventory: "
+            f"expected {EXPECTED_PAYLOAD_MEMBER_COUNT}, observed {len(members)}."
+        )
         raise ValueError(msg)
     manifest = _manifest(
         sorted(members, key=lambda item: item.name),
@@ -4682,6 +5388,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", type=Path)
     parser.add_argument("--postprocess-root", type=Path)
     parser.add_argument("--calibration-root", type=Path)
+    parser.add_argument("--confirmation-root", type=Path)
     parser.add_argument("--report-root", type=Path)
     parser.add_argument("--reporting-rule", type=Path)
     parser.add_argument("--fit-attestation", type=Path)
@@ -4701,6 +5408,7 @@ def _required_build_args(args: argparse.Namespace) -> Mapping[str, object]:
         "run_root",
         "postprocess_root",
         "calibration_root",
+        "confirmation_root",
         "report_root",
         "reporting_rule",
         "fit_attestation",
@@ -4736,6 +5444,7 @@ def main() -> None:
             run_root=Path(values["run_root"]).resolve(),
             postprocess_root=Path(values["postprocess_root"]).resolve(),
             calibration_root=Path(values["calibration_root"]).resolve(),
+            confirmation_root=Path(values["confirmation_root"]).resolve(),
             report_root=Path(values["report_root"]).resolve(),
             rule_path=Path(values["reporting_rule"]).resolve(),
             fit_attestation_path=Path(values["fit_attestation"]).resolve(),

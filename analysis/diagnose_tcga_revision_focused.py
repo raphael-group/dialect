@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
 from analysis import postprocess_tcga_revision_focused as postprocess
 from analysis import report_tcga_revision_focused as reporting
 from analysis.prepare_tcga_revision_focused import _parse_cohorts
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v3"
+DIAGNOSTIC_CONTRACT: Final = "focused-provider-result-diagnostics-v4"
 FOCAL_COHORTS: Final = ("LAML", "PAAD")
 
 
@@ -209,6 +210,7 @@ def diagnose(  # noqa: PLR0913
     provider_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     rule_path: Path,
     output_root: Path,
     cohorts: Sequence[str],
@@ -216,6 +218,7 @@ def diagnose(  # noqa: PLR0913
     """Write fixed-rule counts, directional overlap, and focal audit tables."""
     rule = reporting._require_reportable_rule(  # noqa: SLF001
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         rule_path=rule_path,
         run_root=run_root,
@@ -280,9 +283,7 @@ def diagnose(  # noqa: PLR0913
     counts = pd.DataFrame(count_records)
     overlap = pd.DataFrame(overlap_records)
     focal = (
-        pd.concat(focal_tables, ignore_index=True)
-        if focal_tables
-        else pd.DataFrame()
+        pd.concat(focal_tables, ignore_index=True) if focal_tables else pd.DataFrame()
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
@@ -303,6 +304,12 @@ def diagnose(  # noqa: PLR0913
         "postprocess_manifest_sha256": _sha256(source_manifest),
         "calibration_summary_sha256": _sha256(
             calibration_root / calibration.SUMMARY_NAME,
+        ),
+        "calibration_confirmation_summary_sha256": _sha256(
+            confirmation_root / confirmation.SUMMARY_NAME,
+        ),
+        "calibration_confirmation_final_table_sha256": _sha256(
+            confirmation_root / confirmation.FINAL_TABLE_NAME,
         ),
         "reporting_rule_sha256": _sha256(rule_path),
         "inference_status": rule["inference_status"],
@@ -337,6 +344,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-root", type=Path, required=True)
     parser.add_argument("--postprocess-root", type=Path, required=True)
     parser.add_argument("--calibration-root", type=Path, required=True)
+    parser.add_argument("--confirmation-root", type=Path, required=True)
     parser.add_argument("--reporting-rule", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--cohorts")
@@ -351,6 +359,7 @@ def main() -> None:
         provider_root=args.provider_root.resolve(),
         postprocess_root=args.postprocess_root.resolve(),
         calibration_root=args.calibration_root.resolve(),
+        confirmation_root=args.confirmation_root.resolve(),
         rule_path=args.reporting_rule.resolve(),
         output_root=args.output_root.absolute(),
         cohorts=_parse_cohorts(args.cohorts),

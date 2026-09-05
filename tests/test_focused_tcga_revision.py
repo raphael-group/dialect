@@ -86,12 +86,18 @@ def test_run_root_is_bound_to_config_and_provider_manifest(tmp_path) -> None:
         (output_root / "run_manifest.json").read_text(encoding="utf-8"),
     )
     assert manifest["contract"] == runner.RUN_CONTRACT
-    assert manifest["config_sha256"] == hashlib.sha256(
-        preparation.CONFIG_PATH.read_bytes(),
-    ).hexdigest()
-    assert manifest["provider_manifest"]["sha256"] == hashlib.sha256(
-        provider_path.read_bytes(),
-    ).hexdigest()
+    assert (
+        manifest["config_sha256"]
+        == hashlib.sha256(
+            preparation.CONFIG_PATH.read_bytes(),
+        ).hexdigest()
+    )
+    assert (
+        manifest["provider_manifest"]["sha256"]
+        == hashlib.sha256(
+            provider_path.read_bytes(),
+        ).hexdigest()
+    )
 
 
 def test_run_root_rejects_provider_manifest_drift(tmp_path) -> None:
@@ -417,8 +423,7 @@ def _write_calibration_task(
         "replicate_rng": "sha256-cell-seed-and-sentinel-pair-index-v1",
         "fit_kernel": {
             "contract": (
-                "bounded-batched-profile-lrt-with-scalar-boundary-"
-                "reconciliation-v1"
+                "bounded-batched-profile-lrt-with-scalar-boundary-reconciliation-v1"
             ),
             "replicate_chunk_rule": "max(1,min(512,128000//sample-count))",
             "replicate_chunk_size": 512,
@@ -643,15 +648,19 @@ def test_reporting_rule_freezes_prespecified_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     postprocess_root = tmp_path / "postprocess"
     run_root = tmp_path / "run"
     provider_root = tmp_path / "providers"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     postprocess_root.mkdir()
     run_root.mkdir()
     provider_root.mkdir()
     summary = {
-        "overall_gate_pass": True,
+        "overall_gate_pass": False,
+        "primary_gate_endpoint_count": 2_048,
+        "primary_gate_passed_endpoint_count": 2_047,
         "reporting_rule_selected": False,
         "gate_provider": "mutsig",
         "gate_endpoint_unit": "cohort-sentinel-pair-alpha",
@@ -674,6 +683,35 @@ def test_reporting_rule_freezes_prespecified_candidates(
         json.dumps(summary),
         encoding="utf-8",
     )
+    confirmation_summary = {
+        "overall_gate_pass": True,
+        "composite_overall_gate_pass": True,
+        "reporting_rule_selected": False,
+        "source_calibration_overall_gate_pass": False,
+        "endpoint_count": 2_048,
+        "stage1_familywise_error": 0.025,
+        "stage1_endpoint_count": 2_048,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": 0.025,
+        "stage2_endpoint_count": 1,
+        "stage2_replicates_per_selected_endpoint": 100_000,
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "total_familywise_error": 0.05,
+        "overall_rule": (
+            "all-unselected-endpoints-pass-stage1-and-all-selected-endpoints-"
+            "pass-stage2"
+        ),
+        "interpretation": ("finite-scenario-stress-not-formal-uniform-FDR-proof"),
+    }
+    (confirmation_root / reporting_rule.confirmation.SUMMARY_NAME).write_text(
+        json.dumps(confirmation_summary),
+        encoding="utf-8",
+    )
+    (confirmation_root / reporting_rule.confirmation.FINAL_TABLE_NAME).write_text(
+        "confirmation\n",
+        encoding="utf-8",
+    )
     (postprocess_root / postprocess.ROOT_MANIFEST_NAME).write_text(
         "{}\n",
         encoding="utf-8",
@@ -684,6 +722,11 @@ def test_reporting_rule_freezes_prespecified_candidates(
         lambda *_args, **_kwargs: summary,
     )
     monkeypatch.setattr(
+        reporting_rule.confirmation,
+        "load_validated_composite_gate",
+        lambda **_kwargs: confirmation_summary,
+    )
+    monkeypatch.setattr(
         postprocess,
         "validate_derived_root",
         lambda *_args, **_kwargs: {},
@@ -692,6 +735,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
 
     reporting_rule.freeze_rule(
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         run_root=run_root,
         provider_root=provider_root,
@@ -708,13 +752,19 @@ def test_reporting_rule_freezes_prespecified_candidates(
     assert rule["calibration_gate"] == {
         "provider": "mutsig",
         "endpoint_unit": "cohort-sentinel-pair-alpha",
-        "method": (
-            "pair-resolved-simultaneous-one-sided-exact-binomial-"
-            "clopper-pearson-with-bonferroni"
-        ),
+        "method": "two-stage-alpha-spending-exact-binomial-confirmation",
         "endpoint_count": 2_048,
-        "familywise_error": 0.05,
+        "total_familywise_error": 0.05,
         "acceptance_upper_bounds": {"0.01": 0.02, "0.05": 0.07},
+        "source_calibration_overall_gate_pass": False,
+        "source_calibration_passed_endpoint_count": 2_047,
+        "stage1_familywise_error": 0.025,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": 0.025,
+        "stage2_endpoint_count": 1,
+        "stage2_replicates_per_selected_endpoint": 100_000,
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
         "overall_gate_pass": True,
     }
     assert (
@@ -722,8 +772,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
         == "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
     )
     assert (
-        rule["direction"]
-        == "primary-provider-rho-sign-after-nondirectional-rejection"
+        rule["direction"] == "primary-provider-rho-sign-after-nondirectional-rejection"
     )
     assert (
         rule["direction_unavailable"]
@@ -734,6 +783,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
         reporting._load_rule(  # noqa: SLF001
             output,
             calibration_root,
+            confirmation_root,
             postprocess_root,
         )
         == rule
@@ -746,6 +796,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
         reporting._load_rule(  # noqa: SLF001
             output,
             calibration_root,
+            confirmation_root,
             postprocess_root,
         )
 
@@ -756,6 +807,7 @@ def test_reporting_rule_freezes_prespecified_candidates(
         reporting._load_rule(  # noqa: SLF001
             output,
             calibration_root,
+            confirmation_root,
             postprocess_root,
         )
 
@@ -765,10 +817,14 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     postprocess_root = tmp_path / "postprocess"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     summary = {
         "overall_gate_pass": False,
+        "primary_gate_endpoint_count": 2_048,
+        "primary_gate_passed_endpoint_count": 2_047,
         "reporting_rule_selected": False,
         "gate_provider": "mutsig",
         "gate_endpoint_unit": "cohort-sentinel-pair-alpha",
@@ -791,6 +847,36 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
         json.dumps(summary),
         encoding="utf-8",
     )
+    confirmation_summary = {
+        "overall_gate_pass": False,
+        "composite_overall_gate_pass": False,
+        "reporting_rule_selected": False,
+        "source_calibration_overall_gate_pass": False,
+        "endpoint_count": 2_048,
+        "stage1_familywise_error": 0.025,
+        "stage1_endpoint_count": 2_048,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": 0.025,
+        "stage2_endpoint_count": 1,
+        "stage2_replicates_per_selected_endpoint": 100_000,
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "total_familywise_error": 0.05,
+        "overall_rule": (
+            "all-unselected-endpoints-pass-stage1-and-all-selected-endpoints-"
+            "pass-stage2"
+        ),
+        "interpretation": ("finite-scenario-stress-not-formal-uniform-FDR-proof"),
+    }
+    (confirmation_root / reporting_rule.confirmation.SUMMARY_NAME).write_text(
+        json.dumps(confirmation_summary),
+        encoding="utf-8",
+    )
+    (confirmation_root / reporting_rule.confirmation.FINAL_TABLE_NAME).write_text(
+        "confirmation\n",
+        encoding="utf-8",
+    )
+
     def fail_if_association_accessed(*_args, **_kwargs):
         msg = "association table was accessed"
         raise AssertionError(msg)
@@ -808,7 +894,16 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
         return original_open(path, *args, **kwargs)
 
     monkeypatch.setattr(path_type, "open", guarded_open)
-    monkeypatch.setattr(calibration, "validate_summary", fail_if_association_accessed)
+    monkeypatch.setattr(
+        calibration,
+        "validate_summary",
+        lambda *_args, **_kwargs: summary,
+    )
+    monkeypatch.setattr(
+        reporting_rule.confirmation,
+        "load_validated_composite_gate",
+        lambda **_kwargs: confirmation_summary,
+    )
     monkeypatch.setattr(
         postprocess,
         "validate_derived_root",
@@ -817,6 +912,7 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
     output = tmp_path / "withheld-rule.json"
     reporting_rule.freeze_rule(
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         run_root=tmp_path / "run",
         provider_root=tmp_path / "providers",
@@ -832,6 +928,7 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
         reporting._load_rule(  # noqa: SLF001
             output,
             calibration_root,
+            confirmation_root,
             postprocess_root,
         )
         == rule
@@ -843,6 +940,7 @@ def test_failed_gate_freezes_withheld_rule_without_association_validation(
     [
         ({}, True, TypeError),
         ({"overall_gate_pass": "false"}, True, TypeError),
+        ({"overall_gate_pass": True}, True, ValueError),
         ({}, False, FileNotFoundError),
     ],
 )
@@ -874,6 +972,7 @@ def test_freeze_rejects_missing_or_malformed_gate_before_association_access(
     with pytest.raises(error):
         reporting_rule.freeze_rule(
             calibration_root=calibration_root,
+            confirmation_root=tmp_path / "confirmation",
             postprocess_root=tmp_path / "postprocess",
             run_root=tmp_path / "run",
             provider_root=tmp_path / "providers",

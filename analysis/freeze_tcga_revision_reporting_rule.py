@@ -1,4 +1,4 @@
-"""Freeze the global DIALECT reporting rule after prespecified calibration."""
+"""Freeze the global DIALECT rule after prespecified two-stage calibration."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Final
 
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
 from analysis import postprocess_tcga_revision_focused as postprocess
 from analysis.prepare_tcga_revision_focused import CONFIG_PATH, _load_config
 from dialect.data.tcga import TCGA_COHORTS
 
 SCHEMA_VERSION: Final = "1.0.0"
-RULE_CONTRACT: Final = "focused-global-reporting-rule-v3"
+RULE_CONTRACT: Final = "focused-global-reporting-rule-v4"
 RULE_NAME: Final = "reporting_rule.json"
 REPORTABLE_STATUS: Final = "reportable"
 WITHHELD_STATUS: Final = "withheld"
@@ -55,26 +56,36 @@ def _write_once(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def load_calibration_gate(calibration_root: Path) -> dict[str, object]:
-    """Read only the calibration summary needed to enforce the access gate.
-
-    This deliberately precedes the complete calibration validator: the latter
-    verifies raw fit receipts and may therefore read pairwise fit outputs.  A
-    negative, missing, or malformed gate must stop before that can happen.
-    """
-    summary_path = calibration_root / calibration.SUMMARY_NAME
+def _load_summary_gate(summary_path: Path, *, label: str) -> dict[str, object]:
+    """Read one summary gate without opening any association-level artifact."""
     if not summary_path.is_file():
-        msg = f"Calibration summary is missing: {summary_path}"
+        msg = f"{label} summary is missing: {summary_path}"
         raise FileNotFoundError(msg)
     if summary_path.is_symlink():
-        msg = f"Calibration summary is unsafe: {summary_path}"
+        msg = f"{label} summary is unsafe: {summary_path}"
         raise ValueError(msg)
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if not isinstance(summary, dict):
-        msg = "Calibration summary must be a JSON object."
+        msg = f"{label} summary must be a JSON object."
         raise TypeError(msg)
     calibration_gate_pass(summary)
     return summary
+
+
+def load_calibration_gate(calibration_root: Path) -> dict[str, object]:
+    """Read the preserved stage-one summary gate without association access."""
+    return _load_summary_gate(
+        calibration_root / calibration.SUMMARY_NAME,
+        label="Calibration",
+    )
+
+
+def load_confirmation_gate(confirmation_root: Path) -> dict[str, object]:
+    """Read the composite confirmation summary gate without association access."""
+    return _load_summary_gate(
+        confirmation_root / confirmation.SUMMARY_NAME,
+        label="Calibration confirmation",
+    )
 
 
 def calibration_gate_pass(summary: dict[str, object]) -> bool:
@@ -86,9 +97,10 @@ def calibration_gate_pass(summary: dict[str, object]) -> bool:
     return gate_pass
 
 
-def freeze_rule(
+def freeze_rule(  # noqa: PLR0913
     *,
     calibration_root: Path,
+    confirmation_root: Path,
     postprocess_root: Path,
     output_path: Path,
     run_root: Path,
@@ -102,18 +114,32 @@ def freeze_rule(
     """
     config = _load_config()
     calibration_config = calibration._load_config()  # noqa: SLF001
-    summary = load_calibration_gate(calibration_root)
-    gate_pass = calibration_gate_pass(summary)
-    if gate_pass:
-        summary = calibration.validate_summary(
-            calibration_root,
-            run_root=run_root,
-            provider_root=provider_root,
-        )
-        if calibration_gate_pass(summary) is not True:
-            msg = "Calibration gate changed during complete validation."
-            raise RuntimeError(msg)
-    if summary.get("reporting_rule_selected") is not False:
+    stage1_preview = load_calibration_gate(calibration_root)
+    if calibration_gate_pass(stage1_preview) is not False:
+        msg = "The preserved stage-one calibration must retain its failed decision."
+        raise ValueError(msg)
+    confirmation_preview = load_confirmation_gate(confirmation_root)
+    stage1_summary = calibration.validate_summary(
+        calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+    )
+    confirmation_summary = confirmation.load_validated_composite_gate(
+        calibration_root=calibration_root,
+        run_root=run_root,
+        provider_root=provider_root,
+        output_root=confirmation_root,
+    )
+    if stage1_preview != stage1_summary:
+        msg = "Stage-one calibration changed during complete validation."
+        raise RuntimeError(msg)
+    if confirmation_preview != confirmation_summary:
+        msg = "Calibration confirmation changed during complete validation."
+        raise RuntimeError(msg)
+    gate_pass = calibration_gate_pass(confirmation_summary)
+    if stage1_summary.get("reporting_rule_selected") is not False or (
+        confirmation_summary.get("reporting_rule_selected") is not False
+    ):
         msg = "Calibration must remain result-blind and must not select a rule."
         raise ValueError(msg)
     candidates = calibration_config["reporting_candidates"]
@@ -147,8 +173,38 @@ def freeze_rule(
             "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
         ),
     }
-    if any(summary.get(key) != value for key, value in expected_summary.items()):
+    if any(stage1_summary.get(key) != value for key, value in expected_summary.items()):
         msg = "Calibration summary violates the prespecified reporting candidates."
+        raise ValueError(msg)
+    expected_confirmation = {
+        "source_calibration_overall_gate_pass": False,
+        "endpoint_count": 2_048,
+        "stage1_familywise_error": 0.025,
+        "stage1_endpoint_count": 2_048,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": 0.025,
+        "stage2_endpoint_count": 1,
+        "stage2_replicates_per_selected_endpoint": 100_000,
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "total_familywise_error": 0.05,
+        "overall_rule": (
+            "all-unselected-endpoints-pass-stage1-and-all-selected-endpoints-"
+            "pass-stage2"
+        ),
+        "interpretation": ("finite-scenario-stress-not-formal-uniform-FDR-proof"),
+    }
+    if (
+        stage1_summary.get("overall_gate_pass") is not False
+        or stage1_summary.get("primary_gate_endpoint_count") != 2_048
+        or stage1_summary.get("primary_gate_passed_endpoint_count") != 2_047
+        or any(
+            confirmation_summary.get(key) != value
+            for key, value in expected_confirmation.items()
+        )
+        or confirmation_summary.get("composite_overall_gate_pass") is not gate_pass
+    ):
+        msg = "Composite calibration confirmation violates the frozen protocol."
         raise ValueError(msg)
     if gate_pass:
         postprocess.validate_derived_root(
@@ -174,10 +230,19 @@ def freeze_rule(
         "calibration_summary_sha256": _sha256(
             calibration_root / calibration.SUMMARY_NAME,
         ),
+        "calibration_confirmation_config_sha256": _sha256(
+            confirmation.CONFIG_PATH,
+        ),
+        "calibration_confirmation_summary_sha256": _sha256(
+            confirmation_root / confirmation.SUMMARY_NAME,
+        ),
+        "calibration_confirmation_final_table_sha256": _sha256(
+            confirmation_root / confirmation.FINAL_TABLE_NAME,
+        ),
         "postprocess_manifest_sha256": postprocess_manifest_sha256,
         "scope": "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts",
         "test": candidates["test"],
-        "effective_p_policy": summary["effective_p_policy"],
+        "effective_p_policy": stage1_summary["effective_p_policy"],
         "multiplicity": "provider-specific-complete-within-cohort-family",
         "primary_adjustment": candidates["primary_adjustment"],
         "sensitivity_adjustment": candidates["sensitivity_adjustment"],
@@ -198,19 +263,50 @@ def freeze_rule(
             "thresholds_selected_from_observed_pairs"
         ],
         "calibration_gate": {
-            "provider": summary.get("gate_provider"),
-            "endpoint_unit": summary.get("gate_endpoint_unit"),
-            "method": summary.get("gate_method"),
-            "endpoint_count": summary.get("exact_binomial_endpoint_count"),
-            "familywise_error": summary.get("exact_binomial_familywise_error"),
-            "acceptance_upper_bounds": summary.get("acceptance_upper_bounds"),
+            "provider": stage1_summary.get("gate_provider"),
+            "endpoint_unit": stage1_summary.get("gate_endpoint_unit"),
+            "method": "two-stage-alpha-spending-exact-binomial-confirmation",
+            "endpoint_count": confirmation_summary.get("endpoint_count"),
+            "total_familywise_error": confirmation_summary.get(
+                "total_familywise_error",
+            ),
+            "acceptance_upper_bounds": stage1_summary.get(
+                "acceptance_upper_bounds",
+            ),
+            "source_calibration_overall_gate_pass": stage1_summary.get(
+                "overall_gate_pass",
+            ),
+            "source_calibration_passed_endpoint_count": stage1_summary.get(
+                "primary_gate_passed_endpoint_count",
+            ),
+            "stage1_familywise_error": confirmation_summary.get(
+                "stage1_familywise_error",
+            ),
+            "stage1_selected_endpoint_count": confirmation_summary.get(
+                "stage1_selected_endpoint_count",
+            ),
+            "stage2_familywise_error": confirmation_summary.get(
+                "stage2_familywise_error",
+            ),
+            "stage2_endpoint_count": confirmation_summary.get(
+                "stage2_endpoint_count",
+            ),
+            "stage2_replicates_per_selected_endpoint": confirmation_summary.get(
+                "stage2_replicates_per_selected_endpoint",
+            ),
+            "stage1_and_stage2_counts_pooled": confirmation_summary.get(
+                "stage1_and_stage2_counts_pooled",
+            ),
+            "additional_confirmation_stage_permitted": confirmation_summary.get(
+                "additional_confirmation_stage_permitted",
+            ),
             "overall_gate_pass": gate_pass,
         },
         "inference_status": inference_status,
         "withheld_reason": (
             None
             if gate_pass
-            else "prespecified-finite-scenario-calibration-gate-failed"
+            else "prespecified-two-stage-calibration-confirmation-failed"
         ),
         "claim_scope": "finite-scenario-calibrated-nominal-inference",
         "calibration_interpretation": candidates["interpretation"],
@@ -222,6 +318,7 @@ def freeze_rule(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--calibration-root", type=Path, required=True)
+    parser.add_argument("--confirmation-root", type=Path, required=True)
     parser.add_argument("--postprocess-root", type=Path, required=True)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--provider-root", type=Path, required=True)
@@ -235,6 +332,7 @@ def main() -> None:
     print(
         freeze_rule(
             calibration_root=args.calibration_root.resolve(),
+            confirmation_root=args.confirmation_root.resolve(),
             postprocess_root=args.postprocess_root.resolve(),
             run_root=args.run_root.resolve(),
             provider_root=args.provider_root.resolve(),

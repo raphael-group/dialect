@@ -62,6 +62,7 @@ RELEASE_PIPELINE_FILES: Final = (
     Path("analysis/build_tcga_revision_focused_document_manifest.py"),
     Path("analysis/build_tcga_revision_focused_release.py"),
     Path("analysis/calibrate_tcga_revision_focused.py"),
+    Path("analysis/calibrate_tcga_revision_focused_confirmation.py"),
     Path("analysis/calibration_batch.py"),
     Path("analysis/diagnose_tcga_revision_focused.py"),
     Path("analysis/focused_revision_provenance.py"),
@@ -69,6 +70,7 @@ RELEASE_PIPELINE_FILES: Final = (
     Path("analysis/postprocess_tcga_revision_focused.py"),
     Path("analysis/report_tcga_revision_focused.py"),
     Path("analysis/tcga_revision_calibration_config.json"),
+    Path("analysis/tcga_revision_calibration_confirmation_config.json"),
 )
 RUNTIME_DISTRIBUTIONS: Final = (
     "matplotlib",

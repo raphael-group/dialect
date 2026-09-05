@@ -147,10 +147,7 @@ def test_semantic_validator_recomputes_complete_family_q_values() -> None:
         providers.append(
             pd.DataFrame(
                 {
-                    **{
-                        f"{provider}_{name}": value
-                        for name, value in values.items()
-                    },
+                    **{f"{provider}_{name}": value for name, value in values.items()},
                     **{
                         f"{provider}_{name}": value
                         for name, value in _fit_diagnostics(2).items()
@@ -235,11 +232,7 @@ def test_raw_source_binding_rejects_derived_statistic_drift(
     sources = {}
     for provider in postprocess.BMRS:
         source = (
-            run_root
-            / "tasks"
-            / "TEST"
-            / provider
-            / "pairwise_interaction_results.csv"
+            run_root / "tasks" / "TEST" / provider / "pairwise_interaction_results.csv"
         )
         source.parent.mkdir(parents=True)
         source.write_text(f"source-{provider}\n", encoding="utf-8")
@@ -446,7 +439,7 @@ def test_provider_reader_rejects_pair_axis_drift_even_with_updated_receipt(
 @pytest.mark.parametrize(
     ("gate_value", "write_summary", "error", "message"),
     [
-        (False, True, RuntimeError, "reporting is withheld"),
+        (False, True, RuntimeError, "confirmation failed"),
         (None, False, FileNotFoundError, "Calibration summary is missing"),
         ("false", True, TypeError, "affirmative overall gate decision"),
     ],
@@ -461,9 +454,15 @@ def test_report_builder_stops_before_association_reads_for_closed_gate(  # noqa:
 ) -> None:
     _guard_association_file_access(monkeypatch, tmp_path)
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     if write_summary:
         (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": False}),
+            encoding="utf-8",
+        )
+        (confirmation_root / reporting.confirmation.SUMMARY_NAME).write_text(
             json.dumps({"overall_gate_pass": gate_value}),
             encoding="utf-8",
         )
@@ -475,6 +474,7 @@ def test_report_builder_stops_before_association_reads_for_closed_gate(  # noqa:
     monkeypatch.setattr(reporting, "validate_provider_root", fail_if_read)
     monkeypatch.setattr(reporting.postprocess, "validate_derived_root", fail_if_read)
     monkeypatch.setattr(reporting.calibration, "validate_summary", fail_if_read)
+    monkeypatch.setattr(reporting.confirmation, "validate_summary", fail_if_read)
     monkeypatch.setattr(reporting, "_load_rule", fail_if_read)
     monkeypatch.setattr(reporting, "_burden_values", fail_if_read)
     monkeypatch.setattr(reporting, "_read_inference", fail_if_read)
@@ -485,7 +485,79 @@ def test_report_builder_stops_before_association_reads_for_closed_gate(  # noqa:
             provider_root=tmp_path / "providers",
             postprocess_root=tmp_path / "postprocess",
             calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
             rule_path=tmp_path / "rule.json",
+            output_root=tmp_path / "report",
+        )
+
+
+def test_report_builder_recomputes_confirmation_before_association_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _guard_association_file_access(monkeypatch, tmp_path)
+    calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
+    calibration_root.mkdir()
+    confirmation_root.mkdir()
+    (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+        json.dumps({"overall_gate_pass": False}),
+        encoding="utf-8",
+    )
+    (confirmation_root / reporting.confirmation.SUMMARY_NAME).write_text(
+        json.dumps(
+            {
+                "overall_gate_pass": True,
+                "composite_overall_gate_pass": True,
+            },
+        ),
+        encoding="utf-8",
+    )
+    rule_path = tmp_path / "rule.json"
+    rule_path.write_text(
+        json.dumps(
+            {
+                "calibration_gate": {"overall_gate_pass": True},
+                "inference_status": reporting.rule_module.REPORTABLE_STATUS,
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    def reject_tampered_confirmation(**_kwargs):
+        msg = "tampered confirmation evidence"
+        raise ValueError(msg)
+
+    def fail_if_association_accessed(*_args, **_kwargs):
+        msg = "association values were read"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        reporting.confirmation,
+        "load_validated_composite_gate",
+        reject_tampered_confirmation,
+    )
+    monkeypatch.setattr(reporting, "_load_rule", fail_if_association_accessed)
+    monkeypatch.setattr(
+        reporting,
+        "validate_provider_root",
+        fail_if_association_accessed,
+    )
+    monkeypatch.setattr(
+        reporting.postprocess,
+        "validate_derived_root",
+        fail_if_association_accessed,
+    )
+    monkeypatch.setattr(reporting, "_read_inference", fail_if_association_accessed)
+
+    with pytest.raises(ValueError, match="tampered confirmation evidence"):
+        reporting.build_report(
+            run_root=tmp_path / "run",
+            provider_root=tmp_path / "providers",
+            postprocess_root=tmp_path / "postprocess",
+            calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
+            rule_path=rule_path,
             output_root=tmp_path / "report",
         )
 
@@ -493,7 +565,7 @@ def test_report_builder_stops_before_association_reads_for_closed_gate(  # noqa:
 @pytest.mark.parametrize(
     ("gate_value", "write_summary", "error", "message"),
     [
-        (False, True, RuntimeError, "diagnostics is withheld"),
+        (False, True, RuntimeError, "confirmation failed"),
         (None, False, FileNotFoundError, "Calibration summary is missing"),
         ("false", True, TypeError, "affirmative overall gate decision"),
     ],
@@ -509,9 +581,15 @@ def test_diagnostics_stop_before_association_reads_for_closed_gate(  # noqa: PLR
     _guard_association_file_access(monkeypatch, tmp_path)
     postprocess_root = tmp_path / "postprocess"
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     if write_summary:
         (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": False}),
+            encoding="utf-8",
+        )
+        (confirmation_root / reporting.confirmation.SUMMARY_NAME).write_text(
             json.dumps({"overall_gate_pass": gate_value}),
             encoding="utf-8",
         )
@@ -522,6 +600,7 @@ def test_diagnostics_stop_before_association_reads_for_closed_gate(  # noqa: PLR
 
     monkeypatch.setattr(diagnosis.postprocess, "validate_derived_root", fail_if_read)
     monkeypatch.setattr(diagnosis.calibration, "validate_summary", fail_if_read)
+    monkeypatch.setattr(diagnosis.confirmation, "validate_summary", fail_if_read)
     monkeypatch.setattr(diagnosis.reporting, "_load_rule", fail_if_read)
     monkeypatch.setattr(diagnosis.reporting, "_read_inference", fail_if_read)
 
@@ -531,6 +610,7 @@ def test_diagnostics_stop_before_association_reads_for_closed_gate(  # noqa: PLR
             provider_root=tmp_path / "providers",
             postprocess_root=postprocess_root,
             calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
             rule_path=tmp_path / "rule.json",
             output_root=tmp_path / "diagnostics",
             cohorts=("CHOL",),
@@ -554,9 +634,15 @@ def test_report_validator_checks_gate_before_report_or_association_access(
 ) -> None:
     _guard_association_file_access(monkeypatch, tmp_path)
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     if write_summary:
         (calibration_root / reporting.calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": False}),
+            encoding="utf-8",
+        )
+        (confirmation_root / reporting.confirmation.SUMMARY_NAME).write_text(
             json.dumps({"overall_gate_pass": gate_value}),
             encoding="utf-8",
         )
@@ -577,6 +663,7 @@ def test_report_validator_checks_gate_before_report_or_association_access(
             provider_root=tmp_path / "providers",
             postprocess_root=tmp_path / "postprocess",
             calibration_root=calibration_root,
+            confirmation_root=confirmation_root,
             rule_path=tmp_path / "rule.json",
         )
 

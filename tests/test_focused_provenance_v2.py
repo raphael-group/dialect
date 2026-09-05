@@ -54,6 +54,7 @@ def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None
         provenance.Path("analysis/build_tcga_revision_focused_document_manifest.py"),
         provenance.Path("analysis/build_tcga_revision_focused_release.py"),
         provenance.Path("analysis/calibrate_tcga_revision_focused.py"),
+        provenance.Path("analysis/calibrate_tcga_revision_focused_confirmation.py"),
         provenance.Path("analysis/calibration_batch.py"),
         provenance.Path("analysis/diagnose_tcga_revision_focused.py"),
         provenance.Path("analysis/focused_revision_provenance.py"),
@@ -61,6 +62,9 @@ def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None
         provenance.Path("analysis/postprocess_tcga_revision_focused.py"),
         provenance.Path("analysis/report_tcga_revision_focused.py"),
         provenance.Path("analysis/tcga_revision_calibration_config.json"),
+        provenance.Path(
+            "analysis/tcga_revision_calibration_confirmation_config.json",
+        ),
     )
     assert expected == provenance.RELEASE_PIPELINE_FILES
 

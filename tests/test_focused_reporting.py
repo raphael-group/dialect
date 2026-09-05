@@ -117,11 +117,14 @@ def test_cohort_burden_histogram_reconstructs_every_summary_field() -> None:
     )
     assert histogram["cohort"].drop_duplicates().tolist() == list(cohorts)
     assert sum(map(len, reconstructed.values())) == reporting.EXPECTED_TUMOR_COUNT
-    assert reporting._validate_burden_histogram_summary(  # noqa: SLF001
-        histogram,
-        summary,
-        threshold,
-    ) == threshold
+    assert (
+        reporting._validate_burden_histogram_summary(  # noqa: SLF001
+            histogram,
+            summary,
+            threshold,
+        )
+        == threshold
+    )
 
     tampered = summary.copy()
     tampered.loc[0, "burden_p95"] += 1
@@ -337,6 +340,21 @@ def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> 
             for threshold in (0.01, 0.05)
         ],
     )
+    confirmation = pd.DataFrame(
+        [
+            {
+                **dict.fromkeys(reporting.confirmation.FINAL_TABLE_COLUMNS, ""),
+                "endpoint_id": f"endpoint-{index:04d}",
+                "provider": "mutsig",
+                "threshold": threshold,
+                "acceptance_upper_bound": {0.01: 0.02, 0.05: 0.07}[threshold],
+                "final_clopper_pearson_upper_bound": threshold,
+                "final_pass": reporting.confirmation.ENDPOINT_ACCEPTED,
+            }
+            for index, threshold in enumerate([0.01] * 1_024 + [0.05] * 1_024)
+        ],
+        columns=reporting.confirmation.FINAL_TABLE_COLUMNS,
+    )
     output = tmp_path / "figure6.pdf"
 
     reporting._plot_figure6(  # noqa: SLF001
@@ -344,6 +362,7 @@ def test_figure6_uses_v3_calibration_and_directional_overlap(tmp_path: Path) -> 
         summary=summary,
         overlap=overlap,
         calibration_table=calibration,
+        confirmation_table=confirmation,
         primary_adjustment="benjamini-yekutieli",
         primary_q=0.01,
         output=output,
@@ -495,11 +514,13 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
     provider_root = tmp_path / "providers"
     postprocess_root = tmp_path / "postprocess"
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     for external_root in (
         run_root,
         provider_root,
         postprocess_root,
         calibration_root,
+        confirmation_root,
     ):
         external_root.mkdir()
     features = [f"G{index}_M" for index in range(500)]
@@ -524,8 +545,12 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
         "postprocess_manifest": (
             postprocess_root / reporting.postprocess.ROOT_MANIFEST_NAME
         ),
-        "calibration_summary": (
-            calibration_root / reporting.calibration.SUMMARY_NAME
+        "calibration_summary": (calibration_root / reporting.calibration.SUMMARY_NAME),
+        "calibration_confirmation_summary": (
+            confirmation_root / reporting.confirmation.SUMMARY_NAME
+        ),
+        "calibration_confirmation_final_table": (
+            confirmation_root / reporting.confirmation.FINAL_TABLE_NAME
         ),
     }
     for path in external_paths.values():
@@ -567,9 +592,7 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
                 "tumors": tumor_count,
                 "selected_features": 500,
                 "tested_pairs": pair_policy["row_count"],
-                "same_base_pairs_excluded": pair_policy[
-                    "same_base_pairs_excluded"
-                ],
+                "same_base_pairs_excluded": pair_policy["same_base_pairs_excluded"],
                 "unfiltered_pair_count": pair_policy["unfiltered_row_count"],
                 "high_burden_fraction": 1.0,
             },
@@ -620,23 +643,21 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
             "cohort": np.repeat(
                 reporting.TCGA_COHORTS,
                 len(reporting.core.BMRS),
-                ),
-                "provider": list(reporting.core.BMRS) * len(reporting.TCGA_COHORTS),
-                "pairwise_rows": np.full(
-                    len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS),
-                    pair_policy["row_count"],
-                    dtype=np.int64,
-                ),
-                "elapsed_seconds": 0.0,
-                "user_cpu_seconds": 0.0,
-                "system_cpu_seconds": 0.0,
-                "peak_rss_bytes": 0,
-            },
-            columns=reporting.RUNTIME_COLUMNS,
-        ).to_csv(root / "runtime_summary.csv", index=False)
-    provider_pairwise_rows = (
-        len(reporting.TCGA_COHORTS) * pair_policy["row_count"]
-    )
+            ),
+            "provider": list(reporting.core.BMRS) * len(reporting.TCGA_COHORTS),
+            "pairwise_rows": np.full(
+                len(reporting.TCGA_COHORTS) * len(reporting.core.BMRS),
+                pair_policy["row_count"],
+                dtype=np.int64,
+            ),
+            "elapsed_seconds": 0.0,
+            "user_cpu_seconds": 0.0,
+            "system_cpu_seconds": 0.0,
+            "peak_rss_bytes": 0,
+        },
+        columns=reporting.RUNTIME_COLUMNS,
+    ).to_csv(root / "runtime_summary.csv", index=False)
+    provider_pairwise_rows = len(reporting.TCGA_COHORTS) * pair_policy["row_count"]
     pairwise_rows = provider_pairwise_rows * len(reporting.core.BMRS)
     fit_rows = []
     for scope, row_count in (
@@ -687,8 +708,7 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
         columns=reporting.COHORT_BURDEN_HISTOGRAM_COLUMNS,
     ).to_csv(root / "cohort_burden_histogram.csv", index=False)
     expected_frames = {
-        name: pd.read_csv(root / name)
-        for name in reporting.report_csv_columns()
+        name: pd.read_csv(root / name) for name in reporting.report_csv_columns()
     }
     (root / "table_s5.tex").write_text(
         reporting._table_s5_tex(  # noqa: SLF001
@@ -758,6 +778,14 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
                 external_paths["calibration_summary"],
                 relative_to=calibration_root,
             ),
+            "calibration_confirmation_summary": reporting._file_record(  # noqa: SLF001
+                external_paths["calibration_confirmation_summary"],
+                relative_to=confirmation_root,
+            ),
+            "calibration_confirmation_final_table": reporting._file_record(  # noqa: SLF001
+                external_paths["calibration_confirmation_final_table"],
+                relative_to=confirmation_root,
+            ),
             "reporting_rule": {
                 "path": rule_path.name,
                 "bytes": rule_path.stat().st_size,
@@ -782,6 +810,7 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
         "provider_root": provider_root,
         "postprocess_root": postprocess_root,
         "calibration_root": calibration_root,
+        "confirmation_root": confirmation_root,
         "rule_path": rule_path,
     }
     assert reporting.validate_report(root, **validate_kwargs)["contract"] == (

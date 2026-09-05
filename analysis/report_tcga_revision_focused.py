@@ -1,8 +1,8 @@
 """Build the focused DIALECT revision tables, runtime summary, and Figure 6.
 
 This stage consumes only the validated matched K=500 fit, provider-specific
-postprocessing, prespecified calibration, and frozen global reporting rule.  It
-does not choose thresholds or modify scientific results.
+postprocessing, prespecified two-stage calibration, and frozen global reporting
+rule. It does not choose thresholds or modify scientific results.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
 from analysis import freeze_tcga_revision_reporting_rule as rule_module
 from analysis import postprocess_tcga_revision_focused as postprocess
 from analysis import run_tcga_revision_k500 as core
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 SCHEMA_VERSION: Final = "1.0.0"
-REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v4"
+REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v5"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
@@ -176,6 +177,7 @@ def _write_atomic(path: Path, content: bytes) -> None:
 def _load_rule(
     rule_path: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     postprocess_root: Path,
 ) -> dict[str, Any]:
     rule = json.loads(rule_path.read_text(encoding="utf-8"))
@@ -196,10 +198,10 @@ def _load_rule(
     if (
         rule.get("schema_version") != SCHEMA_VERSION
         or rule.get("contract") != rule_module.RULE_CONTRACT
-        or rule.get("analysis_config_sha256")
-        != _sha256(rule_module.CONFIG_PATH)
-        or rule.get("calibration_config_sha256")
-        != _sha256(calibration.CONFIG_PATH)
+        or rule.get("analysis_config_sha256") != _sha256(rule_module.CONFIG_PATH)
+        or rule.get("calibration_config_sha256") != _sha256(calibration.CONFIG_PATH)
+        or rule.get("calibration_confirmation_config_sha256")
+        != _sha256(confirmation.CONFIG_PATH)
         or rule.get("scope")
         != "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
         or rule.get("primary_provider") != "mutsig"
@@ -208,8 +210,7 @@ def _load_rule(
         or rule.get("test") != "chi-square-one-df-profile-lrt"
         or rule.get("effective_p_policy")
         != "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
-        or rule.get("multiplicity")
-        != "provider-specific-complete-within-cohort-family"
+        or rule.get("multiplicity") != "provider-specific-complete-within-cohort-family"
         or rule.get("primary_adjustment") != "benjamini-yekutieli"
         or rule.get("sensitivity_adjustment") != "benjamini-hochberg"
         or not isinstance(primary_q, (int, float))
@@ -221,29 +222,31 @@ def _load_rule(
         != "primary-provider-rho-sign-after-nondirectional-rejection"
         or rule.get("direction_unavailable")
         != "retain-nondirectional-rejection-exclude-from-me-co-lists"
-        or rule.get("provider_overlap")
-        != "descriptive-only-not-an-inferential-vote"
+        or rule.get("provider_overlap") != "descriptive-only-not-an-inferential-vote"
         or rule.get("me_presentation")
         != "primary-MutSig-with-CBaSE-continuity-comparison"
         or rule.get("co_presentation")
         != "primary-MutSig-with-CBaSE-and-DIG-sensitivity"
         or rule.get("thresholds_selected_from_observed_pairs") is not False
-        or rule.get("claim_scope")
-        != "finite-scenario-calibrated-nominal-inference"
+        or rule.get("claim_scope") != "finite-scenario-calibrated-nominal-inference"
         or rule.get("calibration_interpretation")
         != "finite-scenario-stress-not-formal-uniform-FDR-proof"
         or not isinstance(gate_pass, bool)
         or gate.get("provider") != "mutsig"
         or gate.get("endpoint_unit") != "cohort-sentinel-pair-alpha"
-        or gate.get("method")
-        != (
-            "pair-resolved-simultaneous-one-sided-exact-binomial-"
-            "clopper-pearson-with-bonferroni"
-        )
+        or gate.get("method") != "two-stage-alpha-spending-exact-binomial-confirmation"
         or gate.get("endpoint_count") != 2_048
-        or gate.get("familywise_error") != 0.05
-        or gate.get("acceptance_upper_bounds")
-        != {"0.01": 0.02, "0.05": 0.07}
+        or gate.get("total_familywise_error") != 0.05
+        or gate.get("acceptance_upper_bounds") != {"0.01": 0.02, "0.05": 0.07}
+        or gate.get("source_calibration_overall_gate_pass") is not False
+        or gate.get("source_calibration_passed_endpoint_count") != 2_047
+        or gate.get("stage1_familywise_error") != 0.025
+        or gate.get("stage1_selected_endpoint_count") != 1
+        or gate.get("stage2_familywise_error") != 0.025
+        or gate.get("stage2_endpoint_count") != 1
+        or gate.get("stage2_replicates_per_selected_endpoint") != 100_000
+        or gate.get("stage1_and_stage2_counts_pooled") is not False
+        or gate.get("additional_confirmation_stage_permitted") is not False
         or rule.get("inference_status") != expected_status
         or (
             rule.get("inference_status") == rule_module.REPORTABLE_STATUS
@@ -252,12 +255,15 @@ def _load_rule(
         or (
             rule.get("inference_status") == rule_module.WITHHELD_STATUS
             and rule.get("withheld_reason")
-            != "prespecified-finite-scenario-calibration-gate-failed"
+            != "prespecified-two-stage-calibration-confirmation-failed"
         )
         or rule.get("calibration_summary_sha256")
         != _sha256(calibration_root / calibration.SUMMARY_NAME)
-        or rule.get("postprocess_manifest_sha256")
-        != expected_postprocess_sha256
+        or rule.get("calibration_confirmation_summary_sha256")
+        != _sha256(confirmation_root / confirmation.SUMMARY_NAME)
+        or rule.get("calibration_confirmation_final_table_sha256")
+        != _sha256(confirmation_root / confirmation.FINAL_TABLE_NAME)
+        or rule.get("postprocess_manifest_sha256") != expected_postprocess_sha256
     ):
         msg = "Frozen reporting rule is invalid or bound to different inputs."
         raise ValueError(msg)
@@ -267,6 +273,7 @@ def _load_rule(
 def _require_reportable_rule(  # noqa: PLR0913
     *,
     calibration_root: Path,
+    confirmation_root: Path,
     postprocess_root: Path,
     rule_path: Path,
     run_root: Path,
@@ -274,9 +281,15 @@ def _require_reportable_rule(  # noqa: PLR0913
     action: str,
 ) -> dict[str, Any]:
     """Validate the affirmative gate before any association-capable validator."""
-    gate_summary = rule_module.load_calibration_gate(calibration_root)
-    if not rule_module.calibration_gate_pass(gate_summary):
-        msg = f"Association-level {action} is withheld: calibration gate failed."
+    stage1_summary = rule_module.load_calibration_gate(calibration_root)
+    if rule_module.calibration_gate_pass(stage1_summary) is not False:
+        msg = "The preserved stage-one calibration must retain its failed decision."
+        raise ValueError(msg)
+    confirmation_preview = rule_module.load_confirmation_gate(confirmation_root)
+    if not rule_module.calibration_gate_pass(confirmation_preview):
+        msg = (
+            f"Association-level {action} is withheld: calibration confirmation failed."
+        )
         raise RuntimeError(msg)
 
     if not rule_path.is_file():
@@ -308,15 +321,21 @@ def _require_reportable_rule(  # noqa: PLR0913
         msg = f"Association-level {action} is withheld: rule is not reportable."
         raise RuntimeError(msg)
 
-    validated_summary = calibration.validate_summary(
-        calibration_root,
+    validated_summary = confirmation.load_validated_composite_gate(
+        calibration_root=calibration_root,
         run_root=run_root,
         provider_root=provider_root,
+        output_root=confirmation_root,
     )
     if rule_module.calibration_gate_pass(validated_summary) is not True:
-        msg = "Calibration gate changed during complete validation."
+        msg = "Composite calibration gate changed during complete validation."
         raise RuntimeError(msg)
-    rule = _load_rule(rule_path, calibration_root, postprocess_root)
+    rule = _load_rule(
+        rule_path,
+        calibration_root,
+        confirmation_root,
+        postprocess_root,
+    )
     if rule["inference_status"] != rule_module.REPORTABLE_STATUS:
         msg = f"Association-level {action} is withheld: rule is not reportable."
         raise RuntimeError(msg)
@@ -353,10 +372,9 @@ def _threshold_crossing(
     if not math.isfinite(threshold) or not 0 < threshold <= 1:
         msg = "A q-value threshold must be finite and lie in (0, 1]."
         raise ValueError(msg)
-    return (
-        frame[_log_q_column(provider, adjustment)].to_numpy(dtype=np.float64)
-        <= math.log(threshold)
-    )
+    return frame[_log_q_column(provider, adjustment)].to_numpy(
+        dtype=np.float64,
+    ) <= math.log(threshold)
 
 
 def _threshold_label(adjustment: str, threshold: float) -> str:
@@ -475,8 +493,12 @@ def _calibration_gate_maxima(calibration_table: pd.DataFrame) -> pd.DataFrame:
     if not required.issubset(calibration_table.columns):
         msg = "Calibration table lacks pair-resolved gate columns."
         raise ValueError(msg)
-    gate_mask = calibration_table["gate_endpoint"].astype("boolean").fillna(
-        value=False,
+    gate_mask = (
+        calibration_table["gate_endpoint"]
+        .astype("boolean")
+        .fillna(
+            value=False,
+        )
     )
     gate = calibration_table.loc[gate_mask].copy()
     if gate.empty:
@@ -519,6 +541,48 @@ def _calibration_gate_maxima(calibration_table: pd.DataFrame) -> pd.DataFrame:
                     group["clopper_pearson_upper_bound"].max(),
                 ),
                 "acceptance_upper_bound": float(acceptance[0]),
+            },
+        )
+    return pd.DataFrame(rows)
+
+
+def _confirmation_gate_maxima(confirmation_table: pd.DataFrame) -> pd.DataFrame:
+    """Return each alpha's worst independently selected final gate evidence."""
+    if tuple(confirmation_table.columns) != confirmation.FINAL_TABLE_COLUMNS:
+        msg = "Calibration confirmation table violates its exact schema."
+        raise ValueError(msg)
+    if (
+        len(confirmation_table) != 2_048
+        or confirmation_table["endpoint_id"].duplicated().any()
+        or not confirmation_table["provider"].eq("mutsig").all()
+        or set(confirmation_table["threshold"].astype(float)) != {0.01, 0.05}
+        or not confirmation_table["final_pass"].eq(confirmation.ENDPOINT_ACCEPTED).all()
+    ):
+        msg = "Calibration confirmation table is not the complete passed family."
+        raise ValueError(msg)
+    rows = []
+    for threshold, group in confirmation_table.groupby("threshold", sort=True):
+        final_bounds = pd.to_numeric(
+            group["final_clopper_pearson_upper_bound"],
+            errors="raise",
+        )
+        acceptance = pd.to_numeric(
+            group["acceptance_upper_bound"],
+            errors="raise",
+        )
+        if (
+            len(group) != 1_024
+            or not np.isfinite(final_bounds.to_numpy(dtype=float)).all()
+            or not np.isfinite(acceptance.to_numpy(dtype=float)).all()
+            or not acceptance.eq(acceptance.iloc[0]).all()
+        ):
+            msg = "Calibration confirmation endpoint family is incomplete."
+            raise ValueError(msg)
+        rows.append(
+            {
+                "threshold": float(threshold),
+                "maximum_clopper_pearson_upper_bound": float(final_bounds.max()),
+                "acceptance_upper_bound": float(acceptance.iloc[0]),
             },
         )
     return pd.DataFrame(rows)
@@ -804,10 +868,7 @@ def _cohort_summary_row(  # noqa: PLR0913
                 (crossing & directions.eq("CO").to_numpy()).sum(),
             )
             row[f"{prefix}_direction_unavailable"] = int(
-                (
-                    crossing
-                    & ~directions.isin(["ME", "CO"]).to_numpy()
-                ).sum(),
+                (crossing & ~directions.isin(["ME", "CO"]).to_numpy()).sum(),
             )
     return row
 
@@ -865,15 +926,15 @@ def _top_primary_pairs(
         provider for provider in core.BMRS if provider != "mutsig"
     )
     result["descriptive_direction_concordant_provider_count"] = sum(
-        result[
-            f"{_decision_prefix(provider, 'primary')}_direction_concordant"
-        ].astype(np.int8)
+        result[f"{_decision_prefix(provider, 'primary')}_direction_concordant"].astype(
+            np.int8,
+        )
         for provider in descriptive_providers
     )
     result["descriptive_direction_discordant_provider_count"] = sum(
-        result[
-            f"{_decision_prefix(provider, 'primary')}_direction_discordant"
-        ].astype(np.int8)
+        result[f"{_decision_prefix(provider, 'primary')}_direction_discordant"].astype(
+            np.int8,
+        )
         for provider in descriptive_providers
     )
     return result.drop(columns="absolute_mutsig_rho")
@@ -1013,9 +1074,7 @@ def _fit_diagnostic_rows(
                 fixed_point = diagnostics["fit_fixed_point_residual"]
                 kkt = diagnostics["fit_kkt_residual"]
                 converged = diagnostics["fit_converged"]
-                effects = chunk[
-                    f"{provider}_effect_identifiability"
-                ].astype("string")
+                effects = chunk[f"{provider}_effect_identifiability"].astype("string")
                 if not effects.isin(
                     [
                         "full-affine-rank",
@@ -1144,11 +1203,14 @@ def _expected_selected_burden(
             if len(background) != len(selected):
                 msg = f"Sample-specific PMF axis changed: {cohort}/{provider}"
                 raise ValueError(msg)
-            expected += np.fromiter(
-                (_pmf_mean(item) for item in background),
-                dtype=float,
-                count=len(selected),
-            ) + fitted_pi
+            expected += (
+                np.fromiter(
+                    (_pmf_mean(item) for item in background),
+                    dtype=float,
+                    count=len(selected),
+                )
+                + fitted_pi
+            )
     return selected.sum(axis=1).to_numpy(dtype=float), expected
 
 
@@ -1174,10 +1236,9 @@ def _aggregate_burden_bins(
         raise ValueError(msg)
     observed_log = np.log1p(observed_values)
     expected_log = np.log1p(expected_values)
-    if (
-        (observed_log > BURDEN_LOG1P_MAX).any()
-        or (expected_log > BURDEN_LOG1P_MAX).any()
-    ):
+    if (observed_log > BURDEN_LOG1P_MAX).any() or (
+        expected_log > BURDEN_LOG1P_MAX
+    ).any():
         msg = "Figure 6 burden exceeds the frozen aggregate-bin domain."
         raise ValueError(msg)
     edges = np.linspace(0.0, BURDEN_LOG1P_MAX, BURDEN_BIN_COUNT + 1)
@@ -1233,6 +1294,7 @@ def _plot_figure6(  # noqa: PLR0913
     summary: pd.DataFrame,
     overlap: pd.DataFrame,
     calibration_table: pd.DataFrame,
+    confirmation_table: pd.DataFrame,
     primary_adjustment: str,
     primary_q: float,
     output: Path,
@@ -1309,9 +1371,9 @@ def _plot_figure6(  # noqa: PLR0913
     offsets = {"cbase": -0.22, "dig": 0.0, "mutsig": 0.22}
     provider_counts = []
     for provider in core.BMRS:
-        counts = ordered[
-            f"{_decision_prefix(provider, 'primary')}_co"
-        ].to_numpy(dtype=float)
+        counts = ordered[f"{_decision_prefix(provider, 'primary')}_co"].to_numpy(
+            dtype=float,
+        )
         provider_counts.append(counts)
         ax.scatter(
             np.log10(counts + 1),
@@ -1339,9 +1401,7 @@ def _plot_figure6(  # noqa: PLR0913
     ax.grid(axis="x", alpha=0.2)
 
     ax = ax_c
-    marginal = calibration_table.loc[
-        calibration_table["screen"].eq("marginal_lrt"),
-    ]
+    marginal = calibration_table.loc[calibration_table["screen"].eq("marginal_lrt"),]
     cell_rates = marginal.groupby(
         ["cohort", "provider", "threshold"],
         as_index=False,
@@ -1364,7 +1424,7 @@ def _plot_figure6(  # noqa: PLR0913
             color=PROVIDER_COLORS[provider],
             label=f"{PROVIDER_LABELS[provider]} cohort mean",
         )
-    gate_maxima = _calibration_gate_maxima(calibration_table)
+    gate_maxima = _confirmation_gate_maxima(confirmation_table)
     ax.scatter(
         gate_maxima["threshold"],
         gate_maxima["maximum_clopper_pearson_upper_bound"],
@@ -1372,7 +1432,7 @@ def _plot_figure6(  # noqa: PLR0913
         facecolors="none",
         edgecolors=PROVIDER_COLORS["mutsig"],
         s=22,
-        label="MutSig cohort worst pair",
+        label="Two-stage family worst endpoint",
     )
     acceptance = gate_maxima.groupby("threshold", as_index=False)[
         "acceptance_upper_bound"
@@ -1397,7 +1457,7 @@ def _plot_figure6(  # noqa: PLR0913
     ax.set_ylim(limits)
     ax.set_xlabel("Nominal p-value threshold")
     ax.set_ylabel("Rejection rate / upper bound")
-    ax.set_title("C  Fitted-null calibration; cohort worst pair", loc="left")
+    ax.set_title("C  Fitted-null calibration; two-stage bound", loc="left")
     ax.legend(frameon=False, ncols=2, loc="upper left")
 
     ax = ax_d
@@ -1544,8 +1604,7 @@ def _report_csv_frames(
     }
     expected_schemas = report_csv_columns()
     if any(
-        tuple(frame.columns) != expected_schemas[name]
-        for name, frame in frames.items()
+        tuple(frame.columns) != expected_schemas[name] for name, frame in frames.items()
     ):
         msg = "Generated report CSV violates its exact public schema."
         raise RuntimeError(msg)
@@ -1649,6 +1708,7 @@ def validate_report(  # noqa: PLR0913
     provider_root: Path | None = None,
     postprocess_root: Path | None = None,
     calibration_root: Path | None = None,
+    confirmation_root: Path | None = None,
     rule_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate the immutable reporting tree and its external input bindings."""
@@ -1657,6 +1717,7 @@ def validate_report(  # noqa: PLR0913
         provider_root,
         postprocess_root,
         calibration_root,
+        confirmation_root,
         rule_path,
     )
     if not all(path is not None for path in external_inputs):
@@ -1664,6 +1725,7 @@ def validate_report(  # noqa: PLR0913
         raise ValueError(msg)
     rule = _require_reportable_rule(
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         rule_path=rule_path,
         run_root=run_root,
@@ -1709,6 +1771,8 @@ def validate_report(  # noqa: PLR0913
             "provider_manifest",
             "postprocess_manifest",
             "calibration_summary",
+            "calibration_confirmation_summary",
+            "calibration_confirmation_final_table",
             "reporting_rule",
         }
         or manifest.get("high_burden_definition", {}).get("pooled_tumor_count")
@@ -1754,6 +1818,14 @@ def validate_report(  # noqa: PLR0913
             calibration_root / calibration.SUMMARY_NAME,
             calibration_root,
         ),
+        "calibration_confirmation_summary": (
+            confirmation_root / confirmation.SUMMARY_NAME,
+            confirmation_root,
+        ),
+        "calibration_confirmation_final_table": (
+            confirmation_root / confirmation.FINAL_TABLE_NAME,
+            confirmation_root,
+        ),
     }
     for name, (path, root) in input_paths.items():
         if manifest["inputs"][name] != _file_record(path, relative_to=root):
@@ -1785,8 +1857,7 @@ def validate_report(  # noqa: PLR0913
     }
     expected_schemas = report_csv_columns()
     if any(
-        tuple(frame.columns) != expected_schemas[name]
-        for name, frame in frames.items()
+        tuple(frame.columns) != expected_schemas[name] for name, frame in frames.items()
     ):
         msg = "Focused reporting CSV violates its exact public schema."
         raise ValueError(msg)
@@ -1826,11 +1897,16 @@ def validate_report(  # noqa: PLR0913
             calibration_root / calibration.SUMMARY_TABLE_NAME,
             float_precision="round_trip",
         )
+        confirmation_table = pd.read_csv(
+            confirmation_root / confirmation.FINAL_TABLE_NAME,
+            float_precision="round_trip",
+        )
         _plot_figure6(
             burden_bins=expected_frames["figure6_burden_bins.csv"],
             summary=expected_frames["table_s5.csv"],
             overlap=expected_frames["provider_overlap.csv"],
             calibration_table=calibration_table,
+            confirmation_table=confirmation_table,
             primary_adjustment=str(rule["primary_adjustment"]),
             primary_q=float(rule["primary_q_threshold"]),
             output=expected_figure,
@@ -1855,8 +1931,8 @@ def validate_report(  # noqa: PLR0913
     )
     expected_overlap_cohorts = np.repeat(TCGA_COHORTS, 2).tolist()
     expected_overlap_directions = ["ME", "CO"] * len(TCGA_COHORTS)
-    figure_burden_schema_valid = (
-        figure_burden.columns.tolist() == list(BURDEN_BIN_COLUMNS)
+    figure_burden_schema_valid = figure_burden.columns.tolist() == list(
+        BURDEN_BIN_COLUMNS,
     )
     figure_burden_numeric_columns = list(BURDEN_BIN_COLUMNS[2:])
     figure_burden_values = (
@@ -1904,7 +1980,9 @@ def validate_report(  # noqa: PLR0913
                     f"{_decision_prefix(provider, label)}_co",
                     f"{_decision_prefix(provider, label)}_direction_unavailable",
                 ]
-            ].sum(axis=1).to_numpy(),
+            ]
+            .sum(axis=1)
+            .to_numpy(),
         )
         for provider in core.BMRS
         for label in ("primary", "sensitivity")
@@ -2067,6 +2145,7 @@ def build_report(  # noqa: PLR0913
     provider_root: Path,
     postprocess_root: Path,
     calibration_root: Path,
+    confirmation_root: Path,
     rule_path: Path,
     output_root: Path,
 ) -> Path:
@@ -2074,6 +2153,7 @@ def build_report(  # noqa: PLR0913
     cohorts = tuple(TCGA_COHORTS)
     rule = _require_reportable_rule(
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         postprocess_root=postprocess_root,
         rule_path=rule_path,
         run_root=run_root,
@@ -2104,6 +2184,10 @@ def build_report(  # noqa: PLR0913
         calibration_root / calibration.SUMMARY_TABLE_NAME,
         float_precision="round_trip",
     )
+    confirmation_table = pd.read_csv(
+        confirmation_root / confirmation.FINAL_TABLE_NAME,
+        float_precision="round_trip",
+    )
 
     output_root.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
@@ -2131,6 +2215,7 @@ def build_report(  # noqa: PLR0913
         summary=summary,
         overlap=overlap,
         calibration_table=calibration_table,
+        confirmation_table=confirmation_table,
         primary_adjustment=primary_adjustment,
         primary_q=primary_q,
         output=figure_path,
@@ -2182,6 +2267,14 @@ def build_report(  # noqa: PLR0913
                 calibration_root / calibration.SUMMARY_NAME,
                 relative_to=calibration_root,
             ),
+            "calibration_confirmation_summary": _file_record(
+                confirmation_root / confirmation.SUMMARY_NAME,
+                relative_to=confirmation_root,
+            ),
+            "calibration_confirmation_final_table": _file_record(
+                confirmation_root / confirmation.FINAL_TABLE_NAME,
+                relative_to=confirmation_root,
+            ),
             "reporting_rule": {
                 "path": rule_path.name,
                 "bytes": rule_path.stat().st_size,
@@ -2202,6 +2295,7 @@ def build_report(  # noqa: PLR0913
         provider_root=provider_root,
         postprocess_root=postprocess_root,
         calibration_root=calibration_root,
+        confirmation_root=confirmation_root,
         rule_path=rule_path,
     )
     return output_root
@@ -2213,6 +2307,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-root", type=Path, required=True)
     parser.add_argument("--postprocess-root", type=Path, required=True)
     parser.add_argument("--calibration-root", type=Path, required=True)
+    parser.add_argument("--confirmation-root", type=Path, required=True)
     parser.add_argument("--reporting-rule", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     return parser
@@ -2227,6 +2322,7 @@ def main() -> None:
             provider_root=args.provider_root.resolve(),
             postprocess_root=args.postprocess_root.resolve(),
             calibration_root=args.calibration_root.resolve(),
+            confirmation_root=args.confirmation_root.resolve(),
             rule_path=args.reporting_rule.resolve(),
             output_root=args.output_root.absolute(),
         ),

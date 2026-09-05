@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from analysis import build_tcga_revision_focused_release as release
 from analysis import calibrate_tcga_revision_focused as calibration
+from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
 from analysis import focused_revision_provenance as provenance
 from analysis import postprocess_tcga_revision_focused as postprocess
 
@@ -87,8 +88,11 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     broken_provider_artifact: bool = False,
     extra_payload: bool = False,
     sample_level_report: bool = False,
-    calibration_gate: object = True,
+    calibration_gate: object = False,
     include_calibration_gate: bool = True,
+    confirmation_gate: object = True,
+    include_confirmation_gate: bool = True,
+    tampered_confirmation_evidence: bool = False,
     rule_gate: object = True,
     include_rule_gate: bool = True,
     tampered_table_s5: bool = False,
@@ -130,6 +134,10 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     calibration_config = add(
         calibration_config_name,
         calibration.CONFIG_PATH.read_bytes(),
+    )
+    confirmation_config = add(
+        release.CONFIRMATION_CONFIG_MEMBER,
+        confirmation.CONFIG_PATH.read_bytes(),
     )
     input_name = "provenance/input/input_manifest.json"
     input_cohort_records = [
@@ -269,9 +277,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
             release.core.TESTED_FAMILY_NO_PRETEST_FILTER
         ),
         "pair_construction": release.core.TESTED_FAMILY_PAIR_CONSTRUCTION,
-        "same_base_missense_nonsense": (
-            release.core.TESTED_FAMILY_SAME_BASE_POLICY
-        ),
+        "same_base_missense_nonsense": (release.core.TESTED_FAMILY_SAME_BASE_POLICY),
         **release.core._pair_contract(features),  # noqa: SLF001
     }
     for cohort in release.TCGA_COHORTS:
@@ -511,24 +517,28 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     lrt = np.zeros((10_000, 32), dtype=np.float64)
     reportable = np.ones((10_000, 32), dtype=bool)
     fallback = np.zeros((10_000, 32), dtype=bool)
-    buffer = BytesIO()
-    np.savez_compressed(
-        buffer,
-        marginal_lrt=lrt,
-        marginal_reportable=reportable,
-        scalar_fallback=fallback,
-        sentinel_pairs=sentinel_pairs,
-    )
-    calibration_array_bytes = buffer.getvalue()
     calibration_task_records = []
     calibration_rows = []
     for cell in calibration_protocol:
         cohort = cell.cohort
         provider = cell.provider
         cell_root = f"results/calibration/tasks/{cohort}/{provider}"
+        cell_lrt = lrt
+        if cohort == "UVM" and provider == "mutsig":
+            cell_lrt = lrt.copy()
+            cell_lrt[:107, 0] = 7.0
+            cell_lrt[107:651, 0] = 4.0
+        buffer = BytesIO()
+        np.savez_compressed(
+            buffer,
+            marginal_lrt=cell_lrt,
+            marginal_reportable=reportable,
+            scalar_fallback=fallback,
+            sentinel_pairs=sentinel_pairs,
+        )
         cell_data = add(
             f"{cell_root}/{calibration.TASK_DATA_NAME}",
-            calibration_array_bytes,
+            buffer.getvalue(),
         )
         self_peak = calibration._normalized_peak_rss(  # noqa: SLF001
             1,
@@ -572,9 +582,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         )
         raw_task_name = f"provenance/run/tasks/{cohort}/{provider}/task_manifest.json"
         raw_task_member = members[raw_task_name]
-        single = raw_tasks[(cohort, provider)]["outputs"][
-            "single_gene_results.csv"
-        ]
+        single = raw_tasks[(cohort, provider)]["outputs"]["single_gene_results.csv"]
         cell_manifest_name = f"{cell_root}/{calibration.TASK_MANIFEST_NAME}"
         cell_manifest = add_json(
             cell_manifest_name,
@@ -629,6 +637,11 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         )
         for pair_index in range(32):
             for alpha in (0.01, 0.05):
+                events = (
+                    ({0.01: 107, 0.05: 651}[alpha])
+                    if cohort == "UVM" and provider == "mutsig" and pair_index == 0
+                    else 0
+                )
                 row: dict[str, object] = {
                     "cohort": cohort,
                     "provider": provider,
@@ -636,9 +649,9 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     "screen": calibration.MARGINAL_SCREEN,
                     "sentinel_pair_index": pair_index,
                     "threshold": alpha,
-                    "events": 0,
+                    "events": events,
                     "trials": 10_000,
-                    "rate": 0.0,
+                    "rate": events / 10_000,
                     "reportable_trials": 10_000,
                     "nonreportable_trials": 0,
                     "gate_endpoint": cell.role == calibration.PRIMARY_ROLE,
@@ -652,7 +665,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 if cell.role == calibration.PRIMARY_ROLE:
                     row.update(
                         calibration._gate_fields(  # noqa: SLF001
-                            successes=0,
+                            successes=events,
                             trials=10_000,
                             alpha=alpha,
                             config=calibration_config_value,
@@ -674,9 +687,11 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         calibration_config_value,
     )
     calibration_gate_passed = int(
-        calibration_gate_rows["endpoint_gate_pass"].eq(
+        calibration_gate_rows["endpoint_gate_pass"]
+        .eq(
             calibration.ENDPOINT_ACCEPTED,
-        ).sum(),
+        )
+        .sum(),
     )
     affirmative_gate = calibration_config_value["affirmative_gate"]
     reporting_candidates = calibration_config_value["reporting_candidates"]
@@ -742,6 +757,359 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         calibration_summary_payload,
     )
 
+    confirmation_config_value = confirmation._load_config()  # noqa: SLF001
+    confirmation_stage1 = confirmation_config_value["two_stage_gate"]["stage1"]
+    confirmation_stage1_error = float(
+        confirmation_stage1["familywise_error"],
+    ) / int(confirmation_stage1["endpoint_count"])
+    confirmation_base_rows = []
+    for source_row in calibration_gate_rows.to_dict(orient="records"):
+        endpoint = confirmation._endpoint_from_row(source_row)  # noqa: SLF001
+        upper = calibration._clopper_pearson_upper_bound(  # noqa: SLF001
+            successes=int(source_row["events"]),
+            trials=int(source_row["trials"]),
+            endpoint_error=confirmation_stage1_error,
+        )
+        acceptance = float(
+            confirmation_config_value["two_stage_gate"]["acceptance_upper_bounds"][
+                f"{endpoint.threshold:.2f}"
+            ],
+        )
+        passed = upper <= acceptance
+        confirmation_base_rows.append(
+            {
+                "endpoint_id": endpoint.endpoint_id,
+                "cohort": endpoint.cohort,
+                "provider": endpoint.provider,
+                "sentinel_pair_index": endpoint.sentinel_pair_index,
+                "threshold": endpoint.threshold,
+                "acceptance_upper_bound": acceptance,
+                "stage1_events": int(source_row["events"]),
+                "stage1_trials": int(source_row["trials"]),
+                "stage1_rate": int(source_row["events"]) / int(source_row["trials"]),
+                "stage1_reportable_trials": int(source_row["reportable_trials"]),
+                "stage1_nonreportable_trials": int(
+                    source_row["nonreportable_trials"],
+                ),
+                "stage1_familywise_error": confirmation_stage1["familywise_error"],
+                "stage1_endpoint_count": confirmation_stage1["endpoint_count"],
+                "stage1_endpoint_error": confirmation_stage1_error,
+                "stage1_clopper_pearson_upper_bound": upper,
+                "stage1_pass": (
+                    confirmation.ENDPOINT_ACCEPTED
+                    if passed
+                    else confirmation.ENDPOINT_REJECTED
+                ),
+                "selected_for_stage2": not passed,
+            },
+        )
+    confirmation_base = pd.DataFrame(confirmation_base_rows)
+    selected_endpoints = confirmation._selected_endpoints(  # noqa: SLF001
+        confirmation_base,
+    )
+    assert [endpoint.endpoint_id for endpoint in selected_endpoints] == [
+        "UVM__mutsig__sentinel-00__alpha-005",
+    ]
+    confirmation_sources = {
+        "calibration_config": _record(
+            calibration_config,
+            "analysis/tcga_revision_calibration_config.json",
+        ),
+        "calibration_run_manifest": _record(
+            calibration_run_member,
+            calibration.RUN_MANIFEST_NAME,
+        ),
+        "calibration_table": _record(
+            calibration_table,
+            calibration.SUMMARY_TABLE_NAME,
+        ),
+        "calibration_summary": _record(
+            calibration_summary,
+            calibration.SUMMARY_NAME,
+        ),
+        "production_completion": _record(
+            completion_member,
+            "completion_manifest.json",
+        ),
+        "provider_manifest": _record(
+            provider_member,
+            "provider_manifest.json",
+        ),
+    }
+    confirmation_run_payload = {
+        "schema_version": confirmation.SCHEMA_VERSION,
+        "contract": confirmation.RUN_CONTRACT,
+        "config": _record(
+            confirmation_config,
+            "analysis/tcga_revision_calibration_confirmation_config.json",
+        ),
+        "source_records": confirmation_sources,
+        "source_calibration_overall_gate_pass": False,
+        "stage1": {
+            "familywise_error": confirmation_stage1["familywise_error"],
+            "endpoint_count": confirmation_stage1["endpoint_count"],
+            "endpoint_error": confirmation_stage1_error,
+            "selection_rule": confirmation_stage1["selection_rule"],
+            "selected_endpoint_count": len(selected_endpoints),
+            "selected_endpoints": [
+                confirmation._endpoint_payload(endpoint)  # noqa: SLF001
+                for endpoint in selected_endpoints
+            ],
+        },
+        "stage2": dict(
+            confirmation_config_value["two_stage_gate"]["stage2"],
+        ),
+        "resource_contract": dict(confirmation_config_value["resources"]),
+        "runtime_resource_observation": confirmation._resource_observation(  # noqa: SLF001
+            confirmation_config_value,
+        ),
+        "thread_environment": dict(calibration.THREAD_ENV),
+        "result_blindness": confirmation._result_blindness_receipt(),  # noqa: SLF001
+    }
+    confirmation_run = add_json(
+        release.CONFIRMATION_RUN_MEMBER,
+        confirmation_run_payload,
+    )
+    confirmation_stage2 = confirmation_config_value["two_stage_gate"]["stage2"]
+    confirmation_task_records = []
+    stage2_by_endpoint = {}
+    for endpoint in selected_endpoints:
+        endpoint_root = f"results/calibration_confirmation/tasks/{endpoint.endpoint_id}"
+        endpoint_pair = sentinel_pairs[endpoint.sentinel_pair_index]
+        confirmation_lrt = np.zeros(100_000, dtype=np.float64)
+        if tampered_confirmation_evidence:
+            confirmation_lrt[0] = 7.0
+        confirmation_reportable = np.ones(100_000, dtype=bool)
+        confirmation_fallback = np.zeros(100_000, dtype=bool)
+        confirmation_buffer = BytesIO()
+        np.savez_compressed(
+            confirmation_buffer,
+            likelihood_ratio=confirmation_lrt,
+            reportable=confirmation_reportable,
+            scalar_fallback=confirmation_fallback,
+            sentinel_pair=endpoint_pair,
+        )
+        confirmation_data = add(
+            f"{endpoint_root}/{confirmation.TASK_DATA_NAME}",
+            confirmation_buffer.getvalue(),
+        )
+        endpoint_seed = confirmation._endpoint_seed(  # noqa: SLF001
+            int(confirmation_config_value["seed"]),
+            endpoint,
+        )
+        raw_task_member = members[
+            f"provenance/run/tasks/{endpoint.cohort}/{endpoint.provider}/"
+            "task_manifest.json"
+        ]
+        single = raw_tasks[(endpoint.cohort, endpoint.provider)]["outputs"][
+            "single_gene_results.csv"
+        ]
+        self_peak = calibration._normalized_peak_rss(  # noqa: SLF001
+            1,
+            source="resource.getrusage(resource.RUSAGE_SELF).ru_maxrss",
+            semantics="task-process-maximum-resident-set-size",
+        )
+        child_peak = calibration._normalized_peak_rss(  # noqa: SLF001
+            1,
+            source="resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss",
+            semantics="maximum-over-terminated-children-not-additive",
+        )
+        confirmation_usage = {
+            "elapsed_seconds": 1.0,
+            "peak_rss": self_peak,
+            "user_cpu_seconds": 0.5,
+            "system_cpu_seconds": 0.25,
+            "self": {
+                "user_cpu_seconds": 0.5,
+                "system_cpu_seconds": 0.25,
+                "peak_rss": self_peak,
+            },
+            "terminated_children": {
+                "user_cpu_seconds": 0.1,
+                "system_cpu_seconds": 0.05,
+                "peak_rss": child_peak,
+            },
+        }
+        confirmation_task_payload = {
+            "schema_version": confirmation.SCHEMA_VERSION,
+            "contract": confirmation.TASK_CONTRACT,
+            "endpoint": confirmation._endpoint_payload(endpoint),  # noqa: SLF001
+            "config_sha256": confirmation_config.sha256,
+            "run_manifest_sha256": confirmation_run.sha256,
+            "seed": endpoint_seed,
+            "replicates": 100_000,
+            "replicate_rng": confirmation_config_value["simulation"]["replicate_rng"],
+            "replicate_shards": confirmation_config_value["simulation"][
+                "replicate_shards"
+            ],
+            "replicate_shard_rule": confirmation_config_value["simulation"][
+                "replicate_shard_rule"
+            ],
+            "shard_seeds": [
+                confirmation._shard_seed(endpoint_seed, index)  # noqa: SLF001
+                for index in range(
+                    int(
+                        confirmation_config_value["simulation"]["replicate_shards"],
+                    ),
+                )
+            ],
+            "sentinel_pair": endpoint_pair.tolist(),
+            "sentinel_features": [features[int(index)] for index in endpoint_pair],
+            "fit_kernel": {
+                "contract": confirmation_config_value["simulation"]["fit_kernel"],
+                "replicate_chunk_rule": confirmation_config_value["simulation"][
+                    "replicate_chunk_rule"
+                ],
+                "replicate_chunk_size": calibration._replicate_chunk_size(  # noqa: SLF001
+                    sample_counts[endpoint.cohort],
+                ),
+                "scalar_fallback_count": 0,
+            },
+            "worker_topology": confirmation._worker_topology(  # noqa: SLF001
+                confirmation_config_value,
+            ),
+            "source_task_manifest": _record(
+                raw_task_member,
+                f"tasks/{endpoint.cohort}/{endpoint.provider}/task_manifest.json",
+            ),
+            "single_gene_input": {
+                "path": (
+                    f"tasks/{endpoint.cohort}/{endpoint.provider}/"
+                    "single_gene_results.csv"
+                ),
+                "bytes": single["bytes"],
+                "sha256": single["sha256"],
+            },
+            "reportable_count": 100_000,
+            "resource_usage": confirmation_usage,
+            "output": _record(confirmation_data, confirmation.TASK_DATA_NAME),
+        }
+        confirmation_task = add_json(
+            f"{endpoint_root}/{confirmation.TASK_MANIFEST_NAME}",
+            confirmation_task_payload,
+        )
+        task_record = _record(
+            confirmation_task,
+            f"tasks/{endpoint.endpoint_id}/{confirmation.TASK_MANIFEST_NAME}",
+        )
+        task_record.update({"endpoint": confirmation_task_payload["endpoint"]})
+        confirmation_task_records.append(task_record)
+        upper = calibration._clopper_pearson_upper_bound(  # noqa: SLF001
+            successes=0,
+            trials=100_000,
+            endpoint_error=float(confirmation_stage2["familywise_error"]),
+        )
+        stage2_by_endpoint[endpoint.endpoint_id] = {
+            "stage2_events": 0,
+            "stage2_trials": 100_000,
+            "stage2_rate": 0.0,
+            "stage2_reportable_trials": 100_000,
+            "stage2_nonreportable_trials": 0,
+            "stage2_familywise_error": confirmation_stage2["familywise_error"],
+            "stage2_endpoint_count": 1,
+            "stage2_endpoint_error": confirmation_stage2["familywise_error"],
+            "stage2_clopper_pearson_upper_bound": upper,
+            "stage2_pass": confirmation.ENDPOINT_ACCEPTED,
+        }
+    confirmation_final_rows = []
+    for base_row in confirmation_base.to_dict(orient="records"):
+        row = dict(base_row)
+        if row["endpoint_id"] in stage2_by_endpoint:
+            stage2_evidence = stage2_by_endpoint[row["endpoint_id"]]
+            row.update(stage2_evidence)
+            row.update(
+                {
+                    "final_evidence_stage": "stage2",
+                    "final_clopper_pearson_upper_bound": stage2_evidence[
+                        "stage2_clopper_pearson_upper_bound"
+                    ],
+                    "final_pass": stage2_evidence["stage2_pass"],
+                },
+            )
+        else:
+            row.update(
+                {
+                    "stage2_events": "",
+                    "stage2_trials": "",
+                    "stage2_rate": "",
+                    "stage2_reportable_trials": "",
+                    "stage2_nonreportable_trials": "",
+                    "stage2_familywise_error": "",
+                    "stage2_endpoint_count": "",
+                    "stage2_endpoint_error": "",
+                    "stage2_clopper_pearson_upper_bound": "",
+                    "stage2_pass": confirmation.STAGE2_NOT_APPLICABLE,
+                    "final_evidence_stage": "stage1",
+                    "final_clopper_pearson_upper_bound": row[
+                        "stage1_clopper_pearson_upper_bound"
+                    ],
+                    "final_pass": row["stage1_pass"],
+                },
+            )
+        confirmation_final_rows.append(row)
+    confirmation_final_frame = pd.DataFrame(
+        confirmation_final_rows,
+        columns=confirmation.FINAL_TABLE_COLUMNS,
+    )
+    confirmation_final_table = add(
+        release.CONFIRMATION_FINAL_TABLE_MEMBER,
+        confirmation._summary_csv_bytes(confirmation_final_frame),  # noqa: SLF001
+    )
+    confirmation_summary_payload = {
+        "schema_version": confirmation.SCHEMA_VERSION,
+        "contract": confirmation.SUMMARY_CONTRACT,
+        "config_sha256": confirmation_config.sha256,
+        "source_calibration_overall_gate_pass": False,
+        "endpoint_count": 2_048,
+        "stage1_familywise_error": confirmation_stage1["familywise_error"],
+        "stage1_endpoint_count": confirmation_stage1["endpoint_count"],
+        "stage1_endpoint_error": confirmation_stage1_error,
+        "stage1_selected_endpoint_count": 1,
+        "stage2_familywise_error": confirmation_stage2["familywise_error"],
+        "stage2_endpoint_count": 1,
+        "stage2_endpoint_error": confirmation_stage2["familywise_error"],
+        "stage2_replicates_per_selected_endpoint": confirmation_stage2[
+            "replicates_per_selected_endpoint"
+        ],
+        "stage2_passed_endpoint_count": 1,
+        "final_passed_endpoint_count": 2_048,
+        "overall_gate_pass": True,
+        "composite_overall_gate_pass": True,
+        "overall_rule": confirmation_config_value["two_stage_gate"]["overall_rule"],
+        "total_familywise_error": confirmation_config_value["two_stage_gate"][
+            "total_familywise_error"
+        ],
+        "stage1_and_stage2_counts_pooled": False,
+        "additional_confirmation_stage_permitted": False,
+        "reporting_rule_selected": False,
+        "interpretation": "finite-scenario-stress-not-formal-uniform-FDR-proof",
+        "resource_contract": dict(confirmation_config_value["resources"]),
+        "runtime_resource_observation": confirmation._resource_observation(  # noqa: SLF001
+            confirmation_config_value,
+        ),
+        "thread_environment": dict(calibration.THREAD_ENV),
+        "result_blindness": confirmation._result_blindness_receipt(),  # noqa: SLF001
+        "source_records": confirmation_sources,
+        "run_manifest": _record(
+            confirmation_run,
+            confirmation.RUN_MANIFEST_NAME,
+        ),
+        "task_manifests": confirmation_task_records,
+        "final_table": _record(
+            confirmation_final_table,
+            confirmation.FINAL_TABLE_NAME,
+        ),
+    }
+    confirmation_summary_payload["overall_gate_pass"] = confirmation_gate
+    confirmation_summary_payload["composite_overall_gate_pass"] = confirmation_gate
+    if not include_confirmation_gate:
+        confirmation_summary_payload.pop("overall_gate_pass")
+        confirmation_summary_payload.pop("composite_overall_gate_pass")
+    confirmation_summary = add_json(
+        release.CONFIRMATION_SUMMARY_MEMBER,
+        confirmation_summary_payload,
+    )
+
     rule_name = "results/reporting_rule.json"
     rule_payload = {
         "schema_version": release.rule_module.SCHEMA_VERSION,
@@ -749,10 +1117,13 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         "analysis_config_sha256": analysis_config.sha256,
         "calibration_config_sha256": calibration_config.sha256,
         "calibration_summary_sha256": calibration_summary.sha256,
-        "postprocess_manifest_sha256": post_root_member.sha256,
-        "scope": (
-            "one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"
+        "calibration_confirmation_config_sha256": confirmation_config.sha256,
+        "calibration_confirmation_summary_sha256": confirmation_summary.sha256,
+        "calibration_confirmation_final_table_sha256": (
+            confirmation_final_table.sha256
         ),
+        "postprocess_manifest_sha256": post_root_member.sha256,
+        "scope": ("one-identical-rule-across-all-32-tcga-pan-cancer-atlas-cohorts"),
         "test": "chi-square-one-df-profile-lrt",
         "effective_p_policy": (
             "chi-square-one-df-for-full-affine-rank-otherwise-p-one"
@@ -777,16 +1148,21 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         "calibration_gate": {
             "provider": calibration_summary_payload["gate_provider"],
             "endpoint_unit": calibration_summary_payload["gate_endpoint_unit"],
-            "method": calibration_summary_payload["gate_method"],
-            "endpoint_count": calibration_summary_payload[
-                "exact_binomial_endpoint_count"
-            ],
-            "familywise_error": calibration_summary_payload[
-                "exact_binomial_familywise_error"
-            ],
+            "method": "two-stage-alpha-spending-exact-binomial-confirmation",
+            "endpoint_count": 2_048,
+            "total_familywise_error": 0.05,
             "acceptance_upper_bounds": calibration_summary_payload[
                 "acceptance_upper_bounds"
             ],
+            "source_calibration_overall_gate_pass": False,
+            "source_calibration_passed_endpoint_count": 2_047,
+            "stage1_familywise_error": 0.025,
+            "stage1_selected_endpoint_count": 1,
+            "stage2_familywise_error": 0.025,
+            "stage2_endpoint_count": 1,
+            "stage2_replicates_per_selected_endpoint": 100_000,
+            "stage1_and_stage2_counts_pooled": False,
+            "additional_confirmation_stage_permitted": False,
             "overall_gate_pass": rule_gate,
         },
         "inference_status": (
@@ -797,7 +1173,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         "withheld_reason": (
             None
             if rule_gate is True
-            else "prespecified-finite-scenario-calibration-gate-failed"
+            else "prespecified-two-stage-calibration-confirmation-failed"
         ),
         "claim_scope": "finite-scenario-calibrated-nominal-inference",
         "calibration_interpretation": (
@@ -962,21 +1338,27 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
             content = b"%PDF-forged\n"
         elif name == "fit_diagnostics_summary.csv" and tampered_fit_iterations:
             forged = fit_frame.copy()
-            forged.loc[forged["scope"].eq("mutsig"), [
-                "iterations_min",
-                "iterations_median",
-                "iterations_p95",
-                "iterations_max",
-            ]] = 1
+            forged.loc[
+                forged["scope"].eq("mutsig"),
+                [
+                    "iterations_min",
+                    "iterations_median",
+                    "iterations_p95",
+                    "iterations_max",
+                ],
+            ] = 1
             content = release.reporting._csv_bytes(forged)  # noqa: SLF001
         elif name == "fit_diagnostics_summary.csv" and tampered_fit_continuous:
             forged = fit_frame.copy()
-            forged.loc[forged["scope"].eq("mutsig"), [
-                "minimum_last_ll_gain",
-                "maximum_last_ll_gain",
-                "maximum_fixed_point_residual",
-                "maximum_kkt_residual",
-            ]] = 1e-12
+            forged.loc[
+                forged["scope"].eq("mutsig"),
+                [
+                    "minimum_last_ll_gain",
+                    "maximum_last_ll_gain",
+                    "maximum_fixed_point_residual",
+                    "maximum_kkt_residual",
+                ],
+            ] = 1e-12
             content = release.reporting._csv_bytes(forged)  # noqa: SLF001
         if name == "table_s5.csv":
             table_s5_content = content
@@ -1033,6 +1415,14 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 "calibration_summary": _record(
                     calibration_summary,
                     calibration.SUMMARY_NAME,
+                ),
+                "calibration_confirmation_summary": _record(
+                    confirmation_summary,
+                    confirmation.SUMMARY_NAME,
+                ),
+                "calibration_confirmation_final_table": _record(
+                    confirmation_final_table,
+                    confirmation.FINAL_TABLE_NAME,
                 ),
                 "reporting_rule": _record(rule_member, "reporting_rule.json"),
             },
@@ -1188,8 +1578,11 @@ def _write_closure_archive(  # noqa: PLR0913
     broken_provider_artifact: bool = False,
     extra_payload: bool = False,
     sample_level_report: bool = False,
-    calibration_gate: object = True,
+    calibration_gate: object = False,
     include_calibration_gate: bool = True,
+    confirmation_gate: object = True,
+    include_confirmation_gate: bool = True,
+    tampered_confirmation_evidence: bool = False,
     rule_gate: object = True,
     include_rule_gate: bool = True,
     tampered_table_s5: bool = False,
@@ -1207,6 +1600,9 @@ def _write_closure_archive(  # noqa: PLR0913
         sample_level_report=sample_level_report,
         calibration_gate=calibration_gate,
         include_calibration_gate=include_calibration_gate,
+        confirmation_gate=confirmation_gate,
+        include_confirmation_gate=include_confirmation_gate,
+        tampered_confirmation_evidence=tampered_confirmation_evidence,
         rule_gate=rule_gate,
         include_rule_gate=include_rule_gate,
         tampered_table_s5=tampered_table_s5,
@@ -1236,6 +1632,7 @@ def test_archive_is_deterministic_and_semantically_verified(tmp_path: Path) -> N
     verified = release.verify_archive(first)
     assert verified["fit_source_commit"] == provenance.PRODUCTION_FIT_COMMIT
     assert verified["release_source_commit"] == "b" * 40
+    assert verified["member_count"] == release.EXPECTED_PAYLOAD_MEMBER_COUNT == 448
 
     receipt = {
         "schema_version": release.SCHEMA_VERSION,
@@ -1248,7 +1645,7 @@ def test_archive_is_deterministic_and_semantically_verified(tmp_path: Path) -> N
         "release_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
         "fit_source_commit": provenance.PRODUCTION_FIT_COMMIT,
         "release_source_commit": "b" * 40,
-        "member_count": len(_closure_members()),
+        "member_count": release.EXPECTED_PAYLOAD_MEMBER_COUNT,
     }
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_bytes(release._canonical_json(receipt) + b"\n")  # noqa: SLF001
@@ -1382,13 +1779,29 @@ def test_portal_tiff_validator_rejects_malformed_or_truncated_payloads() -> None
 @pytest.mark.parametrize(
     ("gate_kwargs", "error", "message"),
     [
-        ({"calibration_gate": False}, RuntimeError, "gate failed"),
+        ({"calibration_gate": True}, ValueError, "preserve its failed decision"),
         (
             {"include_calibration_gate": False},
             TypeError,
             "exact boolean gate",
         ),
         ({"calibration_gate": "true"}, TypeError, "exact boolean gate"),
+        ({"confirmation_gate": False}, RuntimeError, "confirmation gate failed"),
+        (
+            {"include_confirmation_gate": False},
+            TypeError,
+            "confirmation summary lacks an exact boolean gate",
+        ),
+        (
+            {"confirmation_gate": "true"},
+            TypeError,
+            "confirmation summary lacks an exact boolean gate",
+        ),
+        (
+            {"tampered_confirmation_evidence": True},
+            ValueError,
+            "confirmation table differs",
+        ),
         ({"rule_gate": False}, RuntimeError, "withheld by the rule"),
         (
             {"include_rule_gate": False},
@@ -1427,9 +1840,7 @@ def test_archive_gate_fails_before_association_member_access(
     with pytest.raises(error, match=message):
         release.verify_archive(archive_path)
 
-    assert not any(
-        name.endswith(f"/{postprocess.RESULT_NAME}") for name in opened
-    )
+    assert not any(name.endswith(f"/{postprocess.RESULT_NAME}") for name in opened)
 
 
 @pytest.mark.parametrize(
@@ -1448,9 +1859,15 @@ def test_local_release_paths_gate_before_raw_or_derived_validation(
     error: type[Exception],
 ) -> None:
     calibration_root = tmp_path / "calibration"
+    confirmation_root = tmp_path / "confirmation"
     calibration_root.mkdir()
+    confirmation_root.mkdir()
     if write_summary:
         (calibration_root / calibration.SUMMARY_NAME).write_text(
+            json.dumps({"overall_gate_pass": False}),
+            encoding="utf-8",
+        )
+        (confirmation_root / confirmation.SUMMARY_NAME).write_text(
             json.dumps({"overall_gate_pass": gate_value}),
             encoding="utf-8",
         )
@@ -1494,6 +1911,7 @@ def test_local_release_paths_gate_before_raw_or_derived_validation(
         "run_root": tmp_path / "run",
         "postprocess_root": tmp_path / "postprocess",
         "calibration_root": calibration_root,
+        "confirmation_root": confirmation_root,
         "report_root": tmp_path / "report",
         "rule_path": tmp_path / "rule.json",
         "fit_attestation_path": tmp_path / "fit-attestation.json",
@@ -1812,6 +2230,9 @@ def test_release_readme_uses_dynamic_rule_and_two_commits() -> None:
     assert "stochastic initialization" in text
     assert "exact cohort-level CBaSE and DIG PMFs" in text
     assert "hash-bound to the provider manifest" in text
+    assert "original 10,000-replicate stage-one calibration summary" in text
+    assert "100,000 fresh replicates" in text
+    assert "never pooled" in text
     assert "fixed aggregate bins only" in text
     assert "300--600 dpi" in text
     assert "2.63--7.5 inches wide" in text
@@ -1904,8 +2325,7 @@ def test_public_text_requires_utf8_and_rejects_encoded_sample_ids() -> None:
         "TCGA%252525252DAB%252525252D1234",
         "TCGA{-}AB{-}1234",
         r"TCGA\text{-}AB\text{-}1234",
-        "\uff34\uff23\uff27\uff21\uff0d\uff21\uff22\uff0d"
-        "\uff11\uff12\uff13\uff14",
+        "\uff34\uff23\uff27\uff21\uff0d\uff21\uff22\uff0d\uff11\uff12\uff13\uff14",
         "TCGA-\u200bAB-1234",
     ):
         with pytest.raises(ValueError, match=r"TCGA sample barcode|forbidden control"):
