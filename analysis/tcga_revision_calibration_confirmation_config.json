@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0.0",
+  "contract": "focused-result-blind-null-calibration-confirmation-v1",
+  "seed": 20260904,
+  "source_calibration": {
+    "contract": "focused-parametric-null-calibration-summary-v3",
+    "provider": "mutsig",
+    "endpoint_unit": "cohort-sentinel-pair-alpha",
+    "endpoint_count": 2048,
+    "replicates_per_endpoint": 10000,
+    "sentinel_pair_count": 32,
+    "alphas": [
+      0.01,
+      0.05
+    ]
+  },
+  "two_stage_gate": {
+    "total_familywise_error": 0.05,
+    "stage1": {
+      "familywise_error": 0.025,
+      "endpoint_count": 2048,
+      "selection_rule": "select-every-endpoint-whose-recomputed-one-sided-clopper-pearson-upper-bound-exceeds-its-acceptance-bound"
+    },
+    "stage2": {
+      "familywise_error": 0.025,
+      "replicates_per_selected_endpoint": 100000,
+      "endpoint_count_rule": "number-of-stage1-selected-endpoints",
+      "decision_rule": "one-sided-clopper-pearson-upper-bound-at-gamma2-divided-by-selected-endpoint-count"
+    },
+    "acceptance_upper_bounds": {
+      "0.01": 0.02,
+      "0.05": 0.07
+    },
+    "overall_rule": "all-unselected-endpoints-pass-stage1-and-all-selected-endpoints-pass-stage2"
+  },
+  "simulation": {
+    "generator": "fitted-independent-dialect-marginals-from-the-source-calibration-cell",
+    "sentinel_pair_source": "same-indexed-pair-from-source-32-disjoint-K500-axis",
+    "replicate_rng": "sha256-confirmation-root-seed-endpoint-coordinate-and-shard-index-v1",
+    "replicate_shards": 5,
+    "replicate_shard_rule": "five-equal-contiguous-20000-replicate-shards-concatenated-in-shard-index-order",
+    "fit_kernel": "bounded-batched-profile-lrt-with-scalar-boundary-reconciliation-v1",
+    "replicate_chunk_rule": "max(1,min(512,128000//sample-count))",
+    "effective_p_policy": "chi-square-one-df-for-full-affine-rank-otherwise-p-one",
+    "pooling_with_stage1": false,
+    "additional_stage_after_stage2": false
+  },
+  "resources": {
+    "observed_logical_cpus": 14,
+    "max_outer_endpoints": 1,
+    "fit_workers_per_endpoint": 5,
+    "max_total_fit_workers": 5,
+    "blas_threads_per_fit_worker": 1,
+    "nice_increment": 10,
+    "overwrite_outputs": false
+  }
+}
