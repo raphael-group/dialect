@@ -81,7 +81,9 @@ def test_high_burden_threshold_uses_frozen_pooled_population() -> None:
         reporting._high_burden_threshold({"A": np.arange(10)})  # noqa: SLF001
 
 
-def test_cohort_burden_histogram_reconstructs_every_summary_field() -> None:
+def test_cohort_burden_histogram_reconstructs_every_summary_field(
+    tmp_path: Path,
+) -> None:
     cohorts = tuple(reporting.TCGA_COHORTS)
     first_count = reporting.EXPECTED_TUMOR_COUNT - len(cohorts) + 1
     values = {
@@ -117,21 +119,34 @@ def test_cohort_burden_histogram_reconstructs_every_summary_field() -> None:
     )
     assert histogram["cohort"].drop_duplicates().tolist() == list(cohorts)
     assert sum(map(len, reconstructed.values())) == reporting.EXPECTED_TUMOR_COUNT
+    summary_path = tmp_path / "table_s5.csv"
+    summary.to_csv(summary_path, index=False, lineterminator="\n")
+    decoded_summary = reporting._read_report_csv(summary_path)  # noqa: SLF001
+    assert np.array_equal(
+        decoded_summary.loc[:, reporting.BURDEN_SUMMARY_COLUMNS].to_numpy(
+            dtype=float,
+        ),
+        summary.loc[:, reporting.BURDEN_SUMMARY_COLUMNS].to_numpy(dtype=float),
+    )
     assert (
         reporting._validate_burden_histogram_summary(  # noqa: SLF001
             histogram,
-            summary,
+            decoded_summary,
             threshold,
         )
         == threshold
     )
 
-    tampered = summary.copy()
-    tampered.loc[0, "burden_p95"] += 1
+    tampered = decoded_summary.copy()
+    tampered.loc[0, "high_burden_fraction"] = np.nextafter(
+        tampered.loc[0, "high_burden_fraction"],
+        np.inf,
+    )
+    tampered.to_csv(summary_path, index=False, lineterminator="\n")
     with pytest.raises(ValueError, match="burden summary"):
         reporting._validate_burden_histogram_summary(  # noqa: SLF001
             histogram,
-            tampered,
+            reporting._read_report_csv(summary_path),  # noqa: SLF001
             threshold,
         )
     with pytest.raises(ValueError, match="manifest threshold"):

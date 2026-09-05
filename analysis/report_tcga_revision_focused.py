@@ -146,6 +146,11 @@ def _csv_bytes(frame: pd.DataFrame) -> bytes:
     return frame.to_csv(index=False, lineterminator="\n").encode("utf-8")
 
 
+def _read_report_csv(path: Path) -> pd.DataFrame:
+    """Read a report CSV without changing serialized floating-point values."""
+    return pd.read_csv(path, float_precision="round_trip")
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1839,13 +1844,13 @@ def validate_report(  # noqa: PLR0913
     if manifest["inputs"]["reporting_rule"] != expected_rule:
         msg = "Focused report is bound to a different reporting rule."
         raise ValueError(msg)
-    burden_histogram = pd.read_csv(output_root / "cohort_burden_histogram.csv")
-    summary = pd.read_csv(output_root / "table_s5.csv")
-    overlap = pd.read_csv(output_root / "provider_overlap.csv")
-    top_pairs = pd.read_csv(output_root / "top_primary_pairs.csv")
-    runtime = pd.read_csv(output_root / "runtime_summary.csv")
-    fit_diagnostics = pd.read_csv(output_root / "fit_diagnostics_summary.csv")
-    figure_burden = pd.read_csv(output_root / "figure6_burden_bins.csv")
+    burden_histogram = _read_report_csv(output_root / "cohort_burden_histogram.csv")
+    summary = _read_report_csv(output_root / "table_s5.csv")
+    overlap = _read_report_csv(output_root / "provider_overlap.csv")
+    top_pairs = _read_report_csv(output_root / "top_primary_pairs.csv")
+    runtime = _read_report_csv(output_root / "runtime_summary.csv")
+    fit_diagnostics = _read_report_csv(output_root / "fit_diagnostics_summary.csv")
+    figure_burden = _read_report_csv(output_root / "figure6_burden_bins.csv")
     frames = {
         "cohort_burden_histogram.csv": burden_histogram,
         "figure6_burden_bins.csv": figure_burden,
