@@ -172,6 +172,10 @@ OTHER_PENDING_RE: Final = re.compile(
     r"(?im)(?:RECONCILIATION-(?:PENDING|TARGET):|DIALECT[-_ ]GATE:|"
     r"^\s*%\s*[A-Z0-9]+(?:\+[A-Z0-9]+)*\s+gate:)",
 )
+RESULT_LOCATION_SENTINEL_RE: Final = re.compile(
+    r"\[\[(?:RESULT|LOCATION)",
+    re.IGNORECASE,
+)
 RAW_TEX_RE: Final = re.compile(
     r"\\(?:input|include|includeonly|write|openin|openout|read|special|"
     r"immediate|usepackage|documentclass|catcode|csname|newread|newwrite)\b",
@@ -1209,6 +1213,13 @@ def _reject_unresolved_or_unsafe(markdown: str) -> None:
         _fail("source Markdown contains raw HTML or entity syntax")
 
 
+def _reject_result_location_sentinels(markdown: str) -> None:
+    """Reject revision placeholders everywhere, including literal quotations."""
+    classifier = unicodedata.normalize("NFKC", markdown)
+    if RESULT_LOCATION_SENTINEL_RE.search(classifier) is not None:
+        _fail("source Markdown contains an unresolved RESULT/LOCATION sentinel")
+
+
 def _reject_unsupported_block_line(line: str) -> None:
     """Reject block syntax that the deliberately narrow parser cannot preserve."""
     stripped = line.lstrip()
@@ -1342,6 +1353,7 @@ def _validate_inline_text(text: str) -> None:
 
 def _parse_markdown(canonical: bytes) -> _MarkdownAudit:
     text = canonical.decode("utf-8")
+    _reject_result_location_sentinels(text)
     _reject_private_paths(text, context="canonical source Markdown")
     lines = text[:-1].split("\n")
     if len(lines) > MAX_SOURCE_LINES:

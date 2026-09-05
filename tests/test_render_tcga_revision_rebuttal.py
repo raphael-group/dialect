@@ -374,6 +374,40 @@ def test_reviewer_quote_is_literal_while_author_tokens_fail() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
+        "[[RESULT: calibrated value]]",
+        "[[LOCATION]]",
+        "[[result_table_s1]]",
+        "[[Location: Results, paragraph 2]]",
+        "[[RESULT: unterminated",
+        "［［ＲＥＳＵＬＴ： calibrated value］］",
+    ],
+)
+def test_result_and_location_sentinels_fail_closed_everywhere(payload: str) -> None:
+    source = SYNTHETIC_SOURCE.replace(
+        "1. Please distinguish the observed count from the latent driver state and explain the background input.",
+        payload,
+        1,
+    )
+    with pytest.raises(renderer.RebuttalRenderError, match="RESULT/LOCATION sentinel"):
+        renderer._parse_markdown(renderer._canonicalize_markdown(source.encode()))
+
+
+def test_ordinary_brackets_remain_supported_in_reviewer_quotes() -> None:
+    quoted = "Please retain [RESULT], [LOCATION], and [[ordinary annotation]]."
+    source = SYNTHETIC_SOURCE.replace(
+        "1. Please distinguish the observed count from the latent driver state and explain the background input.",
+        quoted,
+        1,
+    )
+
+    audit = renderer._parse_markdown(renderer._canonicalize_markdown(source.encode()))
+
+    assert audit.quotes[0][1] == quoted
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
         "/Users/alice/secret.csv",
         "path=/opt/private/file.txt",
         "file:///private/tmp/file.txt",
