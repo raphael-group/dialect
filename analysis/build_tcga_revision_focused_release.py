@@ -952,8 +952,9 @@ def _readme(
         "The exact cohort-level CBaSE and DIG PMFs and their stage receipts are "
         "included and hash-bound to the provider manifest. The bundle excludes raw "
         "MAFs, count matrices, sample axes and identifiers, sample-specific MutSig "
-        "tensors, per-tumor source tables, and restricted MutSig source. Figure 6 "
-        "source data use fixed aggregate bins only. Both portal TIFFs are fully "
+        "tensors, per-tumor source tables, and restricted MutSig source. Revised "
+        "Fig. 2 source data (stored under the internal figure6 filenames) use fixed "
+        "aggregate bins only. Both portal TIFFs are fully "
         "decoded and constrained to one flattened 8-bit RGB/grayscale LZW page, "
         "300--600 dpi, 2.63--7.5 inches wide, no more than 8.75 inches high, and "
         "no more than 10 MiB.\n\n"
@@ -3936,6 +3937,7 @@ def _validate_archived_report_derivations(  # noqa: PLR0913
     )
     expected_tex = reporting._table_s5_tex(  # noqa: SLF001
         summary,
+        high_burden_threshold=high_burden_threshold,
         primary_adjustment="benjamini-yekutieli",
         primary_q=0.01,
         sensitivity_adjustment="benjamini-hochberg",

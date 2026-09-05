@@ -1312,6 +1312,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     }
     table_tex = release.reporting._table_s5_tex(  # noqa: SLF001
         summary_frame,
+        high_burden_threshold=0.0,
         primary_adjustment="benjamini-yekutieli",
         primary_q=0.01,
         sensitivity_adjustment="benjamini-hochberg",

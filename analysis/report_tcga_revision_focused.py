@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 SCHEMA_VERSION: Final = "1.0.0"
-REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v5"
+REPORT_CONTRACT: Final = "focused-revision-reporting-artifacts-v6"
 HIGH_BURDEN_QUANTILE: Final = 0.99
 EXPECTED_TUMOR_COUNT: Final = 10_433
 FOCAL_BURDEN_COHORT: Final = "UCEC"
@@ -114,6 +114,40 @@ PROVIDER_LABELS: Final = {
     "cbase": "CBaSE",
     "dig": "DIG",
     "mutsig": "MutSig",
+}
+TCGA_COHORT_NAMES: Final = {
+    "ACC": "adrenocortical carcinoma",
+    "BLCA": "bladder urothelial carcinoma",
+    "BRCA": "breast invasive carcinoma",
+    "CESC": "cervical squamous cell carcinoma",
+    "CHOL": "cholangiocarcinoma",
+    "CRAD": "colorectal adenocarcinoma",
+    "DLBC": "diffuse large B-cell lymphoma",
+    "ESCA": "esophageal carcinoma",
+    "GBM": "glioblastoma",
+    "HNSC": "head and neck squamous cell carcinoma",
+    "KICH": "kidney chromophobe",
+    "KIRC": "kidney clear cell carcinoma",
+    "KIRP": "kidney papillary cell carcinoma",
+    "LAML": "acute myeloid leukemia",
+    "LGG": "lower-grade glioma",
+    "LIHC": "liver hepatocellular carcinoma",
+    "LUAD": "lung adenocarcinoma",
+    "LUSC": "lung squamous cell carcinoma",
+    "MESO": "mesothelioma",
+    "OV": "ovarian serous cystadenocarcinoma",
+    "PAAD": "pancreatic adenocarcinoma",
+    "PCPG": "pheochromocytoma and paraganglioma",
+    "PRAD": "prostate adenocarcinoma",
+    "SARC": "sarcoma",
+    "SKCM": "skin cutaneous melanoma",
+    "STAD": "stomach adenocarcinoma",
+    "TGCT": "testicular germ cell tumor",
+    "THCA": "thyroid carcinoma",
+    "THYM": "thymoma",
+    "UCEC": "uterine corpus endometrial carcinoma",
+    "UCS": "uterine carcinosarcoma",
+    "UVM": "uveal melanoma",
 }
 PROVIDER_COLORS: Final = {
     "cbase": "#6B7280",
@@ -1359,7 +1393,7 @@ def _overlap_panel_values(overlap: pd.DataFrame) -> tuple[np.ndarray, tuple[int,
 
 
 def _plot_burden_panel(ax: Axes, burden_bins: pd.DataFrame) -> None:
-    """Plot UCEC observed burden against each BMR's expectation."""
+    """Plot UCEC observed burden against each fitted model expectation."""
     for provider in core.BMRS:
         selected = burden_bins.loc[burden_bins["provider"].eq(provider)]
         observed = np.exp(
@@ -1399,7 +1433,7 @@ def _plot_burden_panel(ax: Axes, burden_bins: pd.DataFrame) -> None:
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Observed events per tumor (+1)")
-    ax.set_ylabel("BMR-expected events per tumor (+1)")
+    ax.set_ylabel("Model-expected selected events (+1)")
     ax.set_title("A  UCEC tumor burden", loc="left")
     ax.legend(
         frameon=False,
@@ -1800,93 +1834,188 @@ def _report_csv_frames(
     return frames, burden_threshold
 
 
-def _table_s5_tex(
+def _table_s5_tex(  # noqa: PLR0913
     summary: pd.DataFrame,
     *,
+    high_burden_threshold: float,
     primary_adjustment: str,
     primary_q: float,
     sensitivity_adjustment: str,
     sensitivity_q: float,
 ) -> str:
     """Render the deterministic Table S5 LaTeX source."""
-    burden_columns = [
+    if not math.isfinite(high_burden_threshold) or high_burden_threshold < 0:
+        msg = "The Table S5 high-burden threshold must be finite and nonnegative."
+        raise ValueError(msg)
+    inventory_columns = [
         "cohort",
         "tumors",
         "selected_features",
         "tested_pairs",
         "same_base_pairs_excluded",
         "unfiltered_pair_count",
+    ]
+    inventory_labels = [
+        "Cohort",
+        "Tumors",
+        "Selected events",
+        "Tested pairs",
+        "Same-gene excluded",
+        "Before exclusion",
+    ]
+    burden_columns = [
+        "cohort",
         "burden_median",
         "burden_q25",
         "burden_q75",
+        "burden_p90",
         "burden_p95",
         "burden_max",
         "high_burden_fraction",
     ]
     burden_labels = [
         "Cohort",
-        "Tumors",
-        "Selected features",
-        "Tested pairs",
-        "Same-base pairs excluded",
-        "Unfiltered pairs",
         "Median",
         "Q25",
         "Q75",
+        "P90",
         "P95",
         "Max",
-        "High fraction",
+        "High-burden fraction",
     ]
+    inventory_table = summary.loc[:, inventory_columns].set_axis(
+        inventory_labels,
+        axis=1,
+    )
     burden_table = summary.loc[:, burden_columns].set_axis(burden_labels, axis=1)
-    primary_label = _threshold_label(primary_adjustment, primary_q)
-    sensitivity_label = _threshold_label(sensitivity_adjustment, sensitivity_q)
-    call_rows = [
-        {
-            "Cohort": row["cohort"],
-            "Background": PROVIDER_LABELS[provider],
-            "Primary-rule interpretation": (
-                "primary MutSig rejection"
-                if provider == "mutsig"
-                else "descriptive threshold crossing"
-            ),
-            f"{primary_label} decisions total": row[
-                f"{_decision_prefix(provider, 'primary')}_total"
-            ],
-            f"{primary_label} decisions ME": row[
-                f"{_decision_prefix(provider, 'primary')}_me"
-            ],
-            f"{primary_label} decisions CO": row[
-                f"{_decision_prefix(provider, 'primary')}_co"
-            ],
-            f"{primary_label} decisions direction unavailable": row[
-                f"{_decision_prefix(provider, 'primary')}_direction_unavailable"
-            ],
-            f"{sensitivity_label} sensitivity crossings total": row[
-                f"{_decision_prefix(provider, 'sensitivity')}_total"
-            ],
-            f"{sensitivity_label} sensitivity crossings ME": row[
-                f"{_decision_prefix(provider, 'sensitivity')}_me"
-            ],
-            f"{sensitivity_label} sensitivity crossings CO": row[
-                f"{_decision_prefix(provider, 'sensitivity')}_co"
-            ],
-            f"{sensitivity_label} sensitivity crossings direction unavailable": row[
-                f"{_decision_prefix(provider, 'sensitivity')}_direction_unavailable"
-            ],
-        }
-        for row in summary.to_dict(orient="records")
-        for provider in core.BMRS
+    _threshold_label(primary_adjustment, primary_q)
+    _threshold_label(sensitivity_adjustment, sensitivity_q)
+    primary_label = ADJUSTMENT_LABELS[primary_adjustment]
+    sensitivity_label = ADJUSTMENT_LABELS[sensitivity_adjustment]
+
+    call_lines = [
+        "\\begingroup",
+        "\\scriptsize",
+        "\\setlength{\\tabcolsep}{2.5pt}",
+        "\\renewcommand{\\arraystretch}{1.08}",
+        "\\begin{longtable}{lllrrrrrrrr}",
+        "\\toprule",
+        (
+            "\\multicolumn{3}{l}{} & "
+            f"\\multicolumn{{4}}{{c}}{{{primary_label} "
+            f"$q\\leq {primary_q:g}$}} & "
+            f"\\multicolumn{{4}}{{c}}{{{sensitivity_label} "
+            f"$q\\leq {sensitivity_q:g}$}} \\\\"
+        ),
+        (
+            "Cohort & BMR & Role & Total & ME & CO & NA & "
+            "Total & ME & CO & NA \\\\"
+        ),
+        "\\midrule",
+        "\\endfirsthead",
+        "\\toprule",
+        (
+            "\\multicolumn{3}{l}{} & "
+            f"\\multicolumn{{4}}{{c}}{{{primary_label} "
+            f"$q\\leq {primary_q:g}$}} & "
+            f"\\multicolumn{{4}}{{c}}{{{sensitivity_label} "
+            f"$q\\leq {sensitivity_q:g}$}} \\\\"
+        ),
+        (
+            "Cohort & BMR & Role & Total & ME & CO & NA & "
+            "Total & ME & CO & NA \\\\"
+        ),
+        "\\midrule",
+        "\\endhead",
+        "\\midrule",
+        "\\multicolumn{11}{r}{Continued on next page} \\\\ ",
+        "\\midrule",
+        "\\endfoot",
+        "\\bottomrule",
+        "\\endlastfoot",
     ]
-    call_table = pd.DataFrame(call_rows)
-    return (
-        "\\textbf{A. Cohort and mutation-burden summary}\\par\n"
-        + burden_table.to_latex(index=False, float_format="%.3f", escape=True)
-        + "\n\\medskip\n"
-        + (
-            "\\textbf{B. Primary MutSig rejections and descriptive background "
-            "crossings by fitted direction}\\par\n"
-        )
-        + call_table.to_latex(index=False, escape=True, longtable=True)
+    for row in summary.to_dict(orient="records"):
+        for provider in core.BMRS:
+            primary_prefix = _decision_prefix(provider, "primary")
+            sensitivity_prefix = _decision_prefix(provider, "sensitivity")
+            values = (
+                row["cohort"],
+                PROVIDER_LABELS[provider],
+                "Primary" if provider == "mutsig" else "Descriptive",
+                *(int(row[f"{primary_prefix}_{suffix}"]) for suffix in (
+                    "total",
+                    "me",
+                    "co",
+                    "direction_unavailable",
+                )),
+                *(int(row[f"{sensitivity_prefix}_{suffix}"]) for suffix in (
+                    "total",
+                    "me",
+                    "co",
+                    "direction_unavailable",
+                )),
+            )
+            call_lines.append(" & ".join(map(str, values)) + r" \\")
+    call_lines.extend(("\\end{longtable}", "\\endgroup"))
+
+    if set(TCGA_COHORT_NAMES) != set(TCGA_COHORTS):
+        msg = "The Table S5 cohort abbreviation key does not match the frozen grid."
+        raise RuntimeError(msg)
+    abbreviation_entries = [
+        f"{cohort}, {TCGA_COHORT_NAMES[cohort]}"
+        for cohort in TCGA_COHORTS
+    ]
+    abbreviation_lines = [
+        "; ".join(abbreviation_entries[index : index + 3]) + "."
+        for index in range(0, len(abbreviation_entries), 3)
+    ]
+
+    return "\n".join(
+        (
+            "\\textbf{A. Cohort inventory and mutation burden}\\par",
+            "\\smallskip",
+            "\\textbf{A1. Analysis inventory}\\par",
+            "\\begingroup",
+            "\\small",
+            "\\setlength{\\tabcolsep}{5pt}",
+            inventory_table.to_latex(index=False, escape=True).rstrip(),
+            "\\endgroup",
+            "\\par\\smallskip",
+            "\\begingroup\\footnotesize\\raggedright",
+            "\\noindent\\textit{Cohort abbreviations.}",
+            *abbreviation_lines,
+            "\\par\\endgroup",
+            "\\clearpage",
+            "\\textbf{A2. Preselection nonsynonymous-SNV burden}\\par",
+            (
+                "High-burden fraction is the fraction of tumors with preselection "
+                "total nonsynonymous-SNV burden at or above "
+                f"{high_burden_threshold:g}, the pooled 99th percentile across "
+                f"{EXPECTED_TUMOR_COUNT:,} tumors.\\par"
+            ),
+            "\\smallskip",
+            "\\begingroup",
+            "\\small",
+            "\\setlength{\\tabcolsep}{4pt}",
+            burden_table.to_latex(
+                index=False,
+                float_format="%.3f",
+                escape=True,
+            ).rstrip(),
+            "\\endgroup",
+            "\\clearpage",
+            (
+                "\\textbf{B. Provider-specific crossings by fitted direction}"
+                "\\par"
+            ),
+            (
+                "MutSig rows are primary; CBaSE and DIG rows are descriptive. "
+                "NA denotes direction unavailable.\\par"
+            ),
+            "\\smallskip",
+            *call_lines,
+            "",
+        ),
     )
 
 
@@ -2069,6 +2198,7 @@ def validate_report(  # noqa: PLR0913
         raise ValueError(msg)
     expected_table_tex = _table_s5_tex(
         expected_frames["table_s5.csv"],
+        high_burden_threshold=expected_burden_threshold,
         primary_adjustment=str(rule["primary_adjustment"]),
         primary_q=float(rule["primary_q_threshold"]),
         sensitivity_adjustment=str(rule["sensitivity_adjustment"]),
@@ -2391,6 +2521,7 @@ def build_report(  # noqa: PLR0913
     (staging / "table_s5.tex").write_text(
         _table_s5_tex(
             summary,
+            high_burden_threshold=burden_threshold,
             primary_adjustment=primary_adjustment,
             primary_q=primary_q,
             sensitivity_adjustment=sensitivity_adjustment,

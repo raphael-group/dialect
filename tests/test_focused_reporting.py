@@ -294,6 +294,26 @@ def test_figure_burden_bins_reconcile_observed_axis_without_sample_rows(
     )
 
 
+def test_burden_panel_labels_fitted_model_expectation() -> None:
+    burden = pd.concat(
+        [
+            reporting._aggregate_burden_bins(  # noqa: SLF001
+                np.asarray([1.0]),
+                np.asarray([1.0]),
+                provider=provider,
+            )
+            for provider in reporting.core.BMRS
+        ],
+        ignore_index=True,
+    )
+    figure, axis = reporting.plt.subplots()
+    try:
+        reporting._plot_burden_panel(axis, burden)  # noqa: SLF001
+        assert axis.get_ylabel() == "Model-expected selected events (+1)"
+    finally:
+        reporting.plt.close(figure)
+
+
 def test_figure6_uses_calibration_and_directional_overlap(tmp_path: Path) -> None:
     burden = pd.concat(
         [
@@ -444,6 +464,59 @@ def test_figure6_overlap_matrix_preserves_direction_and_provider_meaning() -> No
 
     assert matrix.tolist() == [[3, 2, 2], [1, 1, 0]]
     assert discordant == (0, 2)
+
+
+def test_table_s5_tex_uses_readable_split_panels_and_compact_headers() -> None:
+    summary = pd.DataFrame(
+        [
+            {
+                "cohort": "UCEC",
+                "tumors": 517,
+                "selected_features": 500,
+                "tested_pairs": 124_748,
+                "same_base_pairs_excluded": 2,
+                "unfiltered_pair_count": 124_750,
+                "burden_median": 63.0,
+                "burden_q25": 40.0,
+                "burden_q75": 384.0,
+                "burden_p90": 1520.4,
+                "burden_p95": 7070.6,
+                "burden_max": 23_753.0,
+                "high_burden_fraction": 0.0967,
+                **{
+                    f"{reporting._decision_prefix(provider, analysis)}_{suffix}": (  # noqa: SLF001
+                        1 if provider == "mutsig" and suffix == "total" else 0
+                    )
+                    for provider in reporting.core.BMRS
+                    for analysis in ("primary", "sensitivity")
+                    for suffix in ("total", "me", "co", "direction_unavailable")
+                },
+            },
+        ],
+    )
+
+    source = reporting._table_s5_tex(  # noqa: SLF001
+        summary,
+        high_burden_threshold=1974.0,
+        primary_adjustment="benjamini-yekutieli",
+        primary_q=0.01,
+        sensitivity_adjustment="benjamini-hochberg",
+        sensitivity_q=0.01,
+    )
+
+    assert "A1. Analysis inventory" in source
+    assert "A2. Preselection nonsynonymous-SNV burden" in source
+    assert "Selected events" in source
+    assert "Cohort abbreviations." in source
+    assert "UCEC, uterine corpus endometrial carcinoma" in source
+    assert "at or above 1974, the pooled 99th percentile across 10,433 tumors" in source
+    assert source.count(r"\clearpage") == 2
+    assert source.count(r"\begin{longtable}") == 1
+    assert r"BY $q\leq 0.01$" in source
+    assert r"BH $q\leq 0.01$" in source
+    assert "Primary-rule interpretation" not in source
+    assert "decisions direction unavailable" not in source
+    assert max(map(len, source.splitlines())) < 180
 
 
 def test_calibration_gate_maxima_selects_worst_pair_per_cohort() -> None:
@@ -771,6 +844,7 @@ def test_report_validator_binds_inventory_and_bytes(  # noqa: PLR0915
     (root / "table_s5.tex").write_text(
         reporting._table_s5_tex(  # noqa: SLF001
             expected_frames["table_s5.csv"],
+            high_burden_threshold=0.0,
             primary_adjustment="benjamini-yekutieli",
             primary_q=0.01,
             sensitivity_adjustment="benjamini-hochberg",
