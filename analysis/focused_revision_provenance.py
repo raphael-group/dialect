@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 SCHEMA_VERSION: Final = "1.0.0"
 FIT_ATTESTATION_CONTRACT: Final = "focused-fit-source-runtime-attestation-v2"
 PUBLIC_COHORT_CONTRACT: Final = "focused-public-cohort-contract-projection-v1"
+MUTSIG_MAF_BINDING_CONTRACT: Final = "focused-canonical-mutsig-maf-binding-v1"
 FIT_ATTESTATION_NAME: Final = "fit_execution_attestation.json"
 PRODUCTION_FIT_COMMIT: Final = "b23a9fc4f32fd3df6d145a655fec3df221ab8b04"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -206,6 +207,87 @@ def _require_complete_coordinates(
     return indexed
 
 
+def _canonical_mutsig_maf_bindings(
+    *,
+    input_root: Path,
+    provider_root: Path,
+    input_manifest: Mapping[str, object],
+    cohorts: Sequence[str],
+) -> dict[str, Any]:
+    """Bind every MutSig receipt digest to one byte-validated canonical MAF."""
+    raw_records = input_manifest.get("cohort_records")
+    if not isinstance(raw_records, list):
+        msg = "Focused input manifest lacks canonical cohort MAF records."
+        raise TypeError(msg)
+    records: dict[str, Mapping[str, object]] = {}
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            msg = "Focused input manifest has an invalid cohort record."
+            raise TypeError(msg)
+        cohort = raw_record.get("cohort")
+        if not isinstance(cohort, str) or not cohort or cohort in records:
+            msg = "Focused input manifest has an invalid or duplicate cohort."
+            raise ValueError(msg)
+        records[cohort] = raw_record
+
+    bindings = []
+    for cohort in cohorts:
+        canonical_path = input_root / "mafs" / f"{cohort}.maf"
+        expected_canonical_path = f"mafs/{cohort}.maf"
+        canonical_record = records.get(cohort, {}).get("canonical_maf")
+        if not _record_matches(
+            canonical_record,
+            canonical_path,
+            expected_path=expected_canonical_path,
+        ):
+            msg = f"Canonical MAF record changed or is missing: {cohort}"
+            raise ValueError(msg)
+        canonical_file = _file_record(canonical_path, relative_to=input_root)
+
+        receipt_path = provider_root / "mutsig" / cohort / "persample_receipt.tsv"
+        receipt_file = _file_record(receipt_path, relative_to=provider_root)
+        receipt = core._parse_mutsig_receipt(  # noqa: SLF001
+            receipt_path.read_bytes(),
+            path=receipt_path,
+        )
+        receipt_maf_sha256 = receipt.get("maf_sha256")
+        if (
+            receipt.get("schema_version") != core.MUTSIG_RECEIPT_SCHEMA_VERSION
+            or receipt.get("cohort") != cohort
+            or not isinstance(receipt_maf_sha256, str)
+            or _SHA256.fullmatch(receipt_maf_sha256) is None
+        ):
+            msg = f"MutSig receipt has invalid canonical MAF identity: {cohort}"
+            raise ValueError(msg)
+        if receipt_maf_sha256 != canonical_file["sha256"]:
+            msg = f"MutSig receipt MAF hash does not match canonical bytes: {cohort}"
+            raise ValueError(msg)
+        bindings.append(
+            {
+                "cohort": cohort,
+                "canonical_maf": canonical_file,
+                "mutsig_receipt": receipt_file,
+                "verified_relation": {
+                    "receipt_field": "maf_sha256",
+                    "sha256": receipt_maf_sha256,
+                    "canonical_bytes": canonical_file["bytes"],
+                },
+            },
+        )
+    return {
+        "contract": MUTSIG_MAF_BINDING_CONTRACT,
+        "cohorts": list(cohorts),
+        "cohort_count": len(cohorts),
+        "bindings": bindings,
+    }
+
+
+def _require_production_cohort_grid(cohorts: Sequence[str]) -> None:
+    if tuple(cohorts) != tuple(preparation.TCGA_COHORTS):
+        msg = "Focused production attestation requires the exact 32-cohort grid."
+        raise ValueError(msg)
+
+
 def validate_raw_chain(
     *,
     input_root: Path,
@@ -218,6 +300,7 @@ def validate_raw_chain(
     preparation.validate_input_root(input_root, cohorts)
     provider_manifest = preparation.validate_provider_root(provider_root, cohorts)
     input_path = input_root / "input_manifest.json"
+    input_manifest = _load_json(input_path)
     provider_path = provider_root / "provider_manifest.json"
     if not _record_matches(
         provider_manifest.get("input_manifest"),
@@ -226,6 +309,12 @@ def validate_raw_chain(
     ):
         msg = "Provider manifest is not bound to the supplied input manifest."
         raise ValueError(msg)
+    mutsig_maf_bindings = _canonical_mutsig_maf_bindings(
+        input_root=input_root,
+        provider_root=provider_root,
+        input_manifest=input_manifest,
+        cohorts=cohorts,
+    )
 
     run_path = run_root / "run_manifest.json"
     run_manifest = _load_json(run_path)
@@ -321,6 +410,7 @@ def validate_raw_chain(
             completion_path,
             relative_to=run_root,
         ),
+        "canonical_mutsig_maf_binding": mutsig_maf_bindings,
         "cohort_contracts": contract_records,
         "task_manifests": task_records,
     }
@@ -588,6 +678,7 @@ def build_fit_attestation(  # noqa: PLR0913
     if fit_commit != PRODUCTION_FIT_COMMIT:
         msg = f"Focused production fit commit must be {PRODUCTION_FIT_COMMIT}."
         raise ValueError(msg)
+    _require_production_cohort_grid(cohorts)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "contract": FIT_ATTESTATION_CONTRACT,
@@ -633,6 +724,7 @@ def validate_fit_attestation(  # noqa: PLR0913
     if fit_commit != PRODUCTION_FIT_COMMIT:
         msg = f"Focused production fit commit must be {PRODUCTION_FIT_COMMIT}."
         raise ValueError(msg)
+    _require_production_cohort_grid(cohorts)
     payload = _load_json(attestation_path)
     if (
         payload.get("schema_version") != SCHEMA_VERSION

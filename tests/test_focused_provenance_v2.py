@@ -30,6 +30,25 @@ def _record(path: Path, *, relative_to: Path) -> dict[str, int | str]:
     }
 
 
+def _write_mutsig_receipt(path: Path, *, maf_sha256: str) -> None:
+    fields = dict.fromkeys(provenance.core.MUTSIG_RECEIPT_KEYS, "a" * 64)
+    fields.update(
+        {
+            "schema_version": provenance.core.MUTSIG_RECEIPT_SCHEMA_VERSION,
+            "cohort": "CHOL",
+            "upstream_commit": provenance.core.MUTSIG_UPSTREAM_COMMIT,
+            "source_file_count": "1",
+            "sample_axis_count": "1",
+            "maf_sha256": maf_sha256,
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{key}\t{fields[key]}\n" for key in sorted(fields)),
+        encoding="utf-8",
+    )
+
+
 def test_release_pipeline_inventory_binds_every_calibration_dependency() -> None:
     expected = (
         provenance.Path("analysis/build_tcga_revision_focused_document_manifest.py"),
@@ -57,8 +76,27 @@ def _raw_chain_fixture(
     provider_root.mkdir()
     (run_root / "contracts").mkdir(parents=True)
 
+    canonical_maf = input_root / "mafs" / "CHOL.maf"
+    canonical_maf.parent.mkdir()
+    canonical_maf.write_bytes(b"canonical maf\n")
+    input_manifest = {
+        "contract": "input",
+        "cohort_records": [
+            {
+                "cohort": "CHOL",
+                "canonical_maf": _record(
+                    canonical_maf,
+                    relative_to=input_root,
+                ),
+            },
+        ],
+    }
     input_path = input_root / "input_manifest.json"
-    input_path.write_text('{"contract":"input"}\n', encoding="utf-8")
+    input_path.write_text(json.dumps(input_manifest) + "\n", encoding="utf-8")
+    _write_mutsig_receipt(
+        provider_root / "mutsig" / "CHOL" / "persample_receipt.tsv",
+        maf_sha256=_sha256(canonical_maf),
+    )
     provider_manifest = {
         "input_manifest": _record(input_path, relative_to=input_root),
     }
@@ -67,7 +105,7 @@ def _raw_chain_fixture(
     monkeypatch.setattr(
         preparation,
         "validate_input_root",
-        lambda *_args: {"contract": "input"},
+        lambda *_args: input_manifest,
     )
     monkeypatch.setattr(
         preparation,
@@ -161,6 +199,12 @@ def test_raw_chain_binds_input_provider_run_completion_and_exact_tasks(
     assert len(evidence["cohort_contracts"]) == 1
     assert len(evidence["task_manifests"]) == 3
     assert evidence["completion_manifest"]["path"] == "completion_manifest.json"
+    maf_binding = evidence["canonical_mutsig_maf_binding"]
+    assert maf_binding["cohort_count"] == 1
+    assert maf_binding["bindings"][0]["cohort"] == "CHOL"
+    assert maf_binding["bindings"][0]["verified_relation"]["sha256"] == _sha256(
+        input_root / "mafs" / "CHOL.maf",
+    )
 
     completion_path = run_root / "completion_manifest.json"
     completion = json.loads(completion_path.read_text(encoding="utf-8"))
@@ -173,6 +217,56 @@ def test_raw_chain_binds_input_provider_run_completion_and_exact_tasks(
             provider_root=provider_root,
             run_root=run_root,
             cohorts=("CHOL",),
+        )
+
+
+def test_raw_chain_rejects_mutsig_receipt_bound_to_different_maf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root, provider_root, run_root = _raw_chain_fixture(tmp_path, monkeypatch)
+    receipt_path = provider_root / "mutsig" / "CHOL" / "persample_receipt.tsv"
+    _write_mutsig_receipt(receipt_path, maf_sha256="f" * 64)
+
+    with pytest.raises(ValueError, match="hash does not match canonical bytes"):
+        provenance.validate_raw_chain(
+            input_root=input_root,
+            provider_root=provider_root,
+            run_root=run_root,
+            cohorts=("CHOL",),
+        )
+
+
+def test_raw_chain_rejects_canonical_maf_byte_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root, provider_root, run_root = _raw_chain_fixture(tmp_path, monkeypatch)
+    (input_root / "mafs" / "CHOL.maf").write_bytes(b"changed canonical maf\n")
+
+    with pytest.raises(ValueError, match="Canonical MAF record changed"):
+        provenance.validate_raw_chain(
+            input_root=input_root,
+            provider_root=provider_root,
+            run_root=run_root,
+            cohorts=("CHOL",),
+        )
+
+
+def test_fit_attestation_rejects_partial_production_cohort_grid(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="exact 32-cohort grid"):
+        provenance.validate_fit_attestation(
+            tmp_path / "missing.json",
+            repository_root=tmp_path,
+            input_root=tmp_path,
+            provider_root=tmp_path,
+            run_root=tmp_path,
+            cohorts=("CHOL",),
+            fit_commit=provenance.PRODUCTION_FIT_COMMIT,
+            release_commit="b" * 40,
+            runtime_executable=provenance.Path(sys.executable),
         )
 
 
