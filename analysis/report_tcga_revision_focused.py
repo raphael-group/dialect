@@ -22,6 +22,7 @@ mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.text import Text
 
 from analysis import calibrate_tcga_revision_focused as calibration
 from analysis import calibrate_tcga_revision_focused_confirmation as confirmation
@@ -156,6 +157,7 @@ PROVIDER_COLORS: Final = {
 }
 FIGURE6_SIZE_INCHES: Final = (7.5, 8.25)
 FIGURE6_PANEL_ORDER: Final = ("A", "B", "C", "D")
+PLOS_MINIMUM_FIGURE_FONT_SIZE_PT: Final = 8.0
 CO_CALL_COUNT_TICKS: Final = (0, 1, 10, 100, 1_000, 10_000, 100_000)
 ADJUSTMENT_COLUMNS: Final = {
     "benjamini-yekutieli": "by_q_value",
@@ -1451,7 +1453,7 @@ def _plot_burden_panel(ax: Axes, burden_bins: pd.DataFrame) -> None:
         ha="right",
         va="bottom",
         color="#4B5563",
-        fontsize=7.2,
+        fontsize=PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
     )
 
 
@@ -1610,7 +1612,7 @@ def _plot_calibration_panel(
         ha="right",
         va="bottom",
         color="#374151",
-        fontsize=7.0,
+        fontsize=PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
     )
     ax.annotate(
         "worst upper",
@@ -1623,7 +1625,7 @@ def _plot_calibration_panel(
         ha="right",
         va="top",
         color="#374151",
-        fontsize=7.0,
+        fontsize=PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
     )
     ax.grid(axis="y", color="#E5E7EB", linewidth=0.5)
     ax.set_axisbelow(True)
@@ -1678,7 +1680,7 @@ def _plot_overlap_panel(ax: Axes, overlap: pd.DataFrame) -> None:
         ha="center",
         va="bottom",
         color="#4B5563",
-        fontsize=7.2,
+        fontsize=PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
     )
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -1709,11 +1711,11 @@ def _plot_figure6(  # noqa: PLR0913
             "font.family": "Arial",
             "font.size": 8.2,
             "figure.dpi": 150,
-            "legend.fontsize": 7.4,
+            "legend.fontsize": PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
-            "xtick.labelsize": 7.7,
-            "ytick.labelsize": 7.7,
+            "xtick.labelsize": PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
+            "ytick.labelsize": PLOS_MINIMUM_FIGURE_FONT_SIZE_PT,
         },
     )
     figure = plt.figure(figsize=FIGURE6_SIZE_INCHES, constrained_layout=True)
@@ -1743,6 +1745,18 @@ def _plot_figure6(  # noqa: PLR0913
     _plot_cohort_panel(axes["B"], summary, threshold_label=threshold_label)
     _plot_calibration_panel(axes["C"], calibration_table, confirmation_table)
     _plot_overlap_panel(axes["D"], overlap)
+
+    visible_text_sizes = [
+        float(artist.get_fontsize())
+        for artist in figure.findobj(match=Text)
+        if artist.get_visible() and artist.get_text().strip()
+    ]
+    if (
+        not visible_text_sizes
+        or min(visible_text_sizes) < PLOS_MINIMUM_FIGURE_FONT_SIZE_PT
+    ):
+        msg = "Figure 6 contains text below the PLOS 8-point minimum."
+        raise RuntimeError(msg)
 
     figure.savefig(
         output,

@@ -437,6 +437,7 @@ def test_figure6_layout_helpers_keep_clean_ticks_and_panel_order() -> None:
 
     assert reporting.FIGURE6_PANEL_ORDER == ("A", "B", "C", "D")
     assert reporting.FIGURE6_SIZE_INCHES == (7.5, 8.25)
+    assert reporting.PLOS_MINIMUM_FIGURE_FONT_SIZE_PT == 8.0
     assert ordered["cohort"].tolist() == ["LOW", "TIE_A", "TIE_B", "HIGH"]
     assert reporting._co_call_count_ticks(123_071).tolist() == [  # noqa: SLF001
         0,
