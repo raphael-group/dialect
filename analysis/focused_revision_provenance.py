@@ -74,6 +74,7 @@ RUNTIME_DISTRIBUTIONS: Final = (
     "matplotlib",
     "numpy",
     "pandas",
+    "Pillow",
     "scikit-learn",
     "scipy",
     "threadpoolctl",

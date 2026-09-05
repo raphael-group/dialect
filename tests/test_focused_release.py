@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import tarfile
+from functools import lru_cache
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
@@ -58,9 +59,21 @@ def _record(member: release.Member, path: str) -> dict[str, int | str]:
     return {"path": path, "bytes": member.size, "sha256": member.sha256}
 
 
+@lru_cache(maxsize=1)
+def _portal_tiff() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(
+        output,
+        format="TIFF",
+        compression="tiff_lzw",
+        dpi=(600, 600),
+    )
+    return output.getvalue()
+
+
 def _submission_document_content(name: str, *, table_s5: bytes) -> bytes:
     if name in {"Fig1.tif", "Fig2.tif"}:
-        return b"II*\x00\x08\x00\x00\x00"
+        return _portal_tiff()
     if name == "S1_Table.csv":
         return table_s5
     if name.endswith(".pdf"):
@@ -1291,6 +1304,30 @@ def test_archive_rejects_rehashed_invalid_portal_artifacts(
 
     with pytest.raises(ValueError, match=message):
         release.verify_archive(archive)
+
+
+def test_portal_tiff_validator_rejects_header_only_and_nonportal_encodings(
+) -> None:
+    release._validate_portal_tiff_bytes(_portal_tiff(), name="Fig1.tif")  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="decodable TIFF"):
+        release._validate_portal_tiff_bytes(  # noqa: SLF001
+            b"II*\x00\x08\x00\x00\x00",
+            name="Fig1.tif",
+        )
+
+    output = BytesIO()
+    Image.new("L", (2, 2), "white").save(
+        output,
+        format="TIFF",
+        compression="tiff_lzw",
+        dpi=(72, 72),
+    )
+    with pytest.raises(ValueError, match="single-page RGB LZW TIFF"):
+        release._validate_portal_tiff_bytes(  # noqa: SLF001
+            output.getvalue(),
+            name="Fig2.tif",
+        )
 
 
 @pytest.mark.parametrize(

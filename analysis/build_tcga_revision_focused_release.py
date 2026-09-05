@@ -23,15 +23,18 @@ import tarfile
 import tempfile
 import unicodedata
 import urllib.parse
+import warnings
 import zipfile
 import zlib
 from dataclasses import dataclass
 from io import BytesIO
+from numbers import Real
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 import pandas as pd
+from PIL import Image, UnidentifiedImageError
 
 from analysis import calibrate_tcga_revision_focused as calibration
 from analysis import focused_revision_provenance as provenance
@@ -109,6 +112,8 @@ _CALIBRATION_ARRAY_LIMIT_BYTES: Final = 16 * 1024 * 1024
 _INFERENCE_LIMIT_BYTES: Final = 512 * 1024 * 1024
 _PDF_LIMIT_BYTES: Final = 128 * 1024 * 1024
 _PORTAL_TIFF_LIMIT_BYTES: Final = 10 * 1024 * 1024
+_PORTAL_TIFF_MAX_PIXELS: Final = 100_000_000
+_PORTAL_TIFF_MIN_DPI: Final = 300.0
 _S1_TABLE_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PDF_TOOL_OUTPUT_LIMIT_BYTES: Final = 64 * 1024 * 1024
 _PDF_TOOL_TIMEOUT_SECONDS: Final = 60
@@ -274,7 +279,7 @@ def _record_matches_path(record: object, path: Path, *, expected_path: str) -> b
 
 
 def _validate_portal_tiff_bytes(content: bytes, *, name: str) -> None:
-    """Validate one bounded classic TIFF and scan practical metadata encodings."""
+    """Validate one bounded, decodable portal TIFF and scan its raw metadata."""
     if name not in _PORTAL_TIFF_NAMES:
         msg = f"Unexpected portal TIFF name: {name}"
         raise ValueError(msg)
@@ -292,6 +297,39 @@ def _validate_portal_tiff_bytes(content: bytes, *, name: str) -> None:
     ):
         msg = f"Portal TIFF exposes a TCGA sample barcode: {name}"
         raise ValueError(msg)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            with Image.open(BytesIO(content)) as image:
+                dpi = image.info.get("dpi")
+                width, height = image.size
+                if (
+                    image.format != "TIFF"
+                    or image.mode != "RGB"
+                    or image.n_frames != 1
+                    or width <= 0
+                    or height <= 0
+                    or width * height > _PORTAL_TIFF_MAX_PIXELS
+                    or image.info.get("compression") != "tiff_lzw"
+                    or not isinstance(dpi, tuple)
+                    or len(dpi) != 2
+                    or any(
+                        not isinstance(value, Real)
+                        or isinstance(value, bool)
+                        or not np.isfinite(float(value))
+                        or float(value) < _PORTAL_TIFF_MIN_DPI
+                        for value in dpi
+                    )
+                ):
+                    msg = (
+                        "Portal figure must be one bounded, single-page RGB LZW "
+                        f"TIFF at >= {_PORTAL_TIFF_MIN_DPI:g} dpi: {name}"
+                    )
+                    raise ValueError(msg)
+                image.load()
+    except (OSError, UnidentifiedImageError, UserWarning) as error:
+        msg = f"Portal figure is not a decodable TIFF: {name}"
+        raise ValueError(msg) from error
 
 
 def _validate_s1_table_bytes(content: bytes, *, name: str) -> None:

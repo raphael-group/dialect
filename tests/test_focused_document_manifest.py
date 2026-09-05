@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from PIL import Image
 
 from analysis import build_tcga_revision_focused_document_manifest as documents
 from analysis import build_tcga_revision_focused_release as release
@@ -31,6 +33,17 @@ _EXPECTED_DOCUMENTS = {
 }
 
 
+def _portal_tiff() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(
+        output,
+        format="TIFF",
+        compression="tiff_lzw",
+        dpi=(600, 600),
+    )
+    return output.getvalue()
+
+
 def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     document_root = tmp_path / "documents"
     document_root.mkdir()
@@ -39,7 +52,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     ).encode()
     for name in release.REQUIRED_DOCUMENTS:
         if name in {"Fig1.tif", "Fig2.tif"}:
-            content = b"II*\x00\x08\x00\x00\x00"
+            content = _portal_tiff()
         elif name == "S1_Table.csv":
             content = table
         else:
