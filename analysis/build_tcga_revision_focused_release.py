@@ -72,6 +72,7 @@ CONFIRMATION_FINAL_TABLE_MEMBER: Final = (
     "results/calibration_confirmation/confirmation_final_endpoints.csv"
 )
 REPORTING_RULE_MEMBER: Final = "results/reporting_rule.json"
+REPORTING_RULE_SOURCE_NAME: Final = "tcga_revision_focused_reporting_rule_v5.json"
 EXPECTED_PAYLOAD_MEMBER_COUNT: Final = 448
 REQUIRED_DOCUMENTS: Final = {
     "Fig1.tif",
@@ -5016,7 +5017,7 @@ def _verify_semantic_closure(
             CONFIRMATION_FINAL_TABLE_MEMBER,
             confirmation.FINAL_TABLE_NAME,
         ),
-        ("reporting_rule", rule_name, "reporting_rule.json"),
+        ("reporting_rule", rule_name, REPORTING_RULE_SOURCE_NAME),
     ):
         _require_record_path(
             report_inputs.get(key),
@@ -5029,7 +5030,7 @@ def _verify_semantic_closure(
         report.get("inputs", {}).get("reporting_rule"),
         records,
         rule_name,
-        expected_path="reporting_rule.json",
+        expected_path=REPORTING_RULE_SOURCE_NAME,
         label="report to rule",
     )
     report_outputs = report.get("outputs", {})

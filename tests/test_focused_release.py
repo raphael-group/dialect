@@ -1426,7 +1426,10 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     confirmation_final_table,
                     confirmation.FINAL_TABLE_NAME,
                 ),
-                "reporting_rule": _record(rule_member, "reporting_rule.json"),
+                "reporting_rule": _record(
+                    rule_member,
+                    release.REPORTING_RULE_SOURCE_NAME,
+                ),
             },
             "outputs": report_outputs,
         },
