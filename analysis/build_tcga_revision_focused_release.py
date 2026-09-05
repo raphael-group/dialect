@@ -54,13 +54,19 @@ MANIFEST_NAME: Final = "release_manifest.json"
 SOURCE_RECORD_NAME: Final = "provenance/source_boundary.json"
 FIT_ATTESTATION_MEMBER: Final = "provenance/fit_execution_attestation.json"
 DOCUMENT_MANIFEST_NAME: Final = "document_manifest.json"
-DOCUMENT_CONTRACT: Final = "focused-submission-document-set-v1"
+DOCUMENT_CONTRACT: Final = "focused-submission-document-set-v2"
 README_NAME: Final = "README.md"
 CALIBRATION_SUMMARY_MEMBER: Final = (
     "results/calibration/calibration_summary.json"
 )
 REPORTING_RULE_MEMBER: Final = "results/reporting_rule.json"
 REQUIRED_DOCUMENTS: Final = {
+    "Fig1.tif",
+    "Fig2.tif",
+    "S1_Table.csv",
+    "S1_Table.pdf",
+    "S1_Table.tex",
+    "cover_letter.pdf",
     "manuscript.tex",
     "manuscript.pdf",
     "marked_manuscript.pdf",
@@ -102,6 +108,8 @@ _CSV_HEADER_LIMIT_BYTES: Final = 1024 * 1024
 _CALIBRATION_ARRAY_LIMIT_BYTES: Final = 16 * 1024 * 1024
 _INFERENCE_LIMIT_BYTES: Final = 512 * 1024 * 1024
 _PDF_LIMIT_BYTES: Final = 128 * 1024 * 1024
+_PORTAL_TIFF_LIMIT_BYTES: Final = 10 * 1024 * 1024
+_S1_TABLE_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PDF_TOOL_OUTPUT_LIMIT_BYTES: Final = 64 * 1024 * 1024
 _PDF_TOOL_TIMEOUT_SECONDS: Final = 60
 _PDF_MAX_PAGES: Final = 500
@@ -165,6 +173,8 @@ _FIGURE6_BIN_COLUMNS: Final = {
     "provider",
     "tumor_count",
 }
+_PORTAL_TIFF_NAMES: Final = frozenset({"Fig1.tif", "Fig2.tif"})
+_TIFF_MAGICS: Final = (b"II*\x00", b"MM\x00*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +273,96 @@ def _record_matches_path(record: object, path: Path, *, expected_path: str) -> b
     )
 
 
+def _validate_portal_tiff_bytes(content: bytes, *, name: str) -> None:
+    """Validate one bounded classic TIFF and scan practical metadata encodings."""
+    if name not in _PORTAL_TIFF_NAMES:
+        msg = f"Unexpected portal TIFF name: {name}"
+        raise ValueError(msg)
+    if (
+        len(content) < 8
+        or len(content) > _PORTAL_TIFF_LIMIT_BYTES
+        or not content.startswith(_TIFF_MAGICS)
+    ):
+        msg = f"Portal figure is not a bounded classic TIFF: {name}"
+        raise ValueError(msg)
+    if (
+        _contains_sample_barcode_text(name)
+        or _TCGA_SAMPLE_BARCODE.search(content) is not None
+        or _TCGA_SAMPLE_BARCODE.search(content.replace(b"\x00", b"")) is not None
+    ):
+        msg = f"Portal TIFF exposes a TCGA sample barcode: {name}"
+        raise ValueError(msg)
+
+
+def _validate_s1_table_bytes(content: bytes, *, name: str) -> None:
+    """Require the standalone table's aggregate public schema and privacy bounds."""
+    if name != "S1_Table.csv" or len(content) > _S1_TABLE_LIMIT_BYTES:
+        msg = f"Standalone S1 Table is missing or unexpectedly large: {name}"
+        raise ValueError(msg)
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        msg = "Standalone S1 Table is not canonical UTF-8."
+        raise ValueError(msg) from error
+    if _contains_forbidden_text_character(text) or _contains_sample_barcode_text(text):
+        msg = "Standalone S1 Table violates the public privacy contract."
+        raise ValueError(msg)
+    header = text.partition("\n")[0].removesuffix("\r")
+    columns = tuple(next(csv.reader([header]), ()))
+    normalized = tuple(column.casefold() for column in columns)
+    expected = reporting.report_csv_columns()["table_s5.csv"]
+    if (
+        columns != expected
+        or len(normalized) != len(set(normalized))
+        or set(normalized) & _FORBIDDEN_ROW_AXIS_COLUMNS
+    ):
+        msg = "Standalone S1 Table is not the aggregate Table S5 schema."
+        raise ValueError(msg)
+
+
+def _validate_submission_document_path(name: str, path: Path) -> None:
+    if name in _PORTAL_TIFF_NAMES:
+        if path.stat().st_size > _PORTAL_TIFF_LIMIT_BYTES:
+            msg = f"Portal figure exceeds the size ceiling: {name}"
+            raise ValueError(msg)
+        _validate_portal_tiff_bytes(path.read_bytes(), name=name)
+    elif name == "S1_Table.csv":
+        if path.stat().st_size > _S1_TABLE_LIMIT_BYTES:
+            msg = "Standalone S1 Table exceeds the size ceiling."
+            raise ValueError(msg)
+        _validate_s1_table_bytes(path.read_bytes(), name=name)
+
+
+def _validate_s1_table_report_binding(
+    *,
+    document_path: Path,
+    report_manifest_path: Path,
+) -> None:
+    """Bind the portal S1 table to the report's manifested Table S5 bytes."""
+    manifest = _load_strict_json_path(
+        report_manifest_path,
+        public_name="report_manifest.json",
+    )
+    outputs = manifest.get("outputs", {}) if isinstance(manifest, dict) else {}
+    report_table = report_manifest_path.parent / "table_s5.csv"
+    if (
+        not report_table.is_file()
+        or report_table.is_symlink()
+        or not _record_matches_path(
+            outputs.get("table_s5.csv") if isinstance(outputs, dict) else None,
+            report_table,
+            expected_path="table_s5.csv",
+        )
+    ):
+        msg = "Report manifest does not bind its table_s5.csv output."
+        raise ValueError(msg)
+    standalone = document_path.read_bytes()
+    _validate_s1_table_bytes(standalone, name="S1_Table.csv")
+    if standalone != report_table.read_bytes():
+        msg = "Standalone S1 Table must be byte-identical to report table_s5.csv."
+        raise ValueError(msg)
+
+
 def _document_members(document_root: Path) -> list[Member]:
     manifest_path = document_root / DOCUMENT_MANIFEST_NAME
     if not manifest_path.is_file() or manifest_path.is_symlink():
@@ -302,6 +402,7 @@ def _document_members(document_root: Path) -> list[Member]:
         ):
             msg = f"Submission document changed after its manifest was written: {name}"
             raise ValueError(msg)
+        _validate_submission_document_path(name, document_root / name)
     return [
         _file_member(f"documents/{name}", document_root / name)
         for name in sorted(REQUIRED_DOCUMENTS)
@@ -2177,6 +2278,39 @@ def _assert_aggregate_csv_header(archive: tarfile.TarFile, name: str) -> None:
         if expected is None or ordered_columns != expected:
             msg = f"Archived report CSV violates its exact public schema: {name}"
             raise ValueError(msg)
+
+
+def _validate_archived_submission_documents(
+    archive: tarfile.TarFile,
+    records: Mapping[str, Mapping[str, Any]],
+) -> None:
+    for name in sorted(_PORTAL_TIFF_NAMES):
+        member_name = f"documents/{name}"
+        _validate_portal_tiff_bytes(
+            _verified_member_bytes(
+                archive,
+                member_name,
+                records,
+                limit=_PORTAL_TIFF_LIMIT_BYTES,
+            ),
+            name=name,
+        )
+    standalone = _verified_member_bytes(
+        archive,
+        "documents/S1_Table.csv",
+        records,
+        limit=_S1_TABLE_LIMIT_BYTES,
+    )
+    _validate_s1_table_bytes(standalone, name="S1_Table.csv")
+    report_table = _verified_member_bytes(
+        archive,
+        "results/report/table_s5.csv",
+        records,
+        limit=_S1_TABLE_LIMIT_BYTES,
+    )
+    if standalone != report_table:
+        msg = "Archived S1 Table differs from the verified report table_s5.csv."
+        raise ValueError(msg)
 
 
 def _record_matches_member(record: object, member: Mapping[str, Any]) -> bool:
@@ -4148,6 +4282,7 @@ def _verify_semantic_closure(
             expected_path=name,
             label=f"document {name}",
         )
+    _validate_archived_submission_documents(archive, records)
 
     expected_payload = {
         README_NAME,

@@ -58,6 +58,16 @@ def _record(member: release.Member, path: str) -> dict[str, int | str]:
     return {"path": path, "bytes": member.size, "sha256": member.sha256}
 
 
+def _submission_document_content(name: str, *, table_s5: bytes) -> bytes:
+    if name in {"Fig1.tif", "Fig2.tif"}:
+        return b"II*\x00\x08\x00\x00\x00"
+    if name == "S1_Table.csv":
+        return table_s5
+    if name.endswith(".pdf"):
+        return b"%PDF-test\n"
+    return f"document {name}\n".encode()
+
+
 def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     broken_postprocess_source: bool = False,
@@ -73,6 +83,8 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
     tampered_figure: bool = False,
     tampered_fit_iterations: bool = False,
     tampered_fit_continuous: bool = False,
+    tampered_document_s1: bool = False,
+    invalid_portal_tiff: bool = False,
 ) -> list[release.Member]:
     members: dict[str, release.Member] = {}
 
@@ -917,6 +929,7 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
         sensitivity_q=0.01,
     ).encode()
     report_outputs = {}
+    table_s5_content = b""
     for name in release.REQUIRED_REPORT_OUTPUTS:
         if name == "table_s5.csv" and sample_level_report:
             content = b"cohort,barcode\n"
@@ -952,6 +965,8 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 "maximum_kkt_residual",
             ]] = 1e-12
             content = release.reporting._csv_bytes(forged)  # noqa: SLF001
+        if name == "table_s5.csv":
+            table_s5_content = content
         report_output = add(f"results/report/{name}", content)
         report_outputs[name] = _record(report_output, name)
     report_manifest_member = add_json(
@@ -1014,7 +1029,12 @@ def _closure_members(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
     document_outputs = {}
     for name in release.REQUIRED_DOCUMENTS:
-        document = add(f"documents/{name}", f"document {name}\n".encode())
+        content = _submission_document_content(name, table_s5=table_s5_content)
+        if name == "S1_Table.csv" and tampered_document_s1:
+            content += b"ACC\n"
+        elif name == "Fig1.tif" and invalid_portal_tiff:
+            content = b"not-a-tiff"
+        document = add(f"documents/{name}", content)
         document_outputs[name] = _record(document, name)
     add_json(
         f"documents/{release.DOCUMENT_MANIFEST_NAME}",
@@ -1164,6 +1184,8 @@ def _write_closure_archive(  # noqa: PLR0913
     tampered_figure: bool = False,
     tampered_fit_iterations: bool = False,
     tampered_fit_continuous: bool = False,
+    tampered_document_s1: bool = False,
+    invalid_portal_tiff: bool = False,
 ) -> bytes:
     members = _closure_members(
         broken_postprocess_source=broken_postprocess_source,
@@ -1179,6 +1201,8 @@ def _write_closure_archive(  # noqa: PLR0913
         tampered_figure=tampered_figure,
         tampered_fit_iterations=tampered_fit_iterations,
         tampered_fit_continuous=tampered_fit_continuous,
+        tampered_document_s1=tampered_document_s1,
+        invalid_portal_tiff=invalid_portal_tiff,
     )
     manifest = release._manifest(  # noqa: SLF001
         members,
@@ -1227,6 +1251,46 @@ def test_archive_is_deterministic_and_semantically_verified(tmp_path: Path) -> N
     receipt_path.write_bytes(canonical_receipt[:-1] + b',"unexpected":NaN}\n')
     with pytest.raises(ValueError, match="numeric constant"):
         release.verify_release(first, receipt_path)
+
+
+def test_archive_routes_cover_letter_through_pdf_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scanned: list[str] = []
+
+    def scan(_content: bytes, *, name: str) -> None:
+        scanned.append(name)
+
+    monkeypatch.setattr(release, "_scan_pdf_privacy", scan)
+    archive = tmp_path / "cover-letter.tar.gz"
+    _write_closure_archive(archive)
+
+    release.verify_archive(archive)
+
+    assert {
+        "documents/S1_Table.pdf",
+        "documents/cover_letter.pdf",
+    }.issubset(scanned)
+
+
+@pytest.mark.parametrize(
+    ("fixture_flag", "message"),
+    [
+        ("tampered_document_s1", "S1 Table differs"),
+        ("invalid_portal_tiff", "bounded classic TIFF"),
+    ],
+)
+def test_archive_rejects_rehashed_invalid_portal_artifacts(
+    tmp_path: Path,
+    fixture_flag: str,
+    message: str,
+) -> None:
+    archive = tmp_path / f"{fixture_flag}.tar.gz"
+    _write_closure_archive(archive, **{fixture_flag: True})
+
+    with pytest.raises(ValueError, match=message):
+        release.verify_archive(archive)
 
 
 @pytest.mark.parametrize(
@@ -1569,8 +1633,13 @@ def test_raw_task_validator_requires_exact_schema_and_resource_receipt() -> None
 
 
 def test_document_plan_requires_exact_manifested_files(tmp_path: Path) -> None:
+    table_s5 = (
+        ",".join(release.reporting.report_csv_columns()["table_s5.csv"]) + "\n"
+    ).encode()
     for name in release.REQUIRED_DOCUMENTS:
-        (tmp_path / name).write_text(f"final {name}\n", encoding="utf-8")
+        (tmp_path / name).write_bytes(
+            _submission_document_content(name, table_s5=table_s5),
+        )
     outputs = {
         name: {
             "path": name,

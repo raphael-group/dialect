@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import TYPE_CHECKING
 
@@ -13,17 +14,55 @@ from analysis import build_tcga_revision_focused_release as release
 if TYPE_CHECKING:
     from pathlib import Path
 
+_EXPECTED_DOCUMENTS = {
+    "Fig1.tif",
+    "Fig2.tif",
+    "S1_Table.csv",
+    "S1_Table.pdf",
+    "S1_Table.tex",
+    "cover_letter.pdf",
+    "manuscript.pdf",
+    "manuscript.tex",
+    "marked_manuscript.pdf",
+    "rebuttal.md",
+    "response_to_reviewers.pdf",
+    "supporting_information.pdf",
+    "supporting_information.tex",
+}
+
 
 def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     document_root = tmp_path / "documents"
     document_root.mkdir()
+    table = (
+        ",".join(release.reporting.report_csv_columns()["table_s5.csv"]) + "\n"
+    ).encode()
     for name in release.REQUIRED_DOCUMENTS:
-        (document_root / name).write_text(
-            f"final {name}\n",
-            encoding="utf-8",
-        )
+        if name in {"Fig1.tif", "Fig2.tif"}:
+            content = b"II*\x00\x08\x00\x00\x00"
+        elif name == "S1_Table.csv":
+            content = table
+        else:
+            content = f"final {name}\n".encode()
+        (document_root / name).write_bytes(content)
+    report_table = tmp_path / "table_s5.csv"
+    report_table.write_bytes(table)
     report_manifest = tmp_path / "report_manifest.json"
-    report_manifest.write_text('{"complete":true}\n', encoding="utf-8")
+    report_manifest.write_text(
+        json.dumps(
+            {
+                "outputs": {
+                    "table_s5.csv": {
+                        "path": "table_s5.csv",
+                        "bytes": len(table),
+                        "sha256": hashlib.sha256(table).hexdigest(),
+                    },
+                },
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return document_root, report_manifest
 
 
@@ -42,8 +81,10 @@ def test_build_and_verify_exact_document_manifest(tmp_path: Path) -> None:
     ) == path
     value = json.loads(first_bytes)
     assert value["schema_version"] == release.SCHEMA_VERSION
+    assert release.DOCUMENT_CONTRACT == "focused-submission-document-set-v2"
     assert value["contract"] == release.DOCUMENT_CONTRACT
-    assert set(value["outputs"]) == release.REQUIRED_DOCUMENTS
+    assert release.REQUIRED_DOCUMENTS == _EXPECTED_DOCUMENTS
+    assert set(value["outputs"]) == _EXPECTED_DOCUMENTS
     assert value["inputs"]["report_manifest"]["path"] == "report_manifest.json"
     assert first_bytes.endswith(b"\n")
 
@@ -102,6 +143,63 @@ def test_build_rejects_symlinked_document(tmp_path: Path) -> None:
     manuscript.symlink_to(target)
 
     with pytest.raises(ValueError, match="without symlinks"):
+        documents.build_manifest(
+            document_root=document_root,
+            report_manifest=report_manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "message"),
+    [
+        ("Fig1.tif", b"not-a-tiff", "bounded classic TIFF"),
+        (
+            "Fig2.tif",
+            b"II*\x00TCGA-AB-1234",
+            "TCGA sample barcode",
+        ),
+        (
+            "S1_Table.csv",
+            b"cohort,sample_id\nACC,TCGA-AB-1234\n",
+            "privacy contract",
+        ),
+    ],
+)
+def test_build_rejects_unsafe_portal_artifacts(
+    tmp_path: Path,
+    name: str,
+    content: bytes,
+    message: str,
+) -> None:
+    document_root, report_manifest = _fixture(tmp_path)
+    (document_root / name).write_bytes(content)
+
+    with pytest.raises(ValueError, match=message):
+        documents.build_manifest(
+            document_root=document_root,
+            report_manifest=report_manifest,
+        )
+
+
+def test_build_rejects_oversized_tiff(tmp_path: Path) -> None:
+    document_root, report_manifest = _fixture(tmp_path)
+    (document_root / "Fig1.tif").write_bytes(
+        b"II*\x00" + b"0" * release._PORTAL_TIFF_LIMIT_BYTES,  # noqa: SLF001
+    )
+
+    with pytest.raises(ValueError, match="size ceiling"):
+        documents.build_manifest(
+            document_root=document_root,
+            report_manifest=report_manifest,
+        )
+
+
+def test_build_binds_s1_table_to_report_bytes(tmp_path: Path) -> None:
+    document_root, report_manifest = _fixture(tmp_path)
+    with (document_root / "S1_Table.csv").open("ab") as handle:
+        handle.write(b"ACC\n")
+
+    with pytest.raises(ValueError, match="byte-identical"):
         documents.build_manifest(
             document_root=document_root,
             report_manifest=report_manifest,

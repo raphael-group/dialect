@@ -88,6 +88,12 @@ def expected_manifest(
     if report_manifest.name != "report_manifest.json":
         msg = "The bound report input must be named report_manifest.json."
         raise ValueError(msg)
+    for name, path in documents.items():
+        release._validate_submission_document_path(name, path)  # noqa: SLF001
+    release._validate_s1_table_report_binding(  # noqa: SLF001
+        document_path=documents["S1_Table.csv"],
+        report_manifest_path=report_manifest,
+    )
     return {
         "schema_version": release.SCHEMA_VERSION,
         "contract": release.DOCUMENT_CONTRACT,
