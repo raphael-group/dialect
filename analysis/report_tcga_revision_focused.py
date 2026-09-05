@@ -1494,8 +1494,8 @@ def _plot_cohort_panel(
     ax.set_ylim(-0.8, len(ordered) - 0.2)
     ax.set_yticks(positions, ordered["cohort"])
     publication_threshold = threshold_label.replace(" <= ", " ≤ ")
-    ax.set_xlabel(f"CO calls ({publication_threshold})")
-    ax.set_title("B  CO calls across cancer cohorts", loc="left")
+    ax.set_xlabel(f"Pairs crossing {publication_threshold} with CO direction")
+    ax.set_title("B  CO-direction crossings by cohort", loc="left")
     ax.legend(
         frameon=False,
         loc="upper left",
@@ -2009,8 +2009,17 @@ def _table_s5_tex(  # noqa: PLR0913
                 "\\par"
             ),
             (
-                "MutSig rows are primary; CBaSE and DIG rows are descriptive. "
-                "NA denotes direction unavailable.\\par"
+                "Counts are threshold crossings within each cohort's complete "
+                "tested pair family."
+            ),
+            (
+                "MutSig/BY is primary; MutSig/BH is nominal sensitivity; all "
+                "CBaSE and DIG counts are descriptive."
+            ),
+            (
+                "BMR, background mutation rate; BY, Benjamini--Yekutieli; BH, "
+                "Benjamini--Hochberg; ME, mutual exclusivity; CO, co-occurrence; "
+                "NA, direction unavailable.\\par"
             ),
             "\\smallskip",
             *call_lines,

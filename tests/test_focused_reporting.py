@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
@@ -448,6 +449,13 @@ def test_figure6_layout_helpers_keep_clean_ticks_and_panel_order() -> None:
     ]
 
 
+def test_figure6_labels_descriptive_threshold_crossings_precisely() -> None:
+    source = inspect.getsource(reporting._plot_cohort_panel)  # noqa: SLF001
+    assert "CO-direction crossings by cohort" in source
+    assert "Pairs crossing {publication_threshold} with CO direction" in source
+    assert '"CO calls' not in source
+
+
 def test_figure6_overlap_matrix_preserves_direction_and_provider_meaning() -> None:
     overlap = pd.DataFrame(
         {
@@ -509,6 +517,9 @@ def test_table_s5_tex_uses_readable_split_panels_and_compact_headers() -> None:
     assert "Selected events" in source
     assert "Cohort abbreviations." in source
     assert "UCEC, uterine corpus endometrial carcinoma" in source
+    assert "Counts are threshold crossings within each cohort's complete" in source
+    assert "BMR, background mutation rate" in source
+    assert "MutSig/BY is primary; MutSig/BH is nominal sensitivity" in source
     assert "at or above 1974, the pooled 99th percentile across 10,433 tumors" in source
     assert source.count(r"\clearpage") == 2
     assert source.count(r"\begin{longtable}") == 1
