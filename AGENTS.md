@@ -60,16 +60,30 @@ res = identify_interactions(
 res.pairwise.sort_values("Rho").head()
 ```
 
-Atlas release export (after deterministic baseline generation):
+Atlas release export (after deterministic baseline generation). Releases are
+write-once; `--k` picks the contract and `--release-id` defaults to `k<K>-<UTC date>`.
 
 ```bash
-PYTHONPATH=/path/to/DISCOVER/python python -m analysis.build_atlas_baselines --jobs 4
-python -m analysis.build_atlas_data \
+# K=500 (current site default): the 32-cohort TCGA focused revision grid, frozen
+# reporting rule (MutSigCV2 primary, BY q <= 0.01), columnar gzip tables.
+PYTHONPATH=/path/to/DISCOVER/python \
+  python -m analysis.build_atlas_baselines --profile k500 --jobs 6
+python -m analysis.build_atlas_data --k 500 \
+  --out atlas/public/data/releases/k500-<YYYY-MM-DD> \
+  --release-id k500-<YYYY-MM-DD> --generated-at <YYYY-MM-DD>T00:00:00Z
+
+# K=100 (historical, includes MSK): per-BMR top-100 layout, JSON tables.
+PYTHONPATH=/path/to/DISCOVER/python \
+  python -m analysis.build_atlas_baselines --profile k100 --jobs 4
+python -m analysis.build_atlas_data --k 100 \
   --out atlas/public/data/releases/k100-2026-08-26 \
-  --baseline-root output/atlas_baselines/k100 \
-  --generated-at 2026-08-26T00:00:00Z
-node atlas/scripts/validate-release.mjs
+  --release-id k100-2026-08-26 --generated-at 2026-08-26T00:00:00Z
+
+node atlas/scripts/validate-release.mjs   # validates every release on disk
 ```
+
+DISCOVER must be the built package (it has a Fortran `_discover` extension):
+`pip install --no-deps --target <dir> <DISCOVER>/python` at commit `a46d99f`.
 
 ## Gotchas
 

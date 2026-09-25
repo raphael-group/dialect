@@ -1,11 +1,21 @@
-"""Build the complete, immutable K=100 DIALECT Atlas data release.
+"""Build a complete, immutable DIALECT Atlas data release for a given K.
+
+``--k`` selects the source layout and contract:
+
+* ``--k 100`` (default): the historical per-BMR layout (``output/pancan``,
+  ``output/msk``) in which each background independently tests its top-K
+  count-ranked features. This module implements it, with the contract below.
+* ``--k 500``: the matched focused revision grid (32 TCGA cohorts x 3 BMRs), built
+  by :mod:`analysis.build_atlas_data_k500` under the frozen revision reporting rule
+  (MutSigCV2 primary, Benjamini-Yekutieli, calibration-gated) as columnar binary
+  tables. See that module for its contract and encoding.
 
 The release is deliberately separate from the historical paper tables. It contains
 every evaluated DIALECT pair for each cohort and BMR, a freshly generated comparison
 table for the same cohort's top event features, and provenance for every file.
 
-Statistical contract
---------------------
+Statistical contract (per-BMR layout)
+-------------------------------------
 * ``p = chi2.sf(max(LRT, 0), 1)``.
 * Benjamini-Hochberg is applied once across all evaluated DIALECT pairs within a
   cohort/BMR (one family shared by mutually exclusive and co-occurring pairs).
@@ -16,11 +26,20 @@ Statistical contract
 
 Usage::
 
-    python -m analysis.build_atlas_data \
+    python -m analysis.build_atlas_data --k 100 \
       --out atlas/public/data/releases/k100-2026-08-26 \
       --baseline-root output/atlas_baselines/k100 \
       --release-id k100-2026-08-26 \
       --generated-at 2026-08-26T00:00:00Z
+
+    python -m analysis.build_atlas_data --k 500 \
+      --out atlas/public/data/releases/k500-2026-09-25 \
+      --baseline-root output/atlas_baselines/k500 \
+      --release-id k500-2026-09-25 \
+      --generated-at 2026-09-25T00:00:00Z
+
+``--baseline-root`` defaults to ``output/atlas_baselines/k<K>`` and ``--release-id``
+to ``k<K>-<UTC date>``. Every release directory is write-once.
 """
 
 from __future__ import annotations
@@ -48,6 +67,8 @@ from statsmodels.stats.multitest import multipletests
 RELEASE_ID = "k100-2026-08-26"
 SCHEMA_VERSION = "2.0.0"
 TOP_K = 100
+SUPPORTED_K = (100, 500)
+FOCUSED_K = 500
 FDR = 0.01
 DISCOVER_VERSION = "0.9.6"
 DISCOVER_COMMIT = "a46d99f9a8a76dc6302f42c814650ca2a1568267"
@@ -85,6 +106,7 @@ INFERENCE_SOURCE_FILES = (
 )
 RELEASE_SOURCE_FILES = (
     Path("analysis/build_atlas_data.py"),
+    Path("analysis/build_atlas_data_k500.py"),
     Path("analysis/build_atlas_baselines.py"),
     *INFERENCE_SOURCE_FILES,
 )
@@ -337,12 +359,18 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
-def _write_release_readme(path: Path, release_id: str) -> None:
+def _write_release_readme(
+    path: Path,
+    release_id: str,
+    *,
+    k: int = TOP_K,
+    cohort_count: int = len(EXPECTED_COHORT_IDS),
+) -> None:
     """Write the human-readable data dictionary shipped with the release."""
     path.write_text(
         f"""# DIALECT Atlas {release_id}
 
-Complete K=100 release for 71 TCGA, MSK-IMPACT, and MSK-CHORD cohorts.
+Complete K={k} release for {cohort_count} TCGA, MSK-IMPACT, and MSK-CHORD cohorts.
 
 ## Files
 
@@ -377,10 +405,10 @@ across all three BMRs. FDR support is reported separately; strict consensus mean
 `q < 0.01` under all three.
 
 Each BMR can cover a different set of gene-effects because a provider may not emit
-a background PMF for every feature. K=100 therefore means the top 100 count-ranked
+a background PMF for every feature. K={k} therefore means the top {k} count-ranked
 features available to that BMR. Consensus is evaluated only where the exact pair
 was tested by all three BMRs. A missing comparison-method value means that pair was
-outside that method's separately selected count-ranked K=100 universe, not that
+outside that method's separately selected count-ranked K={k} universe, not that
 the method found negative evidence.
 
 Equal-count ties preserve each historical producer's ordering: count-matrix column
@@ -420,7 +448,12 @@ def _pair_key(a: str, b: str) -> tuple[str, str]:
     return tuple(sorted((a, b)))
 
 
-def _validate_complete_pair_universe(df: pd.DataFrame, *, label: str) -> list[str]:
+def _validate_complete_pair_universe(
+    df: pd.DataFrame,
+    *,
+    label: str,
+    k: int = TOP_K,
+) -> list[str]:
     if df[["Gene A", "Gene B"]].isna().any().any():
         msg = f"{label}: null pair identifier"
         raise ValueError(msg)
@@ -450,8 +483,8 @@ def _validate_complete_pair_universe(df: pd.DataFrame, *, label: str) -> list[st
             f"({len(keys)} rows for {len(genes)} features)"
         )
         raise ValueError(msg)
-    if len(genes) > TOP_K:
-        msg = f"{label}: {len(genes)} features exceeds K={TOP_K}"
+    if len(genes) > k:
+        msg = f"{label}: {len(genes)} features exceeds K={k}"
         raise ValueError(msg)
     return genes
 
@@ -484,6 +517,7 @@ def dialect_payload(
     n_samples: int,
     label: str,
     counts: pd.DataFrame | None = None,
+    k: int = TOP_K,
 ) -> dict[str, object]:
     """Validate and encode one complete DIALECT pairwise result table."""
     df = pd.read_csv(path)
@@ -491,7 +525,7 @@ def dialect_payload(
     if missing:
         msg = f"{label}: missing DIALECT columns: {sorted(missing)}"
         raise ValueError(msg)
-    genes = _validate_complete_pair_universe(df, label=label)
+    genes = _validate_complete_pair_universe(df, label=label, k=k)
 
     numeric_required = [*DIALECT_SOURCE_COLUMNS[2:13], "Likelihood Ratio"]
     if df[numeric_required].isna().any().any():
@@ -672,7 +706,12 @@ def dialect_payload(
     }
 
 
-def baseline_payload(path: Path, *, label: str) -> dict[str, object]:
+def baseline_payload(
+    path: Path,
+    *,
+    label: str,
+    k: int = TOP_K,
+) -> dict[str, object]:
     """Validate and encode one complete four-family comparison table."""
     df = pd.read_csv(path)
     missing = set(BASELINE_COLUMN_MAP) - set(df.columns)
@@ -680,7 +719,7 @@ def baseline_payload(path: Path, *, label: str) -> dict[str, object]:
         msg = f"{label}: incomplete baseline table; missing {sorted(missing)}"
         raise ValueError(msg)
     df = df[list(BASELINE_COLUMN_MAP)]
-    genes = _validate_complete_pair_universe(df, label=label)
+    genes = _validate_complete_pair_universe(df, label=label, k=k)
     if df.isna().any().any():
         missing_counts = df.isna().sum()
         detail = {key: int(value) for key, value in missing_counts.items() if value}
@@ -1102,6 +1141,7 @@ def _require_exact_tested_features(
     expected: list[str],
     *,
     label: str,
+    k: int = TOP_K,
 ) -> None:
     """Require the exact provider-specific top-K feature set, not only its size."""
     expected_set = set(expected)
@@ -1109,7 +1149,7 @@ def _require_exact_tested_features(
         missing = sorted(expected_set - actual)[:5]
         extra = sorted(actual - expected_set)[:5]
         msg = (
-            f"{label}: tested features are not the exact count-ranked K={TOP_K}; "
+            f"{label}: tested features are not the exact count-ranked K={k}; "
             f"missing={missing}, extra={extra}"
         )
         raise ValueError(msg)
@@ -1166,6 +1206,7 @@ def _cohort_payload(  # noqa: PLR0913 - explicit inputs form the cohort contract
     baseline_root: Path,
     baseline_entry: dict[str, object],
     drivers: set[str],
+    k: int = TOP_K,
 ) -> tuple[dict[str, object], dict[str, object]]:
     cohort_id = f"{study}__{cohort}"
     count_path = cohort_dir / "count_matrix.csv"
@@ -1186,13 +1227,14 @@ def _cohort_payload(  # noqa: PLR0913 - explicit inputs form the cohort contract
     for bmr in BMRS:
         path = cohort_dir / f"id_{bmr}" / "pairwise_interaction_results.csv"
         if not path.exists():
-            msg = f"{cohort_id}: missing K=100 {bmr} results: {path}"
+            msg = f"{cohort_id}: missing K={k} {bmr} results: {path}"
             raise FileNotFoundError(msg)
         model = dialect_payload(
             path,
             n_samples=n_samples,
             label=f"{cohort_id}/{bmr}",
             counts=counts,
+            k=k,
         )
         models[bmr] = model
         model_pairs = {_pair_key(str(row[0]), str(row[1])) for row in model["rows"]}
@@ -1202,11 +1244,13 @@ def _cohort_payload(  # noqa: PLR0913 - explicit inputs form the cohort contract
             counts,
             eligible_features[bmr],
             bmr,
+            k=k,
         )
         _require_exact_tested_features(
             model_feature_sets[bmr],
             expected_model_features[bmr],
             label=f"{cohort_id}/{bmr}",
+            k=k,
         )
         for row in model["rows"]:
             observed_genes.update((_base_gene(row[0]), _base_gene(row[1])))
@@ -1215,12 +1259,12 @@ def _cohort_payload(  # noqa: PLR0913 - explicit inputs form the cohort contract
         baseline_root / study / cohort / "comparison_pairwise_interaction_results.csv"
     )
     if not baseline_path.exists():
-        msg = f"{cohort_id}: missing complete K=100 baseline results: {baseline_path}"
+        msg = f"{cohort_id}: missing complete K={k} baseline results: {baseline_path}"
         raise FileNotFoundError(msg)
-    baselines = baseline_payload(baseline_path, label=f"{cohort_id}/baselines")
+    baselines = baseline_payload(baseline_path, label=f"{cohort_id}/baselines", k=k)
     baseline_metadata = baselines["source"]["metadata"]
-    if baseline_metadata.get("source_gene_k") != TOP_K:
-        msg = f"{cohort_id}: baseline metadata is not K={TOP_K}"
+    if baseline_metadata.get("source_gene_k") != k:
+        msg = f"{cohort_id}: baseline metadata is not K={k}"
         raise ValueError(msg)
     if baseline_metadata.get("cohort", {}).get("id") != cohort_id:
         msg = f"{cohort_id}: baseline metadata cohort ID mismatch"
@@ -1236,10 +1280,10 @@ def _cohort_payload(  # noqa: PLR0913 - explicit inputs form the cohort contract
             counts.columns,
             key=lambda feature: totals[feature],
             reverse=True,
-        )[: min(TOP_K, len(counts.columns))]
+        )[: min(k, len(counts.columns))]
     ]
     if baseline_metadata.get("top_features") != expected_baseline_features:
-        msg = f"{cohort_id}: baseline top-feature selection is not K={TOP_K}"
+        msg = f"{cohort_id}: baseline top-feature selection is not K={k}"
         raise ValueError(msg)
     metadata_path = baseline_path.with_name("metadata.json")
     if baseline_entry.get("id") != cohort_id:
@@ -1372,6 +1416,7 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
     release_id: str = RELEASE_ID,
     generated_at: str | None = None,
     require_committed_sources: bool = True,
+    k: int = TOP_K,
 ) -> dict[str, object]:
     """Build and validate one Atlas release inside an isolated staging tree."""
     out.mkdir(parents=True, exist_ok=True)
@@ -1382,8 +1427,8 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
         msg = f"missing immutable baseline manifest: {baseline_manifest_path}"
         raise FileNotFoundError(msg)
     baseline_manifest = json.loads(baseline_manifest_path.read_text())
-    if baseline_manifest.get("source_gene_k") != TOP_K:
-        msg = f"baseline release is not K={TOP_K}: {baseline_manifest_path}"
+    if baseline_manifest.get("source_gene_k") != k:
+        msg = f"baseline release is not K={k}: {baseline_manifest_path}"
         raise ValueError(msg)
     discover_provenance = baseline_manifest.get("provenance", {}).get(
         "discover",
@@ -1454,6 +1499,7 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
             baseline_root=baseline_root,
             baseline_entry=baseline_entries[f"{study}__{cohort}"],
             drivers=drivers,
+            k=k,
         )
         relative = Path("cohorts") / f"{record['id']}.json"
         output_path = out / relative
@@ -1471,7 +1517,12 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
     index_path = out / "index.json"
     _write_json(index_path, index)
     readme_path = out / "README.md"
-    _write_release_readme(readme_path, release_id)
+    _write_release_readme(
+        readme_path,
+        release_id,
+        k=k,
+        cohort_count=len(index_records),
+    )
     generated = generated_at or (
         datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
@@ -1485,7 +1536,7 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
         "schema_version": SCHEMA_VERSION,
         "immutable": True,
         "generated_at": generated,
-        "title": "DIALECT Atlas complete K=100 release",
+        "title": f"DIALECT Atlas complete K={k} release",
         "coverage": {
             "cohorts": len(index_records),
             "cohort_ids_sha256": _sequence_sha256(
@@ -1505,7 +1556,7 @@ def _build_release_tree(  # noqa: PLR0913 - explicit inputs form the release con
             ),
         },
         "analysis": {
-            "top_k_event_features": TOP_K,
+            "top_k_event_features": k,
             "p_value": "chi2.sf(max(lrt, 0), df=1)",
             "multiple_testing": (
                 "Benjamini-Hochberg across all evaluated DIALECT pairs per cohort "
@@ -1629,6 +1680,7 @@ def build_release(  # noqa: PLR0913 - explicit inputs form the release contract
     release_id: str = RELEASE_ID,
     generated_at: str | None = None,
     require_committed_sources: bool = True,
+    k: int = TOP_K,
 ) -> dict[str, object]:
     """Build an immutable release atomically, refusing every overwrite."""
     if out.exists():
@@ -1645,6 +1697,7 @@ def build_release(  # noqa: PLR0913 - explicit inputs form the release contract
             release_id=release_id,
             generated_at=generated_at,
             require_committed_sources=require_committed_sources,
+            k=k,
         )
         staging.rename(out)
     except Exception:
@@ -1653,24 +1706,58 @@ def build_release(  # noqa: PLR0913 - explicit inputs form the release contract
     return manifest
 
 
+def default_release_id(k: int, today: datetime | None = None) -> str:
+    """Return the conventional ``k<K>-<UTC date>`` release identifier."""
+    moment = today or datetime.now(UTC)
+    return f"k{k}-{moment:%Y-%m-%d}"
+
+
 def main() -> None:
     """Parse command-line arguments and build the release."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--k",
+        type=int,
+        choices=SUPPORTED_K,
+        default=TOP_K,
+        help="Event features per cohort; 500 selects the focused revision grid.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--baseline-root",
         type=Path,
-        default=Path("output/atlas_baselines/k100"),
+        help="Comparison-method release (default: output/atlas_baselines/k<K>).",
     )
-    parser.add_argument("--release-id", default=RELEASE_ID)
+    parser.add_argument(
+        "--release-id",
+        help="Immutable release identifier (default: k<K>-<UTC date>).",
+    )
     parser.add_argument("--generated-at")
     args = parser.parse_args()
-    manifest = build_release(
-        out=args.out,
-        baseline_root=args.baseline_root,
-        release_id=args.release_id,
-        generated_at=args.generated_at,
-    )
+    baseline_root = args.baseline_root or Path(f"output/atlas_baselines/k{args.k}")
+    release_id = args.release_id or default_release_id(args.k)
+    if not re.fullmatch(rf"k{args.k}-[0-9A-Za-z._-]+", release_id):
+        parser.error(f"--release-id must start with k{args.k}-")
+    if args.k == FOCUSED_K:
+        from analysis import build_atlas_data_k500 as focused  # noqa: PLC0415
+
+        manifest = focused.build_release(
+            out=args.out,
+            release_id=release_id,
+            inputs=focused.FocusedInputs(baseline_root=baseline_root),
+            generated_at=args.generated_at,
+        )
+    else:
+        manifest = build_release(
+            out=args.out,
+            baseline_root=baseline_root,
+            release_id=release_id,
+            generated_at=args.generated_at,
+            k=args.k,
+        )
     coverage = manifest["coverage"]
     print(
         f"wrote immutable release {manifest['release_id']} to {args.out}: "
