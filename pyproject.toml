@@ -38,6 +38,7 @@ dependencies = [
     "scikit-learn",
     "statsmodels",
     "matplotlib",
+    "mpmath",
     "upsetplot",
     "tqdm",
     "typer",
@@ -49,7 +50,8 @@ dev = [
     "pytest-cov",
     "pytest-regressions",
     "hypothesis",
-    "ruff",
+    "jinja2",
+    "ruff>=0.15,<0.16",
     "mypy",
     "pre-commit",
 ]
