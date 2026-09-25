@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from itertools import combinations
 
 import pandas as pd
@@ -11,11 +12,16 @@ from analysis.build_atlas_baselines import (
     EXPECTED_COHORT_COUNT,
     EXPECTED_COLUMNS,
     PROBABILITY_COLUMNS,
+    PROFILES,
     CohortSpec,
     SourceSpec,
     canonical_sources,
+    contract_features,
     discover_cohorts,
     expected_pair_universe,
+    feature_sequence_sha256,
+    focused_cohorts,
+    sha256_file,
     stable_cohort_seed,
     top_features,
     validate_comparison_frame,
@@ -146,3 +152,118 @@ def test_validate_comparison_rejects_probability_outside_unit_interval(column):
 
     with pytest.raises(ValueError, match=r"outside \[0, 1\]"):
         validate_comparison_frame(frame, features)
+
+
+def test_profiles_lock_k100_and_k500_contracts():
+    k100, k500 = PROFILES["k100"], PROFILES["k500"]
+
+    assert (k100.k, k100.expected_cohort_count, k100.exclude_same_base_pairs) == (
+        100,
+        EXPECTED_COHORT_COUNT,
+        False,
+    )
+    assert k100.release_id == "dialect-atlas-baselines-k100"
+    assert (k500.k, k500.expected_cohort_count, k500.exclude_same_base_pairs) == (
+        500,
+        32,
+        True,
+    )
+    assert k500.release_seed != k100.release_seed
+
+
+def test_expected_pair_universe_can_exclude_same_base_pairs():
+    features = ["TP53_M", "TP53_N", "KRAS_M"]
+
+    assert expected_pair_universe(features, exclude_same_base=True) == {
+        ("KRAS_M", "TP53_M"),
+        ("KRAS_M", "TP53_N"),
+    }
+    assert len(expected_pair_universe(features)) == 3
+
+
+def test_validate_comparison_enforces_same_base_excluded_family():
+    features = ["TP53_M", "TP53_N", "KRAS_M"]
+    full = _valid_comparison(features)
+    excluded = full[
+        full["Gene A"].str[:-2] != full["Gene B"].str[:-2]
+    ].reset_index(drop=True)
+
+    validate_comparison_frame(excluded, features, exclude_same_base=True)
+    with pytest.raises(ValueError, match="Expected 2 rows"):
+        validate_comparison_frame(full, features, exclude_same_base=True)
+
+
+def _write_contract(path, count_matrix, features, **overrides):
+    contract = {
+        "top_k": len(features),
+        "features": features,
+        "ordered_features_sha256": feature_sequence_sha256(features),
+        "inputs": {"counts": {"sha256": sha256_file(count_matrix)}},
+        "pair_policy": {
+            "row_count": len(expected_pair_universe(features, exclude_same_base=True)),
+        },
+    }
+    contract.update(overrides)
+    path.write_text(json.dumps(contract))
+
+
+def test_contract_features_binds_exact_axis_to_its_count_matrix(tmp_path):
+    counts = tmp_path / "count_matrix.csv"
+    _write_count_matrix(counts, ("A_M", "A_N", "B_M"))
+    contract = tmp_path / "contract.json"
+    features = ["B_M", "A_M", "A_N"]
+    _write_contract(contract, counts, features)
+
+    selected, record = contract_features(contract, counts, k=3)
+
+    assert selected == features
+    assert record["tested_pair_count"] == 2
+    _write_count_matrix(counts, ("A_M", "A_N", "C_M"))
+    with pytest.raises(ValueError, match="not bound to this count matrix"):
+        contract_features(contract, counts, k=3)
+
+
+def test_contract_features_rejects_tampered_axis(tmp_path):
+    counts = tmp_path / "count_matrix.csv"
+    _write_count_matrix(counts)
+    contract = tmp_path / "contract.json"
+    _write_contract(
+        contract,
+        counts,
+        ["A_M", "B_M", "C_N"],
+        ordered_features_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="exact K=3 axis"):
+        contract_features(contract, counts, k=3)
+
+
+def test_focused_cohorts_require_the_completion_contract(tmp_path):
+    provider_root = tmp_path / "providers"
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    (run_root / "completion_manifest.json").write_text(
+        json.dumps({"contract": "other", "cohorts": ["CHOL"]}),
+    )
+
+    with pytest.raises(RuntimeError, match="Unexpected focused completion"):
+        focused_cohorts(provider_root, run_root, expected_total=1)
+
+    (run_root / "completion_manifest.json").write_text(
+        json.dumps(
+            {"contract": "focused-32x3-k500-completion-v1", "cohorts": ["CHOL"]},
+        ),
+    )
+    (provider_root / "cohorts/CHOL").mkdir(parents=True)
+    _write_count_matrix(provider_root / "cohorts/CHOL/count_matrix.csv")
+    (run_root / "contracts").mkdir()
+    (run_root / "contracts/CHOL.json").write_text("{}")
+
+    assert focused_cohorts(provider_root, run_root, expected_total=1) == [
+        CohortSpec(
+            "TCGA",
+            "CHOL",
+            provider_root / "cohorts/CHOL/count_matrix.csv",
+            run_root / "contracts/CHOL.json",
+        ),
+    ]

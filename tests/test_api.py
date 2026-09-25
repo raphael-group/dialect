@@ -110,3 +110,87 @@ def test_estimate_bmr_routes_to_provider(tmp_path):
 
     assert isinstance(result, BMRResult)
     assert result.provider == "dig"
+
+
+def _write_same_base_counts(path):
+    counts = pd.DataFrame(
+        {
+            "TP53_M": [1, 0, 1, 1, 0, 1],
+            "TP53_N": [0, 1, 0, 0, 1, 0],
+            "KRAS_M": [1, 1, 0, 0, 0, 1],
+            "IDH1_M": [0, 0, 1, 1, 0, 0],
+        },
+        index=[f"S{i}" for i in range(6)],
+    )
+    counts.to_csv(path)
+
+
+def test_compare_methods_explicit_axis_excludes_same_base_pairs(tmp_path, monkeypatch):
+    from dialect.baselines import runner  # noqa: PLC0415
+
+    seen = {}
+
+    def fake_fisher(interactions):
+        seen["pairs"] = [(i.gene_a.name, i.gene_b.name) for i in interactions]
+        return {
+            i.name: {"me_pval": 0.5, "co_pval": 0.5, "me_qval": 0.5, "co_qval": 0.5}
+            for i in interactions
+        }
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError
+
+    monkeypatch.setattr(runner, "run_fishers_exact_analysis", fake_fisher)
+    for name in ("run_discover_analysis", "run_megsa_analysis", "run_wesme_analysis"):
+        monkeypatch.setattr(runner, name, unavailable)
+    counts = tmp_path / "counts.csv"
+    _write_same_base_counts(counts)
+
+    api.compare_methods(
+        counts,
+        tmp_path / "out",
+        top_k=3,
+        features=["IDH1_M", "TP53_M", "TP53_N"],
+        exclude_same_base_pairs=True,
+    )
+
+    assert seen["pairs"] == [("IDH1_M", "TP53_M"), ("IDH1_M", "TP53_N")]
+    written = pd.read_csv(tmp_path / "out/comparison_pairwise_interaction_results.csv")
+    assert len(written) == 2
+
+
+def test_compare_methods_rejects_mismatched_explicit_axis(tmp_path):
+    counts = tmp_path / "counts.csv"
+    _write_same_base_counts(counts)
+
+    with pytest.raises(ValueError, match="does not match"):
+        api.compare_methods(counts, tmp_path / "out", top_k=2, features=["TP53_M"])
+    with pytest.raises(ValueError, match="absent from the count matrix"):
+        api.compare_methods(
+            counts,
+            tmp_path / "out",
+            top_k=2,
+            features=["TP53_M", "X_M"],
+        )
+
+
+def test_discover_q_values_are_rebased_over_the_tested_family():
+    from statsmodels.stats.multitest import multipletests  # noqa: PLC0415
+
+    from dialect.baselines.runner import _rebase_discover_q_values  # noqa: PLC0415
+
+    frame = pd.DataFrame(
+        {
+            "Discover ME P-Val": [0.01, 0.02, 0.5],
+            "Discover CO P-Val": [0.9, 0.001, 0.2],
+            "Discover ME Q-Val": [0.0, 0.0, 0.0],
+            "Discover CO Q-Val": [0.0, 0.0, 0.0],
+        },
+    )
+
+    rebased = _rebase_discover_q_values(frame)
+
+    for direction in ("ME", "CO"):
+        p_values = frame[f"Discover {direction} P-Val"]
+        expected = multipletests(p_values, method="fdr_bh")[1]
+        assert rebased[f"Discover {direction} Q-Val"].tolist() == expected.tolist()

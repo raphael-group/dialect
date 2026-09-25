@@ -31,6 +31,8 @@ from dialect.utils.identify import identify_pairwise_interactions
 from dialect.utils.merge import merge_pairwise_interaction_results
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from dialect.bmr.base import BMRResult
 
 __all__ = [
@@ -141,18 +143,24 @@ def identify_interactions(
     )
 
 
-def compare_methods(
+def compare_methods(  # noqa: PLR0913
     counts: str | Path,
     out_dir: str | Path,
     *,
     top_k: int = _DEFAULT_TOP_K,
     gene_level: bool = False,
+    features: Sequence[str] | None = None,
+    exclude_same_base_pairs: bool = False,
 ) -> Path:
     """Run the baseline ME/CO methods (Fisher/DISCOVER/MEGSA/WeSME) on a cohort.
 
     Each method runs independently; any that is unavailable (e.g. DISCOVER not
     installed, no R for MEGSA) is skipped with a warning. Writes the merged
     comparison table under ``out_dir`` and returns that directory.
+
+    ``features`` fixes the exact ordered tested axis instead of the top ``top_k``
+    by count (``top_k`` must equal its length). ``exclude_same_base_pairs`` removes
+    missense/nonsense pairs of the same gene from every method's tested family.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -161,6 +169,8 @@ def compare_methods(
         out=str(out),
         k=top_k,
         is_gene_level=gene_level,
+        features=features,
+        exclude_same_base_pairs=exclude_same_base_pairs,
     )
     return out
 

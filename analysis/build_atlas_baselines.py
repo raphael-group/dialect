@@ -1,18 +1,29 @@
-"""Build the immutable K=100 competing-method release for the DIALECT Atlas.
+"""Build an immutable competing-method release for the DIALECT Atlas.
 
-The release is generated only from the canonical 71 cohort count matrices. It never
-reads a pre-existing comparison CSV, so the legacy ``output/CHOL`` K=30 artifact cannot
-enter the release. Fisher, DISCOVER, MEGSA, and WeSME/WeSCO are run through DIALECT's
-public comparison API; the build fails closed if any method is unavailable or emits an
-incomplete result.
+Two profiles are supported, each an exact, locked contract:
 
-DISCOVER is an optional dependency. Supply the documented DISCOVER Python package on
-``PYTHONPATH`` before invoking this module.
+* ``k100``: the canonical 71 TCGA, MSK-IMPACT, and MSK-CHORD count matrices; each
+  cohort tests the top 100 features by total count (all unordered pairs).
+* ``k500``: the 32 TCGA cohorts of the focused K=500 revision grid; each cohort
+  tests exactly the frozen 500-feature axis recorded in its focused cohort contract,
+  with same-gene missense/nonsense pairs excluded before any method forms its
+  multiple-testing family, so every row aligns with the DIALECT tested family.
+
+Releases are generated only from count matrices and never read a pre-existing
+comparison CSV. Fisher, DISCOVER, MEGSA, and WeSME/WeSCO are run through DIALECT's
+public comparison API; the build fails closed if any method is unavailable or emits
+an incomplete result.
+
+DISCOVER is an optional dependency. Supply the documented DISCOVER Python package
+(built, with its ``_discover`` extension) on ``PYTHONPATH`` before invoking this
+module.
 
 Usage::
 
     PYTHONPATH=/path/to/DISCOVER/python \
-      python -m analysis.build_atlas_baselines --jobs 4
+      python -m analysis.build_atlas_baselines --profile k100 --jobs 4
+    PYTHONPATH=/path/to/DISCOVER/python \
+      python -m analysis.build_atlas_baselines --profile k500 --jobs 4
 """
 
 from __future__ import annotations
@@ -47,6 +58,10 @@ SOURCE_GENE_K = 100
 RELEASE_SEED = 20260826
 RELEASE_ID = "dialect-atlas-baselines-k100"
 EXPECTED_COHORT_COUNT = 71
+FOCUSED_TOP_K = 500
+FOCUSED_COHORT_COUNT = 32
+FOCUSED_PROVIDER_ROOT = Path("output/tcga_revision_focused_providers_v1")
+FOCUSED_RUN_ROOT = Path("output/tcga_revision_focused_k500_v1")
 
 GENE_COLUMNS = ("Gene A", "Gene B")
 METHOD_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -113,6 +128,41 @@ METHOD_CONTRACT = {
 
 
 @dataclass(frozen=True)
+class BaselineProfile:
+    """One locked baseline release contract (tested axis, family, and seeds)."""
+
+    name: str
+    k: int
+    release_id: str
+    release_seed: int
+    expected_cohort_count: int
+    exclude_same_base_pairs: bool
+    feature_axis: str
+
+
+PROFILES: dict[str, BaselineProfile] = {
+    "k100": BaselineProfile(
+        name="k100",
+        k=SOURCE_GENE_K,
+        release_id=RELEASE_ID,
+        release_seed=RELEASE_SEED,
+        expected_cohort_count=EXPECTED_COHORT_COUNT,
+        exclude_same_base_pairs=False,
+        feature_axis="top-k-by-total-count-stable-column-order",
+    ),
+    "k500": BaselineProfile(
+        name="k500",
+        k=FOCUSED_TOP_K,
+        release_id="dialect-atlas-baselines-k500",
+        release_seed=20260925,
+        expected_cohort_count=FOCUSED_COHORT_COUNT,
+        exclude_same_base_pairs=True,
+        feature_axis="focused-k500-cohort-contract-ordered-features",
+    ),
+}
+
+
+@dataclass(frozen=True)
 class SourceSpec:
     """One canonical Atlas study root and its locked cohort count."""
 
@@ -128,6 +178,7 @@ class CohortSpec:
     study: str
     cohort: str
     count_matrix: Path
+    contract: Path | None = None
 
     @property
     def cohort_id(self) -> str:
@@ -144,6 +195,7 @@ class ReleaseContext:
     published_root: Path
     k: int
     release_seed: int
+    profile: BaselineProfile = PROFILES["k100"]
 
 
 def canonical_sources(repo_root: Path) -> tuple[SourceSpec, ...]:
@@ -153,6 +205,84 @@ def canonical_sources(repo_root: Path) -> tuple[SourceSpec, ...]:
         SourceSpec("MSK-IMPACT", repo_root / "output/msk/IMPACT2026", 34),
         SourceSpec("MSK-CHORD", repo_root / "output/msk/CHORD2024", 5),
     )
+
+
+def focused_cohorts(
+    provider_root: Path,
+    run_root: Path,
+    *,
+    expected_total: int = FOCUSED_COHORT_COUNT,
+) -> list[CohortSpec]:
+    """Enumerate the focused K=500 TCGA grid from its completion manifest."""
+    completion_path = run_root / "completion_manifest.json"
+    if not completion_path.is_file():
+        msg = f"Missing focused completion manifest: {completion_path}"
+        raise FileNotFoundError(msg)
+    completion = json.loads(completion_path.read_text(encoding="utf-8"))
+    if completion.get("contract") != "focused-32x3-k500-completion-v1":
+        msg = f"Unexpected focused completion contract: {completion_path}"
+        raise RuntimeError(msg)
+    cohorts = [str(cohort) for cohort in completion.get("cohorts", [])]
+    if len(cohorts) != expected_total or len(set(cohorts)) != expected_total:
+        msg = (
+            f"Focused cohort lock failed: expected {expected_total}, "
+            f"found {len(cohorts)}"
+        )
+        raise RuntimeError(msg)
+    specs = []
+    for cohort in sorted(cohorts):
+        count_matrix = provider_root / "cohorts" / cohort / "count_matrix.csv"
+        contract = run_root / "contracts" / f"{cohort}.json"
+        for path in (count_matrix, contract):
+            if not path.is_file():
+                msg = f"Missing focused input for {cohort}: {path}"
+                raise FileNotFoundError(msg)
+        specs.append(CohortSpec("TCGA", cohort, count_matrix, contract))
+    return specs
+
+
+def feature_sequence_sha256(values: Iterable[str]) -> str:
+    """Length-prefixed UTF-8 digest used by the focused cohort contracts."""
+    digest = hashlib.sha256()
+    for value in values:
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def contract_features(
+    contract_path: Path,
+    count_matrix: Path,
+    *,
+    k: int = FOCUSED_TOP_K,
+) -> tuple[list[str], dict[str, Any]]:
+    """Return a focused contract's exact ordered axis after binding it to its input."""
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    features = [str(feature) for feature in contract.get("features", [])]
+    if (
+        contract.get("top_k") != k
+        or len(features) != k
+        or len(set(features)) != k
+        or contract.get("ordered_features_sha256") != feature_sequence_sha256(features)
+    ):
+        msg = f"Focused contract does not define an exact K={k} axis: {contract_path}"
+        raise ValueError(msg)
+    if contract.get("inputs", {}).get("counts", {}).get("sha256") != sha256_file(
+        count_matrix,
+    ):
+        msg = f"Focused contract is not bound to this count matrix: {contract_path}"
+        raise ValueError(msg)
+    expected_rows = len(expected_pair_universe(features, exclude_same_base=True))
+    if contract.get("pair_policy", {}).get("row_count") != expected_rows:
+        msg = f"Focused contract pair family size mismatch: {contract_path}"
+        raise ValueError(msg)
+    return features, {
+        "path": contract_path.as_posix(),
+        "sha256": sha256_file(contract_path),
+        "ordered_features_sha256": contract["ordered_features_sha256"],
+        "tested_pair_count": expected_rows,
+    }
 
 
 def discover_cohorts(
@@ -264,14 +394,28 @@ def top_features(counts: pd.DataFrame, k: int = SOURCE_GENE_K) -> list[str]:
     return [str(feature) for feature in ordered[: min(k, len(ordered))]]
 
 
-def expected_pair_universe(features: Sequence[str]) -> set[tuple[str, str]]:
+def _base_gene(feature: str) -> str:
+    return feature.rsplit("_", 1)[0]
+
+
+def expected_pair_universe(
+    features: Sequence[str],
+    *,
+    exclude_same_base: bool = False,
+) -> set[tuple[str, str]]:
     """Return the unordered pair universe implied by the selected features."""
-    return {tuple(sorted(pair)) for pair in combinations(features, 2)}
+    return {
+        tuple(sorted(pair))
+        for pair in combinations(features, 2)
+        if not (exclude_same_base and _base_gene(pair[0]) == _base_gene(pair[1]))
+    }
 
 
 def validate_comparison_frame(
     frame: pd.DataFrame,
     features: Sequence[str],
+    *,
+    exclude_same_base: bool = False,
 ) -> None:
     """Fail closed unless a comparison table exactly matches the release contract."""
     actual_columns = tuple(frame.columns)
@@ -288,7 +432,10 @@ def validate_comparison_frame(
         msg = f"Comparison table contains null values in columns: {null_columns}"
         raise ValueError(msg)
 
-    expected_pairs = expected_pair_universe(features)
+    expected_pairs = expected_pair_universe(
+        features,
+        exclude_same_base=exclude_same_base,
+    )
     if len(frame) != len(expected_pairs):
         msg = f"Expected {len(expected_pairs)} rows, found {len(frame)}"
         raise ValueError(msg)
@@ -345,20 +492,39 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-def _run_comparison(count_matrix: Path, output_dir: Path, k: int, seed: int) -> None:
+def _run_comparison(  # noqa: PLR0913
+    count_matrix: Path,
+    output_dir: Path,
+    k: int,
+    seed: int,
+    *,
+    features: Sequence[str] | None = None,
+    exclude_same_base_pairs: bool = False,
+) -> None:
     """Invoke the existing public pipeline after seeding its legacy NumPy RNG."""
     np.random.seed(seed)  # noqa: NPY002 -- vendored WeSME consumes NumPy's global RNG.
     from dialect import api  # noqa: PLC0415 -- keep worker imports after RNG/env setup.
 
-    api.compare_methods(count_matrix, output_dir, top_k=k, gene_level=False)
+    if features is None and not exclude_same_base_pairs:
+        api.compare_methods(count_matrix, output_dir, top_k=k, gene_level=False)
+        return
+    api.compare_methods(
+        count_matrix,
+        output_dir,
+        top_k=k,
+        gene_level=False,
+        features=features,
+        exclude_same_base_pairs=exclude_same_base_pairs,
+    )
 
 
-def _cohort_metadata(
+def _cohort_metadata(  # noqa: PLR0913
     cohort: CohortSpec,
     counts: pd.DataFrame,
     features: list[str],
     output_dir: Path,
     context: ReleaseContext,
+    axis_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one validated cohort's metadata payload."""
     seed = stable_cohort_seed(context.release_seed, cohort.cohort_id)
@@ -368,10 +534,17 @@ def _cohort_metadata(
         for path in output_dir.rglob("*")
         if path.is_file() and path.name != "metadata.json"
     ]
-    return {
+    profile = context.profile
+    pair_count = len(
+        expected_pair_universe(
+            features,
+            exclude_same_base=profile.exclude_same_base_pairs,
+        ),
+    )
+    metadata: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "release_id": RELEASE_ID,
-        "source_gene_k": SOURCE_GENE_K,
+        "release_id": profile.release_id,
+        "source_gene_k": profile.k,
         "release_seed": context.release_seed,
         "cohort": {
             "id": cohort.cohort_id,
@@ -380,7 +553,7 @@ def _cohort_metadata(
             "n_samples": int(counts.shape[0]),
             "n_input_features": int(counts.shape[1]),
             "n_tested_features": len(features),
-            "expected_pair_count": len(expected_pair_universe(features)),
+            "expected_pair_count": pair_count,
         },
         "rng": {
             "library": "numpy.random legacy global RNG",
@@ -403,12 +576,19 @@ def _cohort_metadata(
                     context.repo_root,
                 ),
                 "sha256": sha256_file(comparison),
-                "rows": len(expected_pair_universe(features)),
+                "rows": pair_count,
             },
             "data_tree_sha256": sha256_tree(output_dir, data_files),
             "data_file_count": len(data_files),
         },
     }
+    if profile.name != "k100":
+        metadata["feature_axis"] = {
+            "policy": profile.feature_axis,
+            "exclude_same_base_pairs": profile.exclude_same_base_pairs,
+            **(axis_record or {}),
+        }
+    return metadata
 
 
 def _read_comparison(path: Path, cohort_id: str) -> pd.DataFrame:
@@ -433,18 +613,45 @@ def _generate_one_cohort(
     temporary = Path(tempfile.mkdtemp(prefix=f".{cohort.cohort}.", dir=study_root))
     try:
         counts = load_count_matrix(cohort.count_matrix)
-        features = top_features(counts, context.k)
+        profile = context.profile
+        axis_record = None
+        if cohort.contract is None:
+            features = top_features(counts, context.k)
+            explicit = None
+        else:
+            features, axis_record = contract_features(
+                cohort.contract,
+                cohort.count_matrix,
+                k=context.k,
+            )
+            axis_record["path"] = _relative_or_absolute(
+                cohort.contract,
+                context.repo_root,
+            )
+            explicit = features
         seed = stable_cohort_seed(context.release_seed, cohort.cohort_id)
-        _run_comparison(cohort.count_matrix, temporary, context.k, seed)
+        _run_comparison(
+            cohort.count_matrix,
+            temporary,
+            context.k,
+            seed,
+            features=explicit,
+            exclude_same_base_pairs=profile.exclude_same_base_pairs,
+        )
         comparison = temporary / "comparison_pairwise_interaction_results.csv"
         frame = _read_comparison(comparison, cohort.cohort_id)
-        validate_comparison_frame(frame, features)
+        validate_comparison_frame(
+            frame,
+            features,
+            exclude_same_base=profile.exclude_same_base_pairs,
+        )
         metadata = _cohort_metadata(
             cohort,
             counts,
             features,
             temporary,
             context,
+            axis_record,
         )
         _write_json(temporary / "metadata.json", metadata)
         metadata["artifacts"]["metadata"] = {
@@ -578,12 +785,13 @@ def collect_provenance(repo_root: Path) -> dict[str, Any]:
     }
 
 
-def _root_manifest(
+def _root_manifest(  # noqa: PLR0913
     cohorts: Sequence[CohortSpec],
     cohort_metadata: Sequence[dict[str, Any]],
-    sources: Sequence[SourceSpec],
+    source_counts: dict[str, int],
     release_seed: int,
     provenance: dict[str, Any],
+    profile: BaselineProfile = PROFILES["k100"],
 ) -> dict[str, Any]:
     """Assemble the root immutable-release manifest."""
     metadata_by_id = {item["cohort"]["id"]: item for item in cohort_metadata}
@@ -598,43 +806,87 @@ def _root_manifest(
                 "method_coverage": metadata["method_coverage"],
                 "input": metadata["input"],
                 "artifacts": metadata["artifacts"],
+                **(
+                    {"feature_axis": metadata["feature_axis"]}
+                    if "feature_axis" in metadata
+                    else {}
+                ),
             },
         )
-    return {
+    manifest = {
         "schema_version": SCHEMA_VERSION,
-        "release_id": RELEASE_ID,
-        "source_gene_k": SOURCE_GENE_K,
+        "release_id": profile.release_id,
+        "source_gene_k": profile.k,
         "release_seed": release_seed,
         "cohort_count": len(entries),
-        "source_counts": {source.study: source.expected_cohorts for source in sources},
+        "source_counts": source_counts,
         "expected_columns": list(EXPECTED_COLUMNS),
         "probability_columns": list(PROBABILITY_COLUMNS),
         "method_contract": METHOD_CONTRACT,
         "provenance": provenance,
         "cohorts": entries,
     }
+    if profile.name != "k100":
+        manifest["profile"] = {
+            "name": profile.name,
+            "feature_axis": profile.feature_axis,
+            "exclude_same_base_pairs": profile.exclude_same_base_pairs,
+            "discover_q_values": (
+                "Benjamini-Hochberg recomputed per direction over exactly the "
+                "tested pair family"
+            ),
+        }
+    return manifest
 
 
-def _require_complete_release(metadata: Sequence[dict[str, Any]]) -> None:
+def _require_complete_release(
+    metadata: Sequence[dict[str, Any]],
+    expected: int = EXPECTED_COHORT_COUNT,
+) -> None:
     """Fail unless every locked cohort completed before manifest publication."""
-    if len(metadata) != EXPECTED_COHORT_COUNT:
-        msg = f"Expected {EXPECTED_COHORT_COUNT} completed cohorts, got {len(metadata)}"
+    if len(metadata) != expected:
+        msg = f"Expected {expected} completed cohorts, got {len(metadata)}"
         raise RuntimeError(msg)
 
 
-def build_release(
+def _profile_cohorts(
+    repo_root: Path,
+    profile: BaselineProfile,
+) -> tuple[list[CohortSpec], dict[str, int]]:
+    """Resolve one profile's exact locked cohort set."""
+    if profile.name == "k100":
+        sources = canonical_sources(repo_root)
+        return discover_cohorts(sources), {
+            source.study: source.expected_cohorts for source in sources
+        }
+    cohorts = focused_cohorts(
+        repo_root / FOCUSED_PROVIDER_ROOT,
+        repo_root / FOCUSED_RUN_ROOT,
+        expected_total=profile.expected_cohort_count,
+    )
+    return cohorts, {"TCGA": profile.expected_cohort_count}
+
+
+def build_release(  # noqa: PLR0913
     repo_root: Path,
     output_root: Path,
     *,
     jobs: int,
     release_seed: int,
+    profile: BaselineProfile = PROFILES["k100"],
+    cohort_filter: Sequence[str] | None = None,
 ) -> Path:
-    """Generate all 71 cohorts in staging and atomically publish the release."""
+    """Generate every locked cohort in staging and atomically publish the release.
+
+    ``cohort_filter`` restricts generation to named cohorts for timing or smoke
+    runs; such a build is never a complete release and publishes no manifest.
+    """
     if jobs <= 0:
         msg = "jobs must be a positive integer"
         raise ValueError(msg)
-    sources = canonical_sources(repo_root)
-    cohorts = discover_cohorts(sources)
+    cohorts, source_counts = _profile_cohorts(repo_root, profile)
+    if cohort_filter is not None:
+        cohorts = [cohort for cohort in cohorts if cohort.cohort in cohort_filter]
     provenance = collect_provenance(repo_root)
     if output_root.exists():
         msg = f"Refusing to overwrite immutable release directory: {output_root}"
@@ -648,8 +900,9 @@ def build_release(
         staging_root=staging_root,
         repo_root=repo_root,
         published_root=output_root,
-        k=SOURCE_GENE_K,
+        k=profile.k,
         release_seed=release_seed,
+        profile=profile,
     )
     metadata: list[dict[str, Any]] = []
     try:
@@ -677,13 +930,17 @@ def build_release(
                     metadata.append(future.result())
                     print(f"[{index}/{len(cohorts)}] complete: {cohort.cohort_id}")
 
-        _require_complete_release(metadata)
+        if cohort_filter is not None:
+            staging_root.rename(output_root)
+            return output_root
+        _require_complete_release(metadata, profile.expected_cohort_count)
         manifest = _root_manifest(
             cohorts,
             metadata,
-            sources,
+            source_counts,
             release_seed,
             provenance,
+            profile,
         )
         _write_json(staging_root / "manifest.json", manifest)
         staging_root.rename(output_root)
@@ -694,9 +951,15 @@ def build_release(
 
 
 def main() -> None:
-    """Parse release options and build the complete immutable K=100 baseline set."""
+    """Parse release options and build one complete immutable baseline release."""
     repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILES),
+        default="k100",
+        help="Locked release contract (default: k100).",
+    )
     parser.add_argument(
         "--jobs",
         type=int,
@@ -706,25 +969,33 @@ def main() -> None:
     parser.add_argument(
         "--release-seed",
         type=int,
-        default=RELEASE_SEED,
-        help=f"Release RNG seed (default: {RELEASE_SEED}).",
+        help="Release RNG seed (default: the profile's locked seed).",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=repo_root / "output/atlas_baselines/k100",
-        help="Immutable release directory; must not already exist.",
+        help="Immutable release directory (default: output/atlas_baselines/<profile>).",
+    )
+    parser.add_argument(
+        "--cohorts",
+        help="Comma-separated smoke-run subset; publishes no release manifest.",
     )
     args = parser.parse_args()
+    profile = PROFILES[args.profile]
+    out = args.out or repo_root / "output/atlas_baselines" / profile.name
 
     mpl_cache = Path(tempfile.gettempdir()) / "dialect-atlas-baseline-mpl-cache"
     mpl_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(mpl_cache))
     result = build_release(
         repo_root,
-        args.out.resolve(),
+        out.resolve(),
         jobs=args.jobs,
-        release_seed=args.release_seed,
+        release_seed=(
+            profile.release_seed if args.release_seed is None else args.release_seed
+        ),
+        profile=profile,
+        cohort_filter=args.cohorts.split(",") if args.cohorts else None,
     )
     print(f"Published immutable baseline release: {result}")
 
