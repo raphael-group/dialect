@@ -21,8 +21,9 @@ MUTSIG_PATCH_PATH = (
 )
 
 EXPECTED_RECORDS = {
-    "atlas-code-v2.3.1-563ae0f": "atlas_code",
+    "atlas-code-v2.4.0-fe5db76": "atlas_code",
     "atlas-k100-v1.0.0-0ef212a": "atlas_k100_data",
+    "atlas-k500-v1.0.0-2cf88f7": "atlas_k500_data",
     "cbase-v1.2-dialect-fork": "cbase_source",
     "dig-pancan-artifact-4402b76e": "dig_artifact",
     "digdriver-source-5bb565a": "dig_source",
@@ -36,7 +37,7 @@ EXPECTED_RECORDS = {
     "tcga-datahub-64392ef-32-study": "tcga_raw_source",
 }
 EXPECTED_BOUNDARIES: dict[str, dict[str, Any]] = {
-    "atlas-code-v2.3.1-563ae0f": {
+    "atlas-code-v2.4.0-fe5db76": {
         "license_id": "BSD-3-Clause",
         "license_status": "permitted",
         "redistribution": "exclude",
@@ -44,6 +45,16 @@ EXPECTED_BOUNDARIES: dict[str, dict[str, Any]] = {
         "unresolved": [],
     },
     "atlas-k100-v1.0.0-0ef212a": {
+        "license_id": "NOASSERTION",
+        "license_status": "unknown",
+        "redistribution": "exclude",
+        "included_in_public_release": False,
+        "unresolved": [
+            "Publish a data license and third-party notice after inherited source "
+            "terms are resolved.",
+        ],
+    },
+    "atlas-k500-v1.0.0-2cf88f7": {
         "license_id": "NOASSERTION",
         "license_status": "unknown",
         "redistribution": "exclude",
@@ -329,8 +340,8 @@ def _assert_matches_schema(  # noqa: C901, PLR0912, PLR0915
 def test_dependency_provenance_inventory_is_exact() -> None:
     actual = {path.name for path in PROVENANCE_ROOT.iterdir()}
     assert actual == EXPECTED_FILES
-    assert len(EXPECTED_FILES) == 15
-    assert len(EXPECTED_RECORDS) == 13
+    assert len(EXPECTED_FILES) == 16
+    assert len(EXPECTED_RECORDS) == 14
     for filename in EXPECTED_FILES:
         path = PROVENANCE_ROOT / filename
         assert path.is_file(), f"{path} must be a regular file"
@@ -472,10 +483,14 @@ def test_mutsig_patch_record_matches_retained_bytes() -> None:
     assert record["identity"]["patch_sha256"] == sha256(patch_bytes).hexdigest()
 
 
-def test_schema_rejects_atlas_release_boundary_escalation() -> None:
+@pytest.mark.parametrize(
+    "dependency_id",
+    ["atlas-k100-v1.0.0-0ef212a", "atlas-k500-v1.0.0-2cf88f7"],
+)
+def test_schema_rejects_atlas_release_boundary_escalation(dependency_id: str) -> None:
     """An excluded unknown dataset cannot become includable by editing five fields."""
     schema = _load_json(SCHEMA_PATH)
-    record = _load_json(PROVENANCE_ROOT / "atlas-k100-v1.0.0-0ef212a.json")
+    record = _load_json(PROVENANCE_ROOT / f"{dependency_id}.json")
     record.update(
         {
             "license_id": "BSD-3-Clause",
@@ -485,7 +500,7 @@ def test_schema_rejects_atlas_release_boundary_escalation() -> None:
             "unresolved": [],
         },
     )
-    assert not _matches_schema(record, schema, "mutated-atlas-k100")
+    assert not _matches_schema(record, schema, f"mutated-{dependency_id}")
 
 
 @pytest.mark.parametrize(
@@ -503,3 +518,34 @@ def test_dependency_record_matches_public_schema(
     assert record["dependency_id"] == dependency_id
     assert record["dependency_class"] == dependency_class
     _assert_matches_schema(record, schema, record_path.name)
+
+
+ATLAS_K500_RELEASE = (
+    PROVENANCE_ROOT.parents[1]
+    / "atlas"
+    / "public"
+    / "data"
+    / "releases"
+    / "k500-2026-09-25"
+)
+
+
+@pytest.mark.skipif(
+    not ATLAS_K500_RELEASE.is_dir(),
+    reason="the separately versioned Atlas checkout is not present",
+)
+def test_atlas_k500_record_matches_release_bytes() -> None:
+    """When the Atlas checkout is present, the record must pin its exact bytes."""
+    record = _load_json(PROVENANCE_ROOT / "atlas-k500-v1.0.0-2cf88f7.json")
+    identity = record["identity"]
+    digest = lambda path: sha256(path.read_bytes()).hexdigest()  # noqa: E731
+    index = _load_json(ATLAS_K500_RELEASE / "index.json")
+
+    assert identity["release_id"] == index["release_id"] == ATLAS_K500_RELEASE.name
+    assert identity["manifest_sha256"] == digest(ATLAS_K500_RELEASE / "manifest.json")
+    assert identity["index_sha256"] == digest(ATLAS_K500_RELEASE / "index.json")
+    assert identity["readme_sha256"] == digest(ATLAS_K500_RELEASE / "README.md")
+    assert identity["cohort_count"] == len(index["cohorts"])
+    assert identity["cohort_payload_sha256"] == sorted(
+        digest(ATLAS_K500_RELEASE / cohort["data_file"]) for cohort in index["cohorts"]
+    )

@@ -27,8 +27,9 @@
     },
     "dependency_id": {
       "enum": [
-        "atlas-code-v2.3.1-563ae0f",
+        "atlas-code-v2.4.0-fe5db76",
         "atlas-k100-v1.0.0-0ef212a",
+        "atlas-k500-v1.0.0-2cf88f7",
         "cbase-v1.2-dialect-fork",
         "dig-pancan-artifact-4402b76e",
         "digdriver-source-5bb565a",
@@ -46,6 +47,7 @@
       "enum": [
         "atlas_code",
         "atlas_k100_data",
+        "atlas_k500_data",
         "cbase_source",
         "dig_artifact",
         "dig_source",
@@ -163,7 +165,7 @@
       "if": {
         "properties": {
           "dependency_id": {
-            "const": "atlas-code-v2.3.1-563ae0f"
+            "const": "atlas-code-v2.4.0-fe5db76"
           }
         },
         "required": [
@@ -286,6 +288,97 @@
                 "minLength": 1
               },
               "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tag_commit": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "source_artifacts": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_id": {
+            "const": "atlas-k500-v1.0.0-2cf88f7"
+          }
+        },
+        "required": [
+          "dependency_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_class": {
+            "const": "atlas_k500_data"
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cohort_count",
+              "cohort_payload_sha256",
+              "index_sha256",
+              "manifest_sha256",
+              "readme_sha256",
+              "release_id",
+              "repository_url",
+              "site_url",
+              "source",
+              "tag",
+              "tag_commit"
+            ],
+            "properties": {
+              "cohort_count": {
+                "const": 32
+              },
+              "cohort_payload_sha256": {
+                "type": "array",
+                "minItems": 32,
+                "maxItems": 32,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "index_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "readme_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "release_id": {
+                "type": "string",
+                "pattern": "^k500-[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              },
+              "repository_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "site_url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tag": {
                 "type": "string",
                 "minLength": 1
               },
@@ -1281,7 +1374,7 @@
   "oneOf": [
     {
       "properties": {
-        "dependency_id": {"const": "atlas-code-v2.3.1-563ae0f"},
+        "dependency_id": {"const": "atlas-code-v2.4.0-fe5db76"},
         "license_id": {"const": "BSD-3-Clause"},
         "license_status": {"const": "permitted"},
         "redistribution": {"const": "exclude"},
@@ -1300,6 +1393,28 @@
     {
       "properties": {
         "dependency_id": {"const": "atlas-k100-v1.0.0-0ef212a"},
+        "license_id": {"const": "NOASSERTION"},
+        "license_status": {"const": "unknown"},
+        "redistribution": {"const": "exclude"},
+        "included_in_public_release": {"const": false},
+        "unresolved": {
+          "const": [
+            "Publish a data license and third-party notice after inherited source terms are resolved."
+          ]
+        }
+      },
+      "required": [
+        "dependency_id",
+        "license_id",
+        "license_status",
+        "redistribution",
+        "included_in_public_release",
+        "unresolved"
+      ]
+    },
+    {
+      "properties": {
+        "dependency_id": {"const": "atlas-k500-v1.0.0-2cf88f7"},
         "license_id": {"const": "NOASSERTION"},
         "license_status": {"const": "unknown"},
         "redistribution": {"const": "exclude"},

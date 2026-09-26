@@ -31,9 +31,11 @@ schema/README by repository-relative path, byte count, and SHA-256 digest. Verif
 the manifest's source, version, acquisition, license, and redistribution fields back to the record.
 Final inclusion still requires the named license and public-boundary approvals in that manifest.
 
-The Atlas K100 record additionally carries the canonical, unique SHA-256 receipts for all 71 cohort
-payloads in the historical release. That makes the exclusion check portable from a clean DIALECT
-clone without requiring the separately ignored Atlas checkout or copying any Atlas payload.
+The Atlas K100 and K500 records additionally carry the canonical, unique SHA-256 receipts for every
+cohort payload in their releases (71 historical K100 cohorts; 32 K500 TCGA cohorts, whose
+`cohort.json` payloads in turn bind every columnar table by SHA-256). That makes the exclusion
+check portable from a clean DIALECT clone without requiring the separately ignored Atlas checkout
+or copying any Atlas payload.
 
 An approved release contains the canonical approved manifest, every dependency record it cites, this
 README, and the record schema. If MSK results are retained, both MSK records must have no unresolved

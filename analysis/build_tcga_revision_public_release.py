@@ -113,8 +113,9 @@ FORBIDDEN_PUBLIC_PREFIXES: Final = (
 )
 
 DEPENDENCY_IDS: Final = (
-    "atlas-code-v2.3.1-563ae0f",
+    "atlas-code-v2.4.0-fe5db76",
     "atlas-k100-v1.0.0-0ef212a",
+    "atlas-k500-v1.0.0-2cf88f7",
     "cbase-v1.2-dialect-fork",
     "dig-pancan-artifact-4402b76e",
     "digdriver-source-5bb565a",
